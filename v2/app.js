@@ -1,5 +1,5 @@
 /* =============================================================================
-   ETHIX v2 — APP (sign-in, shell, live Home)
+   ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -54,13 +54,17 @@
   // ------------------------------------------------------------------- state
   const state = {
     user: null, role: null, jobs: [], users: [], recent: [], syncedAt: 0,
-    scope: 'all', week: 'arr', tab: null, typing: false, lastActive: Date.now(), pick: null, busy: false
+    scope: 'all', week: 'arr', tab: null, typing: false, lastActive: Date.now(), pick: null, busy: false,
+    header: [], ix: {}, rowMap: new Map(), order: [], jobIndex: new Map(), pending: new Map(), saving: new Map(), savingCount: 0,
+    stories: new Map(), voyageTab: {}, route: null, overlay: null, dirty: false, navDepth: 0, signedIn: false,
+    jobsUi: { cat: 'all', status: 'active', q: '', sort: 'urgent', limit: 120 }, newJob: { type: '' }, editing: null, lists: null
   };
 
   // ---------------------------------------------------------- dates & parsing
   const MON = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
   const MON_UP = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
   const DOW_UP = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   function today0() { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }
   function mk(y, m, d) {
     if (!(y > 1990 && y < 2200) || !(m >= 0 && m <= 11) || !(d >= 1 && d <= 31)) return null;
@@ -86,7 +90,7 @@
 
   // ------------------------------------------------------------ job columns
   const RULES = [
-    ['status', (h) => h === 'STATUS', 0], ['jobNo', (h) => h.startsWith('JOB NO'), 2], ['type', (h) => h === 'TYPE', 3],
+    ['status', (h) => h === 'STATUS', 0], ['sl', (h) => h.startsWith('SL'), 1], ['jobNo', (h) => h.startsWith('JOB NO'), 2], ['type', (h) => h === 'TYPE', 3],
     ['c20', (h) => h.startsWith('20'), 4], ['c40', (h) => h.startsWith('40'), 5], ['dg', (h) => h.startsWith('DG/') || h === 'DG', 6],
     ['customer', (h) => h === 'CUSTOMER', 7], ['vendor', (h) => h.includes('VENDOR'), 8], ['pod', (h) => h === 'POD', 9],
     ['cs', (h) => h === 'CS', 10], ['opened', (h) => h.startsWith('JOB OPEN'), 11], ['etd', (h) => h.startsWith('ETD'), 12],
@@ -112,7 +116,7 @@
     const s = String(value).trim();
     if (/^\d{1,3}$/.test(s)) return addDays(eta, +s);       // number of days from arrival
     const d = parseDate(s);                                   // a date is read as the end date
-    return d && d >= eta ? d : null;
+    return d && d > eta ? d : null;                           // a date on/before arrival is not an end date
   }
 
   function buildJob(row, ix, t0) {
@@ -130,8 +134,9 @@
       docs: g('docs').toUpperCase(), costing: g('costing').toUpperCase(),
       opened: parseDate(g('opened')), etd: parseDate(g('etd')), eta: parseDate(g('eta')),
       siCut: parseDate(g('siCut')), edCut: parseDate(g('edCut')), dgCut: parseDate(g('dgCut')), delivery: parseDate(g('delivery')),
-      lineFreeRaw: g('lineFree'), portFreeRaw: g('portFree')
+      lineFreeRaw: g('lineFree'), portFreeRaw: g('portFree'), sl: g('sl'), raw: {}
     };
+    RULES.forEach(([k]) => { j.raw[k] = g(k); });
     j.active = !!j.jobNo && !['COMPLETED', 'CANCELLED', 'CLOSED'].includes(status);
     j.hold = status === 'HOLD';
     j.route = (j.pol || '—') + ' → ' + (j.pod || '—');
@@ -140,13 +145,186 @@
     j.lineFreeEnd = freeEnd(j.eta, j.lineFreeRaw);
     j.portFreeEnd = freeEnd(j.eta, j.portFreeRaw);
     // where is it now?
-    j.atSea = j.active && !j.hold && (j.mode === 'sea' || j.mode === 'air') && j.etd && j.eta && t0 >= j.etd && t0 < j.eta;
+    j.atSea = !!(j.active && !j.hold && j.mode !== 'misc' && j.etd && j.eta && t0 >= j.etd && t0 < j.eta);
     j.arrived = !!(j.eta && t0 >= j.eta);
     if (j.atSea) {
       const total = Math.max(1, days(j.etd, j.eta)), done = days(j.etd, t0);
       j.dayN = done; j.dayT = total; j.pct = Math.min(0.97, Math.max(0.03, done / total));
     } else { j.pct = j.arrived ? 1 : 0; }
+    j.journey = journeyFor(j, t0);
+    j.next = nextStep(j, t0);
     return j;
+  }
+
+  // ============================================================ JOURNEYS
+  // The stops each job type shows on its voyage (the confirmed journey map).
+  // Field stops tick when the tracker field has a "done" value; date stops tick
+  // when their date has passed; a field that says NOT APPLICABLE skips itself.
+  const NA = 'NOT APPLICABLE';
+  const OPTS = {
+    status: ['ONGOING', 'HOLD', 'COMPLETED', 'CANCELLED'],
+    loadlist: ['NO', 'YES', NA],
+    sido: ['PENDING', 'SUBMITTED', 'APPROVED', NA],
+    ed: ['PENDING', 'PASSED/PAID', NA],
+    bl: ['BL PENDING', 'CONFIRMATION PENDING', 'CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED', NA],
+    docs: [NA, 'PENDING', 'RECEIVED'],
+    costing: ['PENDING', 'JOB UPDATED', 'COSTING DONE', 'COMPLETED', 'CANCELLED'],
+    dg: ['DG', 'NON DG'],
+    type: ['SFEF', 'SFEL', 'AFE', 'SFIF', 'SFIL', 'AFI', 'CND', 'SFC', 'AFC', 'CRR', 'MIS']
+  };
+  const BL_OK = ['CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED'];
+  const BL_ISSUED = ['OBL ISSUED', 'SBL ISSUED'];
+  const STOP_DEFS = {
+    opened:     { name: 'Job opened', kind: 'info' },
+    linked:     { name: 'Linked to job no.', kind: 'link', field: 'against', next: 'Link to a job' },
+    si:         { name: 'SI submitted', kind: 'field', field: 'sido', done: ['SUBMITTED', 'APPROVED'], primary: 'SUBMITTED', cut: 'siCut', label: 'SI status', next: 'SI to submit' },
+    docsReady:  { name: 'Docs ready', kind: 'field', field: 'sido', done: ['SUBMITTED', 'APPROVED'], primary: 'SUBMITTED', label: 'Documents', next: 'Docs to prepare' },
+    ed:         { name: 'ED passed', kind: 'field', field: 'ed', done: ['PASSED/PAID', 'PASSED'], primary: 'PASSED/PAID', cut: 'edCut', label: 'ED status', next: 'ED to pass' },
+    blConf:     { name: 'BL confirmed', kind: 'field', field: 'bl', done: BL_OK, primary: 'CONFIRMED SBL', choices: ['BL PENDING', 'CONFIRMATION PENDING', 'CONFIRMED OBL', 'CONFIRMED SBL', NA], label: 'BL status', next: 'BL to confirm' },
+    blStatus:   { name: 'BL status', kind: 'field', field: 'bl', done: BL_OK, primary: 'CONFIRMED OBL', choices: ['BL PENDING', 'CONFIRMATION PENDING', 'CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED', NA], label: 'BL status', next: 'BL to confirm' },
+    blReceived: { name: 'BL received', kind: 'field', field: 'bl', done: BL_OK, primary: 'CONFIRMED OBL', choices: ['BL PENDING', 'CONFIRMATION PENDING', 'CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED', NA], label: 'BL status', next: 'BL to receive' },
+    blIss:      { name: 'BL issued', kind: 'field', field: 'bl', done: BL_ISSUED, primary: 'SBL ISSUED', choices: ['CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED', NA], label: 'BL status', next: 'BL issue pending' },
+    awbConf:    { name: 'AWB confirmed', kind: 'field', field: 'bl', done: BL_OK, primary: 'CONFIRMED SBL', choices: ['BL PENDING', 'CONFIRMATION PENDING', 'CONFIRMED OBL', 'CONFIRMED SBL', NA], label: 'AWB status', next: 'AWB to confirm' },
+    awbStatus:  { name: 'AWB status', kind: 'field', field: 'bl', done: BL_OK, primary: 'CONFIRMED SBL', choices: OPTS.bl, label: 'AWB status', next: 'AWB to confirm' },
+    awbIss:     { name: 'AWB issued', kind: 'field', field: 'bl', done: BL_ISSUED, primary: 'SBL ISSUED', choices: ['CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED', NA], label: 'AWB status', next: 'AWB issue pending' },
+    tracking:   { name: 'Tracking no. issued', kind: 'field', field: 'bl', done: BL_ISSUED, primary: 'SBL ISSUED', choices: OPTS.bl, label: 'Tracking / AWB status', next: 'Tracking no. pending' },
+    costing:    { name: 'Costing done', kind: 'field', field: 'costing', done: ['COSTING DONE', 'COMPLETED'], skip: ['CANCELLED'], primary: 'COSTING DONE', choices: ['PENDING', 'JOB UPDATED', 'COSTING DONE'], label: 'Costing', next: 'Costing pending' },
+    discharge:  { name: 'Discharge list', kind: 'field', field: 'loadlist', done: ['YES'], primary: 'YES', label: 'Discharge list', next: 'Discharge list' },
+    doRel:      { name: 'DO released', kind: 'field', field: 'sido', done: ['SUBMITTED', 'APPROVED'], primary: 'APPROVED', label: 'DO status', next: 'DO to release' },
+    customs:    { name: 'Customs cleared', kind: 'field', field: 'ed', done: ['PASSED/PAID', 'PASSED'], primary: 'PASSED/PAID', label: 'Customs (ED) status', next: 'Customs clearance' },
+    customsOpt: { name: 'ED / customs', kind: 'field', field: 'ed', done: ['PASSED/PAID', 'PASSED'], primary: 'PASSED/PAID', label: 'Customs (ED) status', optional: true, next: 'Customs clearance' },
+    sailed:     { name: 'Sailed', kind: 'date', field: 'etd', tag: 'ETD', verb: 'Sails', next: 'Sails' },
+    departed:   { name: 'Departed', kind: 'date', field: 'etd', tag: 'ETD', verb: 'Departs', next: 'Departs' },
+    pickedUp:   { name: 'Picked up', kind: 'date', field: 'etd', tag: 'PICK-UP', verb: 'Pick-up', next: 'Pick-up' },
+    arrived:    { name: 'Arrived', kind: 'date', field: 'eta', tag: 'ETA', verb: 'Arrives', next: 'Arrives' },
+    deliveredEta: { name: 'Delivered', kind: 'date', field: 'eta', tag: 'ETA', verb: 'Delivery', next: 'Delivery' },
+    delivered:  { name: 'Delivered', kind: 'date', field: 'delivery', manual: true, tag: 'DELIVERY', next: 'Delivery' },
+    deliveredOpt: { name: 'Delivered', kind: 'date', field: 'delivery', manual: true, optional: true, tag: 'DELIVERY', next: 'Delivery' },
+    atSea:      { name: 'At sea', kind: 'auto' },
+    inAir:      { name: 'In the air', kind: 'auto' },
+    inTransit:  { name: 'In transit', kind: 'auto' },
+    vesselArriving: { name: 'Vessel arriving', kind: 'auto', arriving: true },
+    completed:  { name: 'Completed', kind: 'status' }
+  };
+  const JOURNEYS = {
+    SEA_EX: { o: ['opened', 'si', 'ed', 'blConf'], t: ['sailed', 'costing', 'blIss'], d: ['arrived', 'completed'], w: [34, 40, 26] },
+    SEA_IM: { o: ['opened', 'blStatus', 'sailed'], t: ['atSea'], d: ['arrived', 'discharge', 'doRel', 'customs', 'delivered', 'costing', 'completed'], w: [26, 32, 42] },
+    AFE:    { o: ['opened', 'si', 'ed', 'awbConf'], t: ['departed', 'costing', 'awbIss'], d: ['arrived', 'completed'], w: [34, 40, 26] },
+    AFI:    { o: ['opened', 'awbStatus', 'departed'], t: ['inAir'], d: ['arrived', 'doRel', 'customs', 'delivered', 'costing', 'completed'], w: [27, 33, 40] },
+    CND:    { o: ['opened', 'blReceived'], t: ['vesselArriving'], d: ['arrived', 'discharge', 'doRel', 'customsOpt', 'deliveredOpt', 'costing', 'completed'], w: [24, 30, 46] },
+    SFC:    { o: ['opened', 'si', 'blConf'], t: ['sailed', 'costing', 'blIss'], d: ['arrived', 'completed'], w: [32, 42, 26] },
+    AFC:    { o: ['opened', 'si', 'awbConf'], t: ['departed', 'costing', 'awbIss'], d: ['arrived', 'completed'], w: [32, 42, 26] },
+    CRR:    { o: ['opened', 'docsReady', 'pickedUp'], t: ['tracking', 'inTransit'], d: ['deliveredEta', 'costing', 'completed'], w: [32, 38, 30] },
+    MIS:    { o: ['opened', 'linked'], t: [], d: ['costing', 'completed'], w: [50, 0, 50] }
+  };
+  function journeyKey(type) {
+    if (type === 'SFEF' || type === 'SFEL') return 'SEA_EX';
+    if (type === 'SFIF' || type === 'SFIL') return 'SEA_IM';
+    return JOURNEYS[type] ? type : 'SEA_EX';
+  }
+
+  function cutText(d) {
+    if (d < 0) return 'CUTOFF PASSED · ' + (-d) + (d === -1 ? ' DAY' : ' DAYS');
+    if (d === 0) return 'CUTOFF TODAY';
+    if (d === 1) return 'CUTOFF TOMORROW';
+    return 'CUTOFF ' + fmt(addDays(today0(), d));
+  }
+  function soonText(d, date) {
+    if (d === 0) return 'TODAY';
+    if (d === 1) return 'TOMORROW';
+    if (d > 1 && d <= 6) return 'IN ' + d + ' DAYS';
+    return fmt(date);
+  }
+
+  // Works out the state of every stop for one job.
+  function journeyFor(j, t0) {
+    const key = journeyKey(j.type);
+    const J = JOURNEYS[key];
+    const sailed = !!(j.etd && j.etd <= t0);
+    const make = (id, region) => {
+      const def = STOP_DEFS[id];
+      const s = { id, region, def, name: def.name, kind: def.kind, field: def.field, optional: !!def.optional, state: 'todo', sub: '' };
+      if (def.kind === 'info') { s.state = 'done'; s.sub = j.opened ? fmt(j.opened) : 'OPENED'; return s; }
+      if (def.kind === 'link') { const v = j.against; s.state = v ? 'done' : 'todo'; s.sub = v || 'NOT LINKED YET'; return s; }
+      if (def.kind === 'status') { s.state = j.status === 'COMPLETED' ? 'done' : j.status === 'CANCELLED' ? 'skip' : 'todo'; s.sub = j.status === 'COMPLETED' ? 'CLOSED' : j.status === 'CANCELLED' ? 'CANCELLED' : '—'; return s; }
+      if (def.kind === 'auto') {
+        if (j.arrived) { s.state = 'done'; s.sub = 'ARRIVED'; }
+        else if (def.arriving ? !!j.eta : j.atSea) { s.state = 'current'; s.sub = j.atSea ? 'DAY ' + j.dayN + ' OF ' + j.dayT : (j.eta ? 'ETA ' + fmt(j.eta) : '—'); }
+        else { s.state = 'todo'; s.sub = j.hold ? 'ON HOLD' : '—'; }
+        return s;
+      }
+      if (def.kind === 'date') {
+        const raw = String(j.raw[def.field] || '').toUpperCase();
+        const d = j[def.field];
+        if (raw === NA) { s.state = 'skip'; s.sub = 'NOT NEEDED'; return s; }
+        if (def.manual) {
+          if (d) { s.state = 'done'; s.sub = fmt(d); }
+          else { s.sub = def.optional ? 'OPTIONAL' : 'PENDING'; }
+          return s;
+        }
+        if (d && d <= t0) { s.state = 'done'; s.sub = fmt(d); }
+        else if (d) { s.sub = soonText(days(t0, d), d); s.when = days(t0, d); }
+        else { s.sub = def.tag + ' TO CONFIRM'; }
+        return s;
+      }
+      // field stop
+      const v = j[def.field] || '';
+      s.value = v;
+      if (v === NA || (def.skip && def.skip.includes(v))) { s.state = 'skip'; s.sub = 'NOT NEEDED'; return s; }
+      if (def.done.includes(v)) { s.state = 'done'; s.sub = v; return s; }
+      const cut = def.cut ? j[def.cut] : null;
+      if (cut && !sailed) {
+        const d = days(t0, cut);
+        s.cutDays = d;
+        s.sub = cutText(d);
+        if (d < 0) s.state = 'late';
+      } else {
+        s.sub = def.optional ? 'OPTIONAL' : (v && v !== 'PENDING' && v !== 'NO' ? v : 'PENDING');
+      }
+      return s;
+    };
+    const origin = J.o.map((id) => make(id, 'o'));
+    const transit = J.t.map((id) => make(id, 't'));
+    const dest = J.d.map((id) => make(id, 'd'));
+    const all = origin.concat(transit, dest);
+    const doable = (s) => ['field', 'date', 'status', 'link'].includes(s.kind) && (s.state === 'todo' || s.state === 'late');
+    const closeStop = all.find((s) => s.kind === 'status');
+    const others = all.filter((s) => s !== closeStop && !s.optional && s.kind !== 'info' && s.kind !== 'auto');
+    const ready = others.every((s) => s.state === 'done' || s.state === 'skip');
+    if (closeStop && closeStop.state === 'todo' && ready && !j.hold) { closeStop.state = 'current'; closeStop.sub = 'READY TO CLOSE'; }
+    let next = all.find((s) => doable(s) && !s.optional && s.kind !== 'status' && !(s.kind === 'field' && s.def.field === 'costing' && j.cat === 'EXPORT' && !sailed));
+    if (!next && closeStop && closeStop.state === 'current') next = closeStop;
+    if (next && next.state === 'todo') next.state = 'current';
+    return { key, w: J.w, origin, transit, dest, all, next, ready };
+  }
+
+  // One short "what's next" line for a job, with how urgent it is.
+  function nextStep(j, t0) {
+    if (j.status === 'COMPLETED') return { text: 'Completed', tone: 'done', rank: 5 };
+    if (j.status === 'CANCELLED') return { text: 'Cancelled', tone: 'calm', rank: 6 };
+    if (j.hold) return { text: 'On hold' + (j.remarks ? ' · ' + j.remarks : ''), tone: 'hold', rank: 4 };
+    const jr = j.journey;
+    const late = jr.all.find((s) => s.state === 'late');
+    if (late) return { text: late.def.next + ' · cutoff passed', tone: 'urgent', rank: 0 };
+    const cut = jr.all.filter((s) => s.cutDays !== undefined && s.state !== 'done' && s.state !== 'skip').sort((a, b) => a.cutDays - b.cutDays)[0];
+    if (cut && cut.cutDays === 0) return { text: cut.def.next.replace(/ to .*/, '') + ' cutoff today', tone: 'urgent', rank: 0 };
+    if (j.cat === 'IMPORT' && j.arrived && !j.delivery && j.lineFreeEnd) {
+      const d = days(t0, j.lineFreeEnd);
+      if (d < 0 && d >= -30) return { text: 'Free time over · ' + (-d) + (d === -1 ? ' day' : ' days'), tone: 'urgent', rank: 0 };
+      if (d <= 2) return { text: 'Free time: ' + (d === 0 ? 'ends today' : d + (d === 1 ? ' day left' : ' days left')), tone: 'urgent', rank: 0 };
+    }
+    if (cut && cut.cutDays === 1) return { text: cut.def.next.replace(/ to .*/, '') + ' cutoff tomorrow', tone: 'soon', rank: 1 };
+    const n = jr.next;
+    if (!n) return { text: 'Nothing pending', tone: 'calm', rank: 3 };
+    if (n.kind === 'status') return { text: 'Ready to close', tone: 'done', rank: 3 };
+    if (n.kind === 'date') {
+      const d = j[n.def.field];
+      if (!d) return { text: n.def.tag + ' to confirm', tone: 'calm', rank: 2 };
+      const dd = days(t0, d);
+      const when = dd === 0 ? 'today' : dd === 1 ? 'tomorrow' : dd <= 6 ? DOW[d.getDay()] + ' ' + d.getDate() : fmt(d).toLowerCase().replace(/^(\d+) (\w)/, (m, a, b) => a + ' ' + b.toUpperCase());
+      return { text: n.def.verb ? n.def.verb + ' ' + when : n.name + ' ' + when, tone: 'calm', rank: 2 };
+    }
+    return { text: n.def.next, tone: 'calm', rank: 2 };
   }
 
   // ---------------------------------------------------------- what matters
@@ -218,6 +396,12 @@
     alert: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/>',
     anchor: '<circle cx="12" cy="5" r="3"/><path d="M12 22V8M5 12H2a10 10 0 0 0 20 0h-3"/>',
     logout: '<path d="M15 4h4v16h-4M10 16l4-4-4-4M14 12H4"/>',
+    back: '<path d="M15 5l-7 7 7 7"/>',
+    chevron: '<path d="M6 9l6 6 6-6"/>',
+    edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/>',
+    close: '<path d="M6 6l12 12M18 6L6 18"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+    truck: '<rect x="2" y="7" width="13" height="9"/><path d="M15 10h4l3 3v3h-7"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/>',
     check: '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/>',
     calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'
@@ -414,17 +598,56 @@
   }
 
   // ================================================================ APP
+  const isAdmin = () => ['ADMIN', 'CO-ADMIN', 'MASTER'].includes(state.role) || state.user === 'MASTER';
+  const FIELD_KEYS = RULES.map((r) => r[0]);
+
+  // Server rows are kept as they came from the sheet; edits waiting to be
+  // confirmed are laid on top, so the screen updates the moment you tap.
   function applyBoot(boot) {
     const rows = Array.isArray(boot.jobs) ? boot.jobs : [];
-    const ix = mapHeaders(rows[0] || []);
-    const t0 = today0();
-    state.jobs = rows.slice(1).map((r) => buildJob(r, ix, t0)).filter((j) => j.jobNo);
+    state.header = rows[0] || [];
+    state.ix = mapHeaders(state.header);
+    state.rowMap = new Map();
+    state.order = [];
+    rows.slice(1).forEach((r) => {
+      const no = String(r[state.ix.jobNo] || '').trim();
+      if (!no) return;
+      const k = no.toUpperCase();
+      if (!state.rowMap.has(k)) state.order.push(k);
+      state.rowMap.set(k, r);
+    });
     state.users = Array.isArray(boot.users) ? boot.users : [];
     state.recent = Array.isArray(boot.recent) ? boot.recent : [];
     state.syncedAt = Date.now();
+    rebuildJobs();
   }
-
-  const isAdmin = () => ['ADMIN', 'CO-ADMIN', 'MASTER'].includes(state.role) || state.user === 'MASTER';
+  function toSheetDisplay(key, v) {
+    const m = String(v || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m && ['opened', 'etd', 'siCut', 'eta', 'edCut', 'dgCut', 'delivery', 'lineFree', 'portFree'].includes(key)) return m[3] + '-' + m[2] + '-' + m[1];
+    if (['customer', 'vendor', 'pod', 'pol', 'cs', 'sales', 'against'].includes(key)) return String(v || '').toUpperCase().trim();
+    return String(v == null ? '' : v).trim();
+  }
+  function rowFor(k) {
+    const base = state.rowMap.get(k);
+    const p = state.pending.get(k);
+    if (!p) return base;
+    const r = base.slice();
+    Object.keys(p).forEach((f) => { const c = state.ix[f]; if (c > -1) r[c] = toSheetDisplay(f, p[f]); });
+    return r;
+  }
+  function rebuildJobs() {
+    const t0 = today0();
+    state.jobs = state.order.map((k) => buildJob(rowFor(k), state.ix, t0));
+    state.jobIndex = new Map(state.jobs.map((j, i) => [j.jobNo.toUpperCase(), i]));
+  }
+  function rebuildJob(k) {
+    const i = state.jobIndex.get(k);
+    const j = buildJob(rowFor(k), state.ix, today0());
+    if (i === undefined) { state.order.push(k); state.jobs.push(j); state.jobIndex.set(k, state.jobs.length - 1); }
+    else state.jobs[i] = j;
+    return j;
+  }
+  function findJob(no) { const i = state.jobIndex.get(String(no || '').toUpperCase()); return i === undefined ? null : state.jobs[i]; }
 
   function enterApp(boot, name, role) {
     state.user = (boot.me && boot.me.user) || name;
@@ -438,16 +661,57 @@
     document.body.classList.remove('is-signin');
     $('#signin').hidden = true;
     const shell = $('#shell'); shell.hidden = false; shell.classList.add('entering');
+    state.signedIn = true;
     renderChrome();
-    renderHome(true);
+    render(true);
     startTimers();
     $('#view').focus({ preventScroll: true });
   }
 
+  // ---------------------------------------------------------------- router
+  function currentRoute() {
+    const h = decodeURIComponent(location.hash || '');
+    let m = h.match(/^#\/job\/(.+)$/);
+    if (m) return { name: 'job', jobNo: m[1].trim() };
+    if (h === '#/jobs') return { name: 'jobs' };
+    return { name: 'home' };
+  }
+  function go(hash) { if (location.hash === hash) render(false); else location.hash = hash; }
+  function openJob(no) { closeOverlays(); go('#/job/' + encodeURIComponent(no)); }
+  function render(first) {
+    if (!state.signedIn) return;
+    const r = currentRoute();
+    const prev = state.route;
+    state.route = r;
+    const view = $('#view');
+    const changed = !prev || prev.name !== r.name || prev.jobNo !== r.jobNo;
+    view.classList.toggle('is-fit', r.name === 'home' || r.name === 'jobs');
+    document.body.classList.toggle('on-voyage', r.name === 'job');
+    if (r.name === 'jobs') renderJobs(changed || first);
+    else if (r.name === 'job') renderVoyage(r.jobNo, changed || first);
+    else renderHome(changed || first);
+    if (changed) view.scrollTop = 0;
+    updateNav();
+  }
+  // Re-draw the current page after data changed, without losing your place.
+  function rerender() {
+    if (!state.signedIn) return;
+    const view = $('#view');
+    const keep = { y: view.scrollTop, inner: $$('#view .tile-body, #view .jobs-scroll').map((e) => e.scrollTop), focus: document.activeElement && document.activeElement.id, sel: null };
+    const f = document.activeElement;
+    if (f && f.id && (f.tagName === 'INPUT' || f.tagName === 'TEXTAREA') && typeof f.selectionStart === 'number') keep.sel = [f.selectionStart, f.selectionEnd];
+    render(false);
+    view.scrollTop = keep.y;
+    $$('#view .tile-body, #view .jobs-scroll').forEach((e, i) => { if (keep.inner[i]) e.scrollTop = keep.inner[i]; });
+    if (keep.focus) { const el = document.getElementById(keep.focus); if (el && el !== document.activeElement) { el.focus({ preventScroll: true }); if (keep.sel && el.setSelectionRange) try { el.setSelectionRange(keep.sel[0], keep.sel[1]); } catch (e) { /* ignore */ } } }
+  }
+
+  // ------------------------------------------------------------ chrome
   function navItems() {
+    const active = state.jobs.filter((j) => j.active).length;
     const items = [
-      { id: 'home', label: 'Home', icon: 'home' },
-      { id: 'jobs', label: 'Jobs', icon: 'jobs', soon: true },
+      { id: 'home', label: 'Home', icon: 'home', href: '#/home' },
+      { id: 'jobs', label: 'Jobs', icon: 'jobs', href: '#/jobs', count: active },
       { id: 'fleet', label: 'Fleet', icon: 'fleet', soon: true },
       { id: 'enq', label: 'Enquiries', icon: 'enq', soon: true },
       { id: 'costing', label: 'Costing', icon: 'costing', soon: true },
@@ -456,36 +720,40 @@
     if (isAdmin()) items.push({ id: 'admin', label: 'Admin', icon: 'admin', soon: true });
     return items;
   }
-
   function renderChrome() {
     $('#navList').innerHTML = navItems().map((n) =>
-      '<button type="button" class="nav-item" ' + (n.id === 'home' ? 'aria-current="page"' : 'disabled title="Coming soon"') + ' aria-label="' + esc(n.label) + '">' +
-      icon(n.icon) + '<span class="nav-label">' + esc(n.label) + '</span>' + (n.soon ? '<span class="soon">SOON</span>' : '') + '</button>'
+      '<button type="button" class="nav-item" data-nav="' + n.id + '"' + (n.soon ? ' disabled title="Coming soon"' : ' data-href="' + n.href + '"') + ' aria-label="' + esc(n.label) + '">' +
+      icon(n.icon) + '<span class="nav-label">' + esc(n.label) + '</span>' + (n.soon ? '<span class="soon">SOON</span>' : n.count ? '<span class="count">' + n.count + '</span>' : '') + '</button>'
     ).join('');
     $('#sideAvatar').textContent = state.user.charAt(0);
     $('#sideName').textContent = state.user === 'MASTER' ? 'ADMIN' : state.user;
     $('#sideRole').textContent = roleLabel(state.role, state.user) === 'OPS' ? 'OPERATIONS' : roleLabel(state.role, state.user);
     $('#bottomBar').innerHTML =
-      '<button type="button" class="tab" aria-current="page">' + icon('home', 22) + 'Home</button>' +
-      '<button type="button" class="tab" disabled title="Coming soon">' + icon('jobs', 22) + 'Jobs</button>' +
-      '<button type="button" class="tab-plus" disabled aria-label="New job (coming soon)">' + icon('plus', 22) + '</button>' +
+      '<button type="button" class="tab" data-nav="home" data-href="#/home">' + icon('home', 22) + 'Home</button>' +
+      '<button type="button" class="tab" data-nav="jobs" data-href="#/jobs">' + icon('jobs', 22) + 'Jobs</button>' +
+      '<button type="button" class="tab-plus" data-act="new-job" aria-label="New job">' + icon('plus', 22) + '</button>' +
       '<button type="button" class="tab" disabled title="Coming soon">' + icon('fleet', 22) + 'Fleet</button>' +
       '<button type="button" class="tab" data-act="more">' + icon('more', 22) + 'More</button>';
+  }
+  function updateNav() {
+    const r = state.route ? state.route.name : 'home';
+    const cur = r === 'job' ? 'jobs' : r;
+    $$('[data-nav]').forEach((b) => { if (b.dataset.nav === cur) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
+    const c = $('#navList [data-nav="jobs"] .count'); if (c) c.textContent = state.jobs.filter((j) => j.active).length;
   }
 
   function greeting() { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; }
   function syncText() {
     const s = Math.round((Date.now() - state.syncedAt) / 1000);
     if (s < 60) return 'SYNCED JUST NOW';
-    const m = Math.round(s / 60);
-    return 'SYNCED ' + m + ' MIN AGO';
+    return 'SYNCED ' + Math.round(s / 60) + ' MIN AGO';
   }
   function scoped() { return state.scope === 'mine' ? state.jobs.filter((j) => j.cs === state.user) : state.jobs; }
 
   function track(j, w) {
     const pct = Math.round((j.pct || 0) * 1000) / 10;
     const left = j.pct >= 1 ? 'calc(100% - ' + w + 'px)' : j.pct <= 0 ? '0px' : 'calc(' + pct + '% - ' + (w / 2) + 'px)';
-    const mover = j.mode === 'air' ? PLANE(20) : SHIP(w);
+    const mover = j.mode === 'air' ? PLANE(20) : j.mode === 'courier' ? VAN(20) : SHIP(w);
     return '<div class="track" aria-hidden="true"><span class="track-ahead"></span><span class="track-done" style="width:' + pct + '%"></span><span class="track-a"></span><span class="track-b"></span><span class="track-ship" style="left:' + left + '">' + mover + '</span></div>';
   }
 
@@ -583,7 +851,6 @@
     const anim = first ? ' reveal' : '';
     const searchVal = $('#searchInput') ? $('#searchInput').value : '';
     const view = $('#view');
-    view.classList.add('is-fit');
     view.innerHTML =
       '<div class="wrap home">' +
       '<header class="page-head' + anim + '" style="--d:0ms">' +
@@ -602,82 +869,912 @@
     requestAnimationFrame(markOverflow);
   }
 
-  // ------------------------------------------------------------ interactions
-  function findJob(no) { return state.jobs.find((j) => j.jobNo === no); }
+  // ================================================================ JOBS
+  const CATS = [['all', 'All'], ['export', 'Export'], ['import', 'Import'], ['cross', 'Cross-trade'], ['air', 'Air'], ['courier', 'Courier'], ['cnd', 'Clearance'], ['misc', 'Misc']];
+  const inCat = (j, c) => c === 'all' ? true
+    : c === 'export' ? j.cat === 'EXPORT'
+    : c === 'import' ? ['SFIF', 'SFIL', 'AFI'].includes(j.type)
+    : c === 'cross' ? ['SFC', 'AFC'].includes(j.type)
+    : c === 'air' ? j.mode === 'air'
+    : c === 'courier' ? j.type === 'CRR'
+    : c === 'cnd' ? j.type === 'CND'
+    : c === 'misc' ? j.type === 'MIS' : true;
+  const inStatus = (j, s) => s === 'all' ? true : s === 'active' ? j.active : s === 'hold' ? j.hold : s === 'completed' ? j.status === 'COMPLETED' : s === 'cancelled' ? j.status === 'CANCELLED' : true;
+  const VAN = (s = 22) => '<svg class="art" viewBox="0 0 24 24" width="' + s + '" height="' + s + '" aria-hidden="true"><path fill="#1C5179" d="M2 6h12v10H2zM14 10h4l4 3v3h-8z"/><circle cx="6" cy="18" r="2" fill="#0B1B2B"/><circle cx="17" cy="18" r="2" fill="#0B1B2B"/></svg>';
 
-  function statusChip(v) {
-    const s = String(v || '').toUpperCase();
-    if (!s) return '<span class="chip chip-calm">—</span>';
-    if (s === 'NOT APPLICABLE') return '<span class="chip chip-calm">N/A</span>';
-    if (/(APPROVED|SUBMITTED|PASSED|PAID|ISSUED|CONFIRMED|RECEIVED|DONE|YES|COMPLETED)/.test(s)) return '<span class="chip chip-done">' + esc(s) + '</span>';
-    return '<span class="chip chip-calm">' + esc(s) + '</span>';
+  function miniTrack(j, w) {
+    const hold = j.hold;
+    const pct = j.mode === 'misc' ? 0 : Math.round((j.pct || 0) * 1000) / 10;
+    const mw = hold ? 24 : j.mode === 'air' ? 20 : j.mode === 'courier' ? 22 : w;
+    const left = pct >= 100 ? 'calc(100% - ' + mw + 'px)' : pct <= 0 ? '0px' : 'calc(' + pct + '% - ' + (mw / 2) + 'px)';
+    if (j.mode === 'misc') return '<div class="mini-track is-misc" aria-hidden="true"><span class="mini-misc">' + icon('costing', 14) + ' Costing only</span></div>';
+    const mover = hold ? '<span class="mini-hold">' + icon('anchor', 13) + '</span>' : j.mode === 'air' ? PLANE(20) : j.mode === 'courier' ? VAN(20) : SHIP(w);
+    return '<div class="mini-track' + (hold ? ' is-hold' : '') + '" aria-hidden="true"><span class="track-ahead"></span><span class="track-done" style="width:' + pct + '%"></span><span class="track-a"></span><span class="track-b"></span><span class="track-ship" style="left:' + left + '">' + mover + '</span></div>';
+  }
+  const toneChip = (n) => '<span class="chip ' + ({ urgent: 'chip-urgent', soon: 'chip-soon', calm: 'chip-calm', done: 'chip-done', hold: 'chip-hold' }[n.tone] || 'chip-calm') + '">' + (n.tone === 'urgent' ? icon('alert', 13) : '') + '<span class="chip-text" title="' + esc(n.text) + '">' + esc(n.text) + '</span></span>';
+
+  function jobsFiltered() {
+    const u = state.jobsUi;
+    const q = u.q.trim().toUpperCase();
+    let list = scoped().filter((j) => inCat(j, u.cat) && inStatus(j, u.status));
+    if (q) list = list.filter((j) => (j.jobNo + ' ' + j.customer + ' ' + j.vendor + ' ' + j.pol + ' ' + j.pod + ' ' + j.cs + ' ' + j.sales + ' ' + j.type + ' ' + j.remarks + ' ' + j.against).toUpperCase().includes(q));
+    const t = (d) => (d ? d.getTime() : 9e15);
+    const sl = (j) => num(j.sl);
+    if (u.sort === 'urgent') list.sort((a, b) => a.next.rank - b.next.rank || t(a.etd) - t(b.etd) || sl(b) - sl(a));
+    else if (u.sort === 'newest') list.sort((a, b) => (b.opened ? b.opened.getTime() : 0) - (a.opened ? a.opened.getTime() : 0) || sl(b) - sl(a));
+    else if (u.sort === 'etd') list.sort((a, b) => t(a.etd) - t(b.etd));
+    else if (u.sort === 'eta') list.sort((a, b) => t(a.eta) - t(b.eta));
+    return list;
   }
 
-  function openPeek(j, opener) {
-    if (!j) return;
-    const kv = (k, v) => '<div class="kv"><span class="kv-k">' + esc(k) + '</span><span class="kv-v">' + v + '</span></div>';
-    const statusPill = j.hold ? '<span class="chip chip-hold">ON HOLD</span>' : j.active ? '<span class="chip chip-done">' + esc(j.status || 'ONGOING') + '</span>' : '<span class="chip chip-calm">' + esc(j.status) + '</span>';
-    const where = j.hold ? 'On hold' : j.atSea ? 'Day ' + j.dayN + ' of ' + j.dayT + (j.mode === 'air' ? ' in the air' : ' at sea') : j.arrived ? 'Arrived ' + fmt(j.eta) : j.etd ? 'Departs ' + fmt(j.etd) : 'Not scheduled yet';
-    let freeLine = '';
-    if (j.cat === 'IMPORT' && j.lineFreeEnd) {
-      const d = days(today0(), j.lineFreeEnd);
-      freeLine = kv('Line free time ends', esc(fmt(j.lineFreeEnd, true)) + (d <= 2 && !j.delivery ? ' <span class="chip chip-urgent" style="margin-left:6px">' + esc(d < 0 ? 'OVER' : d + 'D LEFT') + '</span>' : ''));
+  function jobRow(j) {
+    return '<li><button type="button" class="job-row" data-job="' + esc(j.jobNo) + '">' +
+      '<span class="jr-job">' + esc(j.jobNo) + '</span>' +
+      '<span class="jr-type"><span class="badge">' + esc(j.type || '—') + '</span><span class="jr-typename">' + esc(j.typeName) + '</span></span>' +
+      '<span class="jr-cust"><span class="jr-name">' + esc(j.customer || '—') + '</span><span class="jr-route">' + esc(j.mode === 'misc' ? (j.against ? 'AGAINST ' + j.against : 'COSTING ONLY') : j.route) + '</span></span>' +
+      '<span class="jr-track">' + miniTrack(j, 26) + '</span>' +
+      '<span class="jr-next">' + toneChip(j.next) + '</span>' +
+      '<span class="jr-etd"><span class="jr-k">ETD</span>' + esc(j.etd ? fmt(j.etd) : '—') + '</span>' +
+      '<span class="jr-eta"><span class="jr-k">ETA</span>' + esc(j.eta ? fmt(j.eta) : '—') + '</span>' +
+      '<span class="jr-people"><span class="jr-cs">' + esc(j.cs || '—') + '</span><span class="jr-sales">' + esc(j.sales || '') + '</span></span>' +
+      '<span class="jr-dates">' + esc(j.mode === 'misc' ? (j.cs || '') : (j.etd ? fmt(j.etd) : '—') + ' → ' + (j.eta ? fmt(j.eta) : '—')) + '</span>' +
+      '</button></li>';
+  }
+
+  function renderJobs(first) {
+    const u = state.jobsUi;
+    const all = scoped();
+    const active = all.filter((j) => j.active);
+    const list = jobsFiltered();
+    const shown = list.slice(0, u.limit);
+    const anim = first ? ' reveal' : '';
+    const keepQ = $('#jobsSearch') ? $('#jobsSearch').value : u.q;
+    $('#view').innerHTML =
+      '<div class="wrap jobs-page">' +
+      '<header class="page-head jobs-head' + anim + '">' +
+        '<div class="head-main"><div class="meta-line"><span>' + active.length + ' ACTIVE · ' + active.filter((j) => j.hold).length + ' ON HOLD · ' + active.filter((j) => j.atSea).length + ' AT SEA</span></div><h1 class="greeting">Jobs</h1></div>' +
+        '<div class="head-actions">' +
+          '<label class="search">' + icon('search') + '<input id="jobsSearch" type="search" placeholder="Job no, customer, port…" aria-label="Search jobs" autocomplete="off" value="' + esc(keepQ) + '"></label>' +
+          '<button type="button" class="btn-brutal btn-icon" data-act="new-job">' + icon('plus', 16) + '<span>NEW JOB</span></button>' +
+        '</div>' +
+      '</header>' +
+      '<div class="jobs-filters' + anim + '" style="--d:40ms">' +
+        '<div class="chips-row" role="group" aria-label="Job category">' + CATS.map(([id, label]) => '<button type="button" class="fchip" data-cat="' + id + '" aria-pressed="' + (u.cat === id) + '">' + label + '</button>').join('') + '</div>' +
+        '<div class="filter-tools">' +
+          '<button type="button" class="toggle" data-act="mine" aria-pressed="' + (state.scope === 'mine') + '"><span class="toggle-track"><span class="toggle-thumb"></span></span>My jobs only</button>' +
+          '<label class="select-pill"><span>Show</span><select id="jobsStatus">' + [['active', 'Active'], ['hold', 'On hold'], ['completed', 'Completed'], ['cancelled', 'Cancelled'], ['all', 'All']].map(([v, l]) => '<option value="' + v + '"' + (u.status === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></label>' +
+          '<label class="select-pill"><span>Sort</span><select id="jobsSort">' + [['urgent', 'Most urgent'], ['newest', 'Newest'], ['etd', 'ETD'], ['eta', 'ETA']].map(([v, l]) => '<option value="' + v + '"' + (u.sort === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></label>' +
+        '</div>' +
+      '</div>' +
+      '<section class="jobs-card' + anim + '" style="--d:80ms" aria-label="Job list">' +
+        '<div class="jobs-scroll">' +
+          '<div class="jobs-headrow" aria-hidden="true"><span>JOB NO</span><span>TYPE</span><span>CUSTOMER · ROUTE</span><span>VOYAGE</span><span>NEXT STEP</span><span>ETD</span><span>ETA</span><span>CS / SALES</span></div>' +
+          (shown.length ? '<ul class="jobs-list">' + shown.map(jobRow).join('') + '</ul>' +
+            (list.length > shown.length ? '<div class="jobs-more"><button type="button" class="btn-ghost" data-act="jobs-more">Show ' + Math.min(120, list.length - shown.length) + ' more · ' + list.length + ' in total</button></div>' : '<div class="jobs-end">' + list.length + (list.length === 1 ? ' job' : ' jobs') + '</div>')
+            : '<div class="tile-empty jobs-empty">' + icon('search', 22) + '<span>No jobs match these filters.</span><button type="button" class="btn-ghost" data-act="jobs-clear">Clear filters</button></div>') +
+        '</div>' +
+      '</section>' +
+      '</div>';
+    if (keepQ && document.activeElement === document.body && state.jobsFocus) { const s = $('#jobsSearch'); s.focus(); s.setSelectionRange(keepQ.length, keepQ.length); }
+  }
+
+  function initJobs() {
+    const view = $('#view');
+    view.addEventListener('input', (e) => {
+      if (e.target.id !== 'jobsSearch') return;
+      state.jobsUi.q = e.target.value; state.jobsUi.limit = 120;
+      clearTimeout(state.jobsTimer);
+      state.jobsTimer = setTimeout(() => { state.jobsFocus = true; rerender(); state.jobsFocus = false; }, 140);
+    });
+    view.addEventListener('change', (e) => {
+      if (e.target.id === 'jobsStatus') { state.jobsUi.status = e.target.value; state.jobsUi.limit = 120; rerender(); }
+      if (e.target.id === 'jobsSort') { state.jobsUi.sort = e.target.value; rerender(); }
+    });
+    view.addEventListener('click', (e) => {
+      const c = e.target.closest('[data-cat]');
+      if (c) { state.jobsUi.cat = c.dataset.cat; state.jobsUi.limit = 120; rerender(); return; }
+      if (e.target.closest('[data-act="mine"]')) { state.scope = state.scope === 'mine' ? 'all' : 'mine'; store.set('ethix.v2.scope.' + state.user, state.scope); rerender(); return; }
+      if (e.target.closest('[data-act="jobs-more"]')) { state.jobsUi.limit += 120; rerender(); return; }
+      if (e.target.closest('[data-act="jobs-clear"]')) { Object.assign(state.jobsUi, { cat: 'all', status: 'all', q: '', limit: 120 }); if (state.scope === 'mine') { state.scope = 'all'; store.set('ethix.v2.scope.' + state.user, 'all'); } rerender(); }
+    });
+  }
+
+  // ================================================================ VOYAGE
+  const SHIP_BIG = '<svg class="art" width="124" height="58" viewBox="0 0 124 58" aria-hidden="true"><rect x="15" y="4" width="7" height="10" fill="#48BEBF"/><rect x="10" y="14" width="18" height="24" fill="#0B1B2B"/><rect x="13" y="18" width="12" height="3" fill="#A9DEDD"/><rect x="13" y="24" width="12" height="3" fill="#A9DEDD"/><rect x="32" y="30" width="9" height="8" fill="#1C5179"/><rect x="42" y="30" width="9" height="8" fill="#48BEBF"/><rect x="52" y="30" width="9" height="8" fill="#A9DEDD"/><rect x="62" y="30" width="9" height="8" fill="#1C5179"/><rect x="72" y="30" width="9" height="8" fill="#44546A"/><rect x="82" y="30" width="9" height="8" fill="#48BEBF"/><rect x="92" y="30" width="9" height="8" fill="#1C5179"/><rect x="37" y="22" width="9" height="8" fill="#44546A"/><rect x="47" y="22" width="9" height="8" fill="#1C5179"/><rect x="57" y="22" width="9" height="8" fill="#48BEBF"/><rect x="67" y="22" width="9" height="8" fill="#A9DEDD"/><rect x="77" y="22" width="9" height="8" fill="#1C5179"/><rect x="87" y="22" width="9" height="8" fill="#44546A"/><rect x="47" y="14" width="9" height="8" fill="#A9DEDD"/><rect x="57" y="14" width="9" height="8" fill="#1C5179"/><rect x="67" y="14" width="9" height="8" fill="#48BEBF"/><rect x="77" y="14" width="9" height="8" fill="#1C5179"/><path d="M4 38 H120 L108 56 H16 Z" fill="#0B1B2B"/><rect x="10" y="45" width="104" height="3" fill="#48BEBF"/></svg>';
+  const PLANE_BIG = '<svg class="art" viewBox="0 0 24 24" width="54" height="54" aria-hidden="true"><path transform="rotate(90 12 12)" fill="#1C5179" d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>';
+  const VAN_BIG = '<svg class="art" viewBox="0 0 64 40" width="76" height="48" aria-hidden="true"><rect x="2" y="6" width="36" height="24" rx="3" fill="#1C5179"/><path d="M38 14h12l10 9v7H38z" fill="#0B1B2B"/><rect x="42" y="17" width="8" height="6" fill="#A9DEDD"/><rect x="6" y="11" width="12" height="3" fill="#48BEBF"/><circle cx="14" cy="32" r="5" fill="#0B1B2B"/><circle cx="14" cy="32" r="2" fill="#A9DEDD"/><circle cx="50" cy="32" r="5" fill="#0B1B2B"/><circle cx="50" cy="32" r="2" fill="#A9DEDD"/></svg>';
+  const CHECK = '<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" class="tick"><path d="M5 12l5 5 9-10"/></svg>';
+  const MODE_WORDS = { sea: ['AT SEA', 'days at sea', 'SAILS', 'BERTHED', 'VOYAGE'], air: ['IN THE AIR', 'days in the air', 'DEPARTS', 'LANDED', 'FLIGHT'], courier: ['IN TRANSIT', 'days in transit', 'PICK-UP', 'DELIVERED', 'TRIP'] };
+
+  function statusWord(j) {
+    if (j.status === 'COMPLETED') return ['COMPLETED', 'done'];
+    if (j.status === 'CANCELLED') return ['CANCELLED', 'calm'];
+    if (j.hold) return ['ON HOLD', 'hold'];
+    if (j.arrived) return ['ARRIVED', 'done'];
+    if (j.atSea) return [j.mode === 'air' ? 'IN THE AIR' : j.mode === 'courier' ? 'IN TRANSIT' : 'AT SEA', 'done'];
+    return ['ONGOING', 'done'];
+  }
+  function stopDot(s) {
+    return '<span class="stop-dot">' + (s.state === 'done' ? CHECK : s.state === 'late' ? '!' : s.state === 'current' ? '<i></i>' : s.state === 'skip' ? '–' : '') + '</span>';
+  }
+  function stopBtn(s, cls) {
+    return '<button type="button" class="' + cls + ' is-' + s.state + (s.optional ? ' is-optional' : '') + '" data-stop="' + s.id + '" aria-label="' + esc(s.name + ': ' + s.sub) + '">' + stopDot(s) +
+      '<span class="stop-text"><span class="stop-name">' + esc(s.name) + '</span><span class="stop-sub">' + esc(s.sub) + '</span></span></button>';
+  }
+  const stopList = (list, cls) => list.length ? '<ol class="stops">' + list.map((s) => '<li>' + stopBtn(s, cls) + '</li>').join('') + '</ol>' : '';
+
+  function voyageText(j, t0) {
+    const W = MODE_WORDS[j.mode] || MODE_WORDS.sea;
+    const total = j.etd && j.eta ? Math.max(1, days(j.etd, j.eta)) : null;
+    if (j.status === 'CANCELLED') return { kicker: 'CANCELLED', title: 'Not going ahead', sub: '—', bubble: 'CANCELLED' };
+    if (j.hold) return { kicker: 'ON HOLD', title: 'Waiting', sub: j.remarks ? j.remarks.toUpperCase().slice(0, 48) : 'NEXT STEP TO BE CONFIRMED', bubble: '' };
+    if (j.arrived) return { kicker: W[4] + ' COMPLETE', title: total ? total + ' of ' + total + ' days' : 'Arrived', sub: 'ARRIVED ' + fmt(j.eta, true), bubble: W[3] + ' ' + fmt(j.eta) };
+    if (j.atSea) return { kicker: W[0], title: j.dayN + ' of ' + j.dayT + ' days', sub: days(t0, j.eta) + (days(t0, j.eta) === 1 ? ' DAY' : ' DAYS') + ' TO ARRIVAL', bubble: 'DAY ' + j.dayN + ' OF ' + j.dayT };
+    const sub = j.cat === 'EXPORT' ? (j.mode === 'air' ? 'SI, ED AND AWB BEFORE ETD' : 'SI, ED AND BL BEFORE ETD') : j.etd ? W[2] + ' ' + fmt(j.etd, true) : 'DATES TO CONFIRM';
+    return { kicker: 'NOT ' + (j.mode === 'air' ? 'DEPARTED' : j.mode === 'courier' ? 'PICKED UP' : 'SAILED') + ' YET', title: total ? total + '-day ' + W[4].toLowerCase() : 'Dates to confirm', sub, bubble: j.etd ? W[2] + ' ' + fmt(j.etd) : '' };
+  }
+  function portLine(j, which) {
+    if (which === 'o') return j.etd ? (j.mode === 'courier' ? 'PICK-UP ' : 'ETD ') + fmt(j.etd, true) : 'ETD TO CONFIRM';
+    return j.eta ? (j.arrived ? (j.mode === 'courier' ? 'DELIVERED ' : 'ARRIVED ') : (j.mode === 'courier' ? 'DELIVERY ' : 'ETA ')) + fmt(j.eta, true) : 'ETA TO CONFIRM';
+  }
+
+  // The big harbour picture used on laptops.
+  function hero(j, jr, t0) {
+    const vt = voyageText(j, t0);
+    const w = jr.w;
+    const p = j.hold || !j.etd ? 0 : j.arrived ? 1 : j.atSea ? j.pct : 0;
+    const mode = j.mode === 'air' ? 'air' : j.mode === 'courier' ? 'road' : 'sea';
+    const moverW = mode === 'air' ? 54 : mode === 'road' ? 76 : 124;
+    const pos = p >= 1 ? 'calc(' + (w[0] + w[1]) + '% - ' + (moverW + 6) + 'px)' : p <= 0 ? 'calc(' + w[0] + '% + 6px)' : 'calc(' + w[0] + '% + ' + (w[1] * p).toFixed(2) + '% - ' + (moverW / 2) + 'px)';
+    const centre = p >= 1 ? 'calc(' + (w[0] + w[1]) + '% - ' + (moverW / 2 + 6) + 'px)' : p <= 0 ? 'calc(' + w[0] + '% + ' + (moverW / 2 + 6) + 'px)' : 'calc(' + w[0] + '% + ' + (w[1] * p).toFixed(2) + '%)';
+    const travelled = (w[1] * p).toFixed(2) + '%';
+    const dg = j.dg === 'DG' && j.dgCut && j.cat === 'EXPORT' && !(j.etd && j.etd <= t0) ? '<div class="vh-dg">DG CUTOFF ' + fmt(j.dgCut) + '</div>' : '';
+    return '<section class="vhero is-' + mode + (j.hold ? ' is-hold' : '') + (j.arrived ? ' is-arrived' : '') + (j.atSea ? ' is-moving' : '') + '" style="--o:' + w[0] + '%;--s:' + w[1] + '%;--d:' + w[2] + '%" aria-label="' + esc('Voyage for job ' + j.jobNo + ' from ' + (j.pol || 'origin') + ' to ' + (j.pod || 'destination') + ': ' + vt.kicker.toLowerCase()) + '">' +
+      '<div class="vh-sky">' +
+        '<div class="vh-port vh-pol"><div class="kicker">ORIGIN · POL</div><div class="vh-name">' + esc(j.pol || '—') + '</div><div class="vh-date">' + esc(portLine(j, 'o')) + '</div>' + dg + '</div>' +
+        '<div class="vh-mid"><div class="kicker">' + esc(vt.kicker) + '</div><div class="vh-name">' + esc(vt.title) + '</div><div class="vh-date">' + esc(vt.sub) + '</div></div>' +
+        '<div class="vh-port vh-pod"><div class="kicker">DESTINATION · POD</div><div class="vh-name">' + esc(j.pod || '—') + '</div><div class="vh-date">' + esc(portLine(j, 'd')) + '</div></div>' +
+        '<span class="crane crane-o" aria-hidden="true"><i></i><b></b></span><span class="crane crane-d" aria-hidden="true"><i></i><b></b></span>' +
+        (vt.bubble ? '<div class="vh-bubble" style="left:' + centre + '">' + esc(vt.bubble) + '</div>' : '') +
+        '<div class="vh-mover is-' + mode + '" style="left:' + pos + '">' + (mode === 'air' ? PLANE_BIG : mode === 'road' ? VAN_BIG : SHIP_BIG) + '</div>' +
+        (j.hold ? '<div class="vh-anchor" style="left:calc(' + w[0] + '% + ' + (moverW / 2) + 'px)">' + icon('anchor', 16) + '</div>' : '') +
+      '</div>' +
+      '<div class="vh-line" aria-hidden="true"><span class="vh-done" style="width:' + travelled + '"></span><span class="vh-ahead"></span></div>' +
+      '<div class="vh-ground">' +
+        '<div class="vh-quay vh-o">' + stopList(jr.origin, 'stop on-dark') + '</div>' +
+        '<div class="vh-sea"><div class="vh-kicker">' + (jr.transit.length ? 'DURING THE ' + (mode === 'air' ? 'FLIGHT' : mode === 'road' ? 'TRIP' : 'VOYAGE') : '') + '</div>' + (jr.transit.length ? '<div class="vchips">' + jr.transit.map((s) => stopBtn(s, 'vchip')).join('') + '</div>' : '') + '</div>' +
+        '<div class="vh-quay vh-d">' + stopList(jr.dest, 'stop' + (j.arrived ? ' on-dark' : '')) + '</div>' +
+      '</div>' +
+    '</section>';
+  }
+
+  // The same voyage, top to bottom, for phones and narrow windows.
+  function vcard(j, jr, t0) {
+    const vt = voyageText(j, t0);
+    const mode = j.mode === 'air' ? 'air' : j.mode === 'courier' ? 'road' : 'sea';
+    const rail = (list) => list.length ? '<ol class="vc-stops">' + list.map((s, i) => '<li class="' + (i === list.length - 1 ? 'is-last' : '') + '">' + stopBtn(s, 'vc-stop') + '</li>').join('') + '</ol>' : '';
+    return '<section class="vcard is-' + mode + (j.arrived ? ' is-arrived' : '') + (j.hold ? ' is-hold' : '') + '" aria-label="Voyage">' +
+      '<div class="vc-port"><div class="kicker">ORIGIN · POL</div><div class="vc-row"><span class="vc-name">' + esc(j.pol || '—') + '</span><span class="vc-date">' + esc(portLine(j, 'o')) + '</span></div></div>' +
+      rail(jr.origin) +
+      '<div class="vc-sea" aria-hidden="false">' +
+        '<div class="vc-progress" style="height:' + Math.round((j.hold ? 0 : j.arrived ? 1 : j.atSea ? j.pct : 0) * 100) + '%"></div>' +
+        '<div class="vc-label"><span class="kicker">' + esc(vt.kicker) + '</span><span class="vc-title">' + esc(vt.title) + '</span><span class="vc-sub">' + esc(vt.sub) + '</span></div>' +
+        (jr.transit.length ? '<div class="vchips">' + jr.transit.map((s) => stopBtn(s, 'vchip')).join('') + '</div>' : '') +
+        '<div class="vc-mover is-' + mode + '">' + (mode === 'air' ? PLANE_BIG : mode === 'road' ? VAN_BIG : SHIP_BIG) + '</div>' +
+      '</div>' +
+      '<div class="vc-port is-dest"><div class="kicker">DESTINATION · POD</div><div class="vc-row"><span class="vc-name">' + esc(j.pod || '—') + '</span><span class="vc-date">' + esc(portLine(j, 'd')) + '</span></div></div>' +
+      rail(jr.dest) +
+    '</section>';
+  }
+
+  function misCard(j, jr) {
+    return '<section class="miscard" aria-label="Costing job">' +
+      '<div class="mis-head"><span class="mis-icon">' + icon('costing', 22) + '</span><div><div class="kicker">MISCELLANEOUS · COSTING ONLY</div><div class="mis-title">' + (j.against ? 'Against job <button type="button" class="link-btn" data-job="' + esc(j.against) + '">' + esc(j.against) + '</button>' : 'Not linked to a job yet') + '</div></div></div>' +
+      '<ol class="mis-stops">' + jr.all.map((s) => '<li>' + stopBtn(s, 'vc-stop') + '</li>').join('') + '</ol>' +
+    '</section>';
+  }
+
+  function freeCard(j, t0) {
+    if (j.cat !== 'IMPORT' || j.mode === 'air' && !j.lineFreeRaw) return '';
+    const lineDays = /^\d+$/.test(j.lineFreeRaw) ? +j.lineFreeRaw : j.eta && j.lineFreeEnd ? days(j.eta, j.lineFreeEnd) : null;
+    const portDays = /^\d+$/.test(j.portFreeRaw) ? +j.portFreeRaw : j.eta && j.portFreeEnd ? days(j.eta, j.portFreeEnd) : null;
+    if (lineDays === null && portDays === null) return '';
+    if (j.delivery || j.status === 'COMPLETED') return '';
+    const bars = (total, used, cls) => total ? '<div class="ft-bars ' + cls + '" style="--n:' + Math.min(total, 30) + '">' + Array.from({ length: Math.min(total, 30) }, (_, i) => '<i class="' + (i < used ? 'used' : '') + '"></i>').join('') + '</div>' : '';
+    if (!j.arrived || !j.eta) {
+      return '<section class="ftcard is-calm"><h2 class="tile-title">FREE TIME</h2><div class="ft-big">' + (lineDays !== null ? lineDays + ' days' : '—') + '</div><div class="ft-note">Line free time starts at arrival' + (j.eta ? ' (ETA ' + fmt(j.eta) + ')' : '') + (portDays !== null ? '. Port: ' + portDays + ' days.' : '.') + '</div></section>';
     }
-    $('#drawerKicker').textContent = j.typeName.toUpperCase();
-    $('#drawerBody').innerHTML =
-      '<div><h2 class="peek-job" id="drawerTitle">' + esc(j.jobNo) + '</h2>' +
-      '<div class="peek-tags"><span class="badge">' + esc(j.type || '—') + '</span>' + statusPill + (j.dg === 'DG' ? '<span class="chip chip-soon">DG</span>' : '') + '</div>' +
-      '<div class="peek-cust">' + esc(j.customer || '—') + '</div><div class="peek-route">' + esc(j.route) + '</div></div>' +
-      '<div class="peek-card"><h3>' + esc(where.toUpperCase()) + '</h3>' + (j.mode === 'sea' || j.mode === 'air' ? track(j, 34) : '') +
-        '<div style="display:flex;justify-content:space-between;font-family:var(--f-mono);font-size:11px;color:var(--ink-2);margin-top:4px"><span>' + esc(j.pol || '—') + ' · ' + esc(fmt(j.etd)) + '</span><span>' + esc(j.pod || '—') + ' · ' + esc(fmt(j.eta)) + '</span></div></div>' +
-      '<div class="peek-card"><h3>KEY DATES</h3>' +
-        kv('Job opened', esc(fmt(j.opened, true))) +
-        (j.cat === 'EXPORT' || j.cat === 'CROSS' ? kv('SI cutoff', esc(fmt(j.siCut, true))) : '') +
-        (j.cat === 'EXPORT' ? kv('ED cutoff', esc(fmt(j.edCut, true))) : '') +
-        (j.dg === 'DG' ? kv('DG cutoff', esc(fmt(j.dgCut, true))) : '') +
-        kv('ETD', esc(fmt(j.etd, true))) + kv('ETA', esc(fmt(j.eta, true))) +
-        (j.cat === 'IMPORT' ? kv('Delivered', esc(fmt(j.delivery, true))) : '') + freeLine +
-      '</div>' +
-      '<div class="peek-card"><h3>STATUS</h3>' +
-        kv(j.cat === 'IMPORT' ? 'DO' : 'SI', statusChip(j.sido)) + kv(j.cat === 'IMPORT' ? 'Customs (ED)' : 'ED', statusChip(j.ed)) +
-        kv(j.mode === 'air' ? 'AWB' : 'BL', statusChip(j.bl)) + (j.mode === 'sea' ? kv(j.cat === 'IMPORT' ? 'Discharge list' : 'Loadlist', statusChip(j.loadlist)) : '') +
-        (j.cat === 'IMPORT' ? kv('Original docs', statusChip(j.docs)) : '') + kv('Costing', statusChip(j.costing)) +
-      '</div>' +
-      '<div class="peek-card"><h3>CARGO &amp; PEOPLE</h3>' +
-        kv('Cargo', esc([j.cargo || '—', j.dg].filter(Boolean).join(' · '))) + (j.vendor ? kv('Line / vendor', esc(j.vendor)) : '') + (j.freight ? kv('Line freight USD', esc(j.freight)) : '') +
-        kv('CS', esc(j.cs || '—')) + kv('Sales', esc(j.sales || '—')) +
-        (j.remarks ? '<div class="kv"><span class="kv-k">Remarks</span><span style="font-size:13px;text-align:right">' + esc(j.remarks) + '</span></div>' : '') +
-      '</div>' +
-      '<div class="peek-note">The full voyage page with one-tap updates is coming soon.</div>';
-    showDrawer(opener);
+    const left = j.lineFreeEnd ? days(t0, j.lineFreeEnd) : null;
+    const urgent = left !== null && left <= 2;
+    const used = lineDays !== null ? Math.max(0, Math.min(lineDays, days(j.eta, t0))) : 0;
+    const pLeft = j.portFreeEnd ? days(t0, j.portFreeEnd) : null;
+    const pUsed = portDays !== null ? Math.max(0, Math.min(portDays, days(j.eta, t0))) : 0;
+    return '<section class="ftcard ' + (urgent ? 'is-urgent' : 'is-calm') + '" aria-labelledby="ftTitle">' +
+      '<div class="ft-head"><h2 class="tile-title" id="ftTitle">' + (urgent ? icon('alert', 14) : '') + 'LINE FREE TIME</h2><span class="ft-from">' + (lineDays !== null ? lineDays + ' DAYS FROM ARRIVAL' : '') + '</span></div>' +
+      (left === null ? '<div class="ft-big">—</div>' : '<div class="ft-big">' + (left < 0 ? 'Over by ' + (-left) + (left === -1 ? ' day' : ' days') : left === 0 ? 'Ends today' : left + (left === 1 ? ' day' : ' days') + ' <small>left</small>') + '</div>') +
+      bars(lineDays, used, 'is-line') +
+      (j.lineFreeEnd ? '<div class="ft-note">' + (left < 0 ? 'Ended ' : 'Ends ') + '<strong>' + DOW[j.lineFreeEnd.getDay()] + ' ' + fmt(j.lineFreeEnd) + '</strong>. ' + (left < 0 ? 'Demurrage is running.' : 'Demurrage starts after that.') + '</div>' : '') +
+      (portDays !== null ? '<div class="ft-port"><div class="ft-k">PORT FREE TIME</div><div class="ft-v">' + (pLeft === null ? portDays + ' days' : pLeft < 0 ? 'Over by ' + (-pLeft) + ' days' : pLeft + (pLeft === 1 ? ' day' : ' days') + ' left · ends ' + DOW[j.portFreeEnd.getDay()] + ' ' + fmt(j.portFreeEnd)) + '</div>' + bars(portDays, pUsed, 'is-port') + '</div>' : '') +
+    '</section>';
   }
 
+  function keyDates(j, t0) {
+    const cut = (d, field) => {
+      if (!d) return '—';
+      const met = j[field] && ['SUBMITTED', 'APPROVED', 'PASSED/PAID', 'PASSED'].includes(j[field]);
+      if (met) return fmt(d) + ' · MET';
+      const dd = days(t0, d);
+      return fmt(d) + (dd < 0 ? ' · PASSED' : dd === 0 ? ' · TODAY' : dd === 1 ? ' · TOMORROW' : '');
+    };
+    const rows = [['Job opened', fmt(j.opened, true)]];
+    if (['EXPORT', 'CROSS'].includes(j.cat) && j.type !== 'CRR') rows.push(['SI cutoff', cut(j.siCut, 'sido')]);
+    if (j.cat === 'EXPORT') rows.push(['ED cutoff', cut(j.edCut, 'ed')]);
+    if (j.dg === 'DG' && j.cat === 'EXPORT') rows.push(['DG cutoff', j.dgCut ? fmt(j.dgCut, true) : '—']);
+    if (j.mode !== 'misc') {
+      rows.push([(j.mode === 'courier' ? 'Pick-up' : 'ETD') + (j.pol ? ' ' + nice(j.pol) : ''), fmt(j.etd, true)]);
+      rows.push([(j.mode === 'courier' ? 'Delivery' : 'ETA') + (j.pod ? ' ' + nice(j.pod) : ''), fmt(j.eta, true)]);
+    }
+    if (j.cat === 'IMPORT') {
+      rows.push(['Delivered', j.raw.delivery === NA ? 'NOT NEEDED' : fmt(j.delivery, true)]);
+      if (j.lineFreeRaw) rows.push(['Line free time', /^\d+$/.test(j.lineFreeRaw) ? j.lineFreeRaw + ' DAYS' : j.lineFreeRaw]);
+      if (j.portFreeRaw) rows.push(['Port free time', /^\d+$/.test(j.portFreeRaw) ? j.portFreeRaw + ' DAYS' : j.portFreeRaw]);
+      if (j.type !== 'AFI') rows.push(['Original docs', j.docs || '—']);
+    }
+    return '<section class="tile side-card" aria-labelledby="datesTitle"><div class="tile-head"><h2 class="tile-title" id="datesTitle">KEY DATES</h2></div>' +
+      rows.map((r) => '<div class="kv"><span class="kv-k">' + esc(r[0]) + '</span><span class="kv-v">' + esc(r[1]) + '</span></div>').join('') + '</section>';
+  }
+  function cargoCard(j) {
+    const big = j.cargo || (j.mode === 'air' ? 'AIR' : j.mode === 'courier' ? 'COURIER' : j.mode === 'misc' ? 'COSTING' : '—');
+    return '<section class="cargo-card" aria-labelledby="cargoTitle"><h2 class="tile-title" id="cargoTitle">CARGO</h2>' +
+      '<div class="cargo-big"><span>' + esc(big) + '</span><span class="cargo-dg' + (j.dg === 'DG' ? ' is-dg' : '') + '">' + esc(j.dg || '') + '</span></div>' +
+      (j.vendor ? '<div class="cargo-row"><span>' + (j.mode === 'air' ? 'Airline' : j.mode === 'courier' ? 'Courier' : 'Line / vendor') + '</span><span>' + esc(j.vendor) + '</span></div>' : '') +
+      (j.freight ? '<div class="cargo-row"><span>Line freight</span><span>USD ' + esc(j.freight) + '</span></div>' : '') + '</section>';
+  }
+  function peopleCard(j) {
+    const person = (n, role, bg) => '<div class="person-row"><span class="avatar" style="' + bg + '">' + esc(String(n || '?').charAt(0)) + '</span><div><div class="pr-name">' + esc(n || '—') + '</div><div class="pr-role">' + role + '</div></div></div>';
+    return '<section class="tile side-card" aria-labelledby="peopleTitle"><div class="tile-head"><h2 class="tile-title" id="peopleTitle">PEOPLE</h2></div>' +
+      person(j.cs, 'Customer service · owns this job', '') +
+      (j.sales ? person(j.sales, 'Sales · follows this job', 'background:var(--teal-tint);color:var(--teal-text)') : '') + '</section>';
+  }
+
+  // ---------- the story so far (notes + every change) ----------
+  function parseStamp(s) {
+    const m = String(s || '').match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4}),?\s+(\d{1,2}):(\d{2})/);
+    if (m) return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5]);
+    const d = parseDate(s); return d;
+  }
+  const stampText = (d) => d ? fmt(d) + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') : '';
+  function friendly(action) {
+    const a = String(action || '');
+    let m = a.match(/^SET (.+?) TO (.+)$/);
+    if (m) return 'set ' + m[1].toLowerCase().replace(/\bsi\b/g, 'SI').replace(/\bdo\b/g, 'DO').replace(/\bed\b/g, 'ED').replace(/\bbl\b/g, 'BL').replace(/\bawb\b/g, 'AWB').replace(/\betd\b/g, 'ETD').replace(/\beta\b/g, 'ETA').replace(/\bpol\b/g, 'POL').replace(/\bpod\b/g, 'POD').replace(/\bdg\b/g, 'DG').replace(/\bcs\b/g, 'CS') + ' to ' + m[2];
+    if (a === 'CREATED NEW JOB') return 'opened the job';
+    if (a === 'UPDATED JOB DETAILS') return 'updated the job details';
+    m = a.match(/^UPDATED (.+)$/);
+    if (m) return 'updated ' + m[1].toLowerCase();
+    return a.toLowerCase();
+  }
+  function storyItems(no) {
+    const st = state.stories.get(String(no).toUpperCase());
+    if (!st || !st.data) return null;
+    const items = [];
+    (st.data.notes || []).forEach((n) => items.push({ at: parseStamp(n.at), who: n.by, note: n.txt }));
+    (st.data.events || []).forEach((e) => items.push({ at: parseStamp(e[0]), who: e[1], what: friendly(e[2]) }));
+    items.sort((a, b) => (b.at ? b.at.getTime() : 0) - (a.at ? a.at.getTime() : 0));
+    return items;
+  }
+  function storyList(no, limit) {
+    const items = storyItems(no);
+    if (!items) return '<div class="story-loading"><span class="sk"></span><span class="sk"></span><span class="sk short"></span></div>';
+    if (!items.length) return '<div class="tile-empty">' + icon('clock', 22) + '<span>No notes or changes yet. Add the first note above.</span></div>';
+    const list = limit ? items.slice(0, limit) : items;
+    return '<ol class="story">' + list.map((e) => '<li><div class="st-when">' + esc(stampText(e.at)) + '</div><span class="avatar' + (e.who === state.user ? '' : ' is-other') + '">' + esc(String(e.who || '?').charAt(0)) + '</span><div class="st-body"><div><strong>' + esc(e.who || '—') + '</strong> ' + (e.note !== undefined ? 'added a note' : esc(e.what)) + '</div>' + (e.note !== undefined ? '<div class="st-note">' + esc(e.note) + '</div>' : '') + '</div></li>').join('') + '</ol>' +
+      (limit && items.length > limit ? '<button type="button" class="tile-link" data-tab="story">See all ' + items.length + '</button>' : '');
+  }
+  function noteBox() {
+    return '<form class="note-box" data-act="note"><input type="text" id="noteInput" maxlength="1000" placeholder="Add a note for the team…" aria-label="Add a note" autocomplete="off"><button type="submit" class="note-post">Post</button></form>';
+  }
+  function loadStory(no, force) {
+    const k = String(no).toUpperCase();
+    const st = state.stories.get(k);
+    if (st && (st.loading || (!force && Date.now() - st.at < 60000))) return;
+    state.stories.set(k, Object.assign({ data: null, at: 0 }, st || {}, { loading: true }));
+    api.call('ethixJobStory', [no]).then((data) => {
+      state.stories.set(k, { data, at: Date.now(), loading: false });
+      if (state.route && state.route.name === 'job' && state.route.jobNo.toUpperCase() === k) rerender();
+    }).catch((e) => {
+      state.stories.set(k, { data: (st && st.data) || { notes: [], events: [] }, at: Date.now(), loading: false });
+      if (e.kind !== 'auth' && !/not available/i.test(e.message)) toast('Could not load the notes: ' + e.message, { error: true });
+      if (state.route && state.route.name === 'job') rerender();
+    });
+  }
+
+  function allDetails(j) {
+    const groups = [
+      ['JOB', [['Job no.', j.jobNo], ['Type', j.type + ' · ' + j.typeName], ['Status', j.status || '—'], ['SL.', j.sl || '—'], ['Customer', j.customer], ['Line / vendor', j.vendor], ['CS', j.cs], ['Sales', j.sales], ['Job opened', fmt(j.opened, true)]]],
+      ['ROUTE & DATES', [['POL', j.pol], ['POD', j.pod], ['ETD', fmt(j.etd, true)], ['ETA', fmt(j.eta, true)], ['SI cutoff', fmt(j.siCut, true)], ['ED cutoff', fmt(j.edCut, true)], ['DG cutoff', fmt(j.dgCut, true)], ['Delivery date', j.raw.delivery || '—'], ['Line free time', j.lineFreeRaw || '—'], ['Port free time', j.portFreeRaw || '—']]],
+      ['CARGO', [['20′', j.c20 || '—'], ['40′', j.c40 || '—'], ['DG / non-DG', j.dg || '—'], ['Line freight USD', j.freight || '—'], ['Against job no.', j.against || '—']]],
+      ['DOCUMENTS', [[j.cat === 'IMPORT' ? 'DO status' : 'SI status', j.sido || '—'], [j.cat === 'IMPORT' ? 'Customs (ED)' : 'ED status', j.ed || '—'], [j.mode === 'air' ? 'AWB status' : 'BL status', j.bl || '—'], [j.cat === 'IMPORT' ? 'Discharge list' : 'Loadlist', j.loadlist || '—'], ['Original docs', j.docs || '—'], ['Costing', j.costing || '—']]]
+    ];
+    return '<div class="details-grid">' + groups.map((g) => '<section class="tile"><div class="tile-head"><h2 class="tile-title">' + g[0] + '</h2></div>' +
+      g[1].map((r) => '<div class="kv"><span class="kv-k">' + esc(r[0]) + '</span><span class="kv-v">' + esc(r[1] || '—') + '</span></div>').join('') + '</section>').join('') +
+      '<section class="tile details-remarks"><div class="tile-head"><h2 class="tile-title">REMARKS</h2><button type="button" class="tile-link" data-act="edit">Edit details</button></div><p>' + esc(j.remarks || 'No remarks.') + '</p></section></div>';
+  }
+
+  function renderVoyage(no, first) {
+    const j = findJob(no);
+    const view = $('#view');
+    if (!j) {
+      view.innerHTML = '<div class="wrap voyage-page"><div class="crumbs"><button type="button" class="link-btn" data-href="#/jobs">' + icon('jobs', 14) + 'JOBS</button></div>' +
+        '<section class="tile notfound">' + empty('search', 'Job ' + no + ' is not in the tracker. It may have been renamed or removed.') + '<button type="button" class="btn-ghost" data-href="#/jobs">Back to jobs</button></section></div>';
+      return;
+    }
+    const t0 = today0();
+    const jr = j.journey;
+    loadStory(j.jobNo);
+    const tab = state.voyageTab[j.jobNo] || 'overview';
+    const [sw, tone] = statusWord(j);
+    const anim = first ? ' reveal' : '';
+    const n = jr.next;
+    const storyCount = (storyItems(j.jobNo) || []).length;
+    const nextBar = n ? '<div class="nextbar glass" role="region" aria-label="Next stop"><div class="nb-text"><div class="kicker">NEXT STOP</div><div class="nb-name">' + esc(n.name) + ' <span class="nb-sub">' + esc(n.sub) + '</span></div></div>' +
+      '<button type="button" class="btn-brutal" data-stop="' + n.id + '" data-quick="1">' + (n.kind === 'field' ? 'MARK DONE' : n.kind === 'date' ? 'SET DATE' : n.kind === 'status' ? 'CLOSE JOB' : 'UPDATE') + '</button></div>' : '';
+    view.innerHTML =
+      '<div class="wrap voyage-page' + (jr.next ? ' has-nextbar' : '') + '">' +
+      '<div class="crumbs' + anim + '"><button type="button" class="back-btn" data-act="back" aria-label="Back">' + icon('back', 18) + '</button><button type="button" class="link-btn" data-href="#/jobs">JOBS</button><span>/ ' + esc(j.jobNo) + '</span>' +
+        '<button type="button" class="status-pill tone-' + tone + '" data-act="status" aria-label="Job status: ' + sw + '. Change">' + esc(sw) + icon('chevron', 14) + '</button></div>' +
+      '<header class="vhead' + anim + '" style="--d:30ms">' +
+        '<div class="vh-titles"><div class="vh-idrow"><h1 class="vh-job">' + esc(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + '</div>' +
+        '<div class="vh-cust">' + esc(j.customer || '—') + '</div></div>' +
+        '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="edit">' + icon('edit', 16) + '<span>Edit details</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>' +
+      '</header>' +
+      '<div class="ft-top">' + freeCard(j, t0) + '</div>' +
+      '<div class="voyage-wrap' + anim + '" style="--d:60ms">' + (j.mode === 'misc' ? misCard(j, jr) : hero(j, jr, t0) + vcard(j, jr, t0)) + '</div>' +
+      '<div class="vtabs" role="tablist" aria-label="Job sections">' +
+        [['overview', 'Overview'], ['details', 'All details'], ['story', 'Notes & history' + (storyCount ? ' · ' + storyCount : '')]].map(([id, l]) => '<button type="button" role="tab" data-tab="' + id + '" aria-selected="' + (tab === id) + '">' + esc(l) + '</button>').join('') +
+      '</div>' +
+      (tab === 'details' ? allDetails(j)
+        : tab === 'story' ? '<section class="tile story-card">' + noteBox() + storyList(j.jobNo) + '</section>'
+        : '<div class="voverview">' +
+            '<section class="tile story-card" aria-labelledby="storyTitle"><div class="tile-head"><h2 class="tile-title" id="storyTitle">THE STORY SO FAR</h2>' + (j.sales ? '<span class="small">Shared with ' + esc(j.sales) + ' (sales)</span>' : '') + '</div>' + noteBox() + storyList(j.jobNo, 6) + '</section>' +
+            '<div class="vside"><div class="ft-side">' + freeCard(j, t0) + '</div>' + keyDates(j, t0) + cargoCard(j) + peopleCard(j) + '</div>' +
+          '</div>') +
+      '</div>' + nextBar;
+  }
+
+  // ================================================================ SAVING
+  // Your change shows at once; the save goes to Google in the background.
+  // If someone else changed the same field first, nothing is overwritten.
+  const DATE_KEYS = ['opened', 'etd', 'siCut', 'eta', 'edCut', 'dgCut', 'delivery'];
+  const iso = (d) => d ? d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') : '';
+  function asInput(key, raw) {
+    raw = String(raw == null ? '' : raw).trim();
+    if (DATE_KEYS.includes(key)) { if (!raw || raw.toUpperCase() === NA) return raw; const d = parseDate(raw); return d ? iso(d) : raw; }
+    if (key === 'lineFree' || key === 'portFree') { if (/^\d+$/.test(raw) || !raw) return raw; const d = parseDate(raw); return d ? iso(d) : raw; }
+    return raw;
+  }
+  function setSaving(delta) {
+    state.savingCount = Math.max(0, state.savingCount + delta);
+    const pill = $('#savePill'); if (pill) pill.hidden = state.savingCount === 0;
+  }
+  function clearPending(k, changes) {
+    const p = state.pending.get(k); if (!p) return;
+    Object.keys(changes).forEach((f) => { if (p[f] === changes[f]) delete p[f]; });
+    if (!Object.keys(p).length) state.pending.delete(k);
+  }
+  function saveJob(no, changes, opts = {}) {
+    const k = String(no).toUpperCase();
+    const before = findJob(no);
+    if (!before || !Object.keys(changes).length) return Promise.resolve(false);
+    const prev = {};
+    Object.keys(changes).forEach((f) => { prev[f] = asInput(f, before.raw[f]); });
+    state.pending.set(k, Object.assign({}, state.pending.get(k) || {}, changes));
+    rebuildJob(k); rerender(); refreshOverlay();
+    setSaving(1);
+    const run = () => {
+      const server = state.rowMap.get(k) || [];
+      const base = {};
+      Object.keys(changes).forEach((f) => { const c = state.ix[f]; base[f] = c > -1 && server[c] != null ? String(server[c]) : ''; });
+      return api.call('ethixUpdateJob', [before.jobNo, changes, base, '']).then((res) => {
+        if (res && res.ok) {
+          if (Array.isArray(res.row)) state.rowMap.set(k, res.row);
+          clearPending(k, changes); rebuildJob(k); rerender(); refreshOverlay();
+          if (opts.toast) toast(opts.toast, opts.undo === false ? {} : { action: { label: 'Undo', fn: () => saveJob(no, prev, { toast: 'Change undone', undo: false }) } });
+          state.syncedAt = Date.now();
+          return true;
+        }
+        if (res && res.conflict && Array.isArray(res.row)) state.rowMap.set(k, res.row);
+        clearPending(k, changes); rebuildJob(k); rerender(); refreshOverlay();
+        toast((res && res.error) || 'Could not save. Please try again.', { error: true });
+        return false;
+      }).catch((e) => {
+        clearPending(k, changes); rebuildJob(k); rerender(); refreshOverlay();
+        if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'Saving needs the Phase 2 Code.gs update.' : 'Not saved: ' + e.message, { error: true, action: /not available/i.test(e.message) ? null : { label: 'Retry', fn: () => saveJob(no, changes, opts) } });
+        return false;
+      }).finally(() => setSaving(-1));
+    };
+    const chain = (state.saving.get(k) || Promise.resolve()).then(run, run);
+    state.saving.set(k, chain);
+    return chain;
+  }
+
+  // ================================================================ POPOVER
+  // Laptops: a glass card next to what you tapped. Phones: a bottom sheet.
+  const usePop = () => window.innerWidth >= 760;
+  let popAnchor = null, popRender = null;
+  function openPop(anchor, kicker, build) {
+    closeOverlays(true);
+    popRender = build;
+    if (!usePop()) { $('#drawerKicker').textContent = kicker; $('#drawerBody').innerHTML = build(); showDrawer(anchor); state.overlay = 'sheet'; focusFirst($('#drawerBody')); return; }
+    const pop = $('#pop');
+    pop.innerHTML = '<div class="pop-head"><div class="kicker">' + esc(kicker) + '</div><button type="button" class="icon-btn" data-act="pop-close" aria-label="Close">' + icon('close', 14) + '</button></div><div class="pop-body">' + build() + '</div>';
+    pop.hidden = false;
+    popAnchor = anchor;
+    placePop();
+    state.overlay = 'pop';
+    focusFirst(pop);
+  }
+  function focusFirst(el) { const f = el.querySelector('[data-primary], .pop-body button, .drawer-body button, input, select'); if (f) f.focus({ preventScroll: true }); }
+  function placePop() {
+    const pop = $('#pop'); if (pop.hidden || !popAnchor) return;
+    const r = popAnchor.getBoundingClientRect();
+    const pw = pop.offsetWidth, ph = pop.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
+    let left = r.left + r.width / 2 - pw / 2;
+    left = Math.max(12, Math.min(vw - pw - 12, left));
+    let top = r.bottom + 12;
+    let above = false;
+    if (top + ph > vh - 12) { top = r.top - ph - 12; above = true; }
+    if (top < 12) top = Math.max(12, Math.min(vh - ph - 12, r.bottom + 12));
+    pop.style.left = left + 'px'; pop.style.top = top + 'px';
+    pop.classList.toggle('is-above', above);
+    pop.style.setProperty('--arrow', Math.max(18, Math.min(pw - 18, r.left + r.width / 2 - left)) + 'px');
+  }
+  function refreshOverlay() {
+    if (!popRender) return;
+    if (state.overlay === 'pop' && !$('#pop').hidden) { const b = $('#pop .pop-body'); if (b) { b.innerHTML = popRender(); placePop(); } }
+    else if (state.overlay === 'sheet' || state.overlay === 'drawer' || state.overlay === 'quick') { if (!$('#drawer').hidden) $('#drawerBody').innerHTML = popRender(); }
+  }
+  function closeOverlays(silent) {
+    const had = !$('#pop').hidden || !$('#drawer').hidden;
+    $('#pop').hidden = true; popAnchor = null; popRender = null;
+    if (!$('#drawer').hidden) hideDrawer(silent);
+    state.overlay = null;
+    if (had && state.dirty) { state.dirty = false; rerender(); }
+  }
+
+  // ---------- what tapping a stop shows ----------
+  const SAVE_NOTE = '<div class="pop-note">SAVES INSTANTLY · SYNCS IN BACKGROUND</div>';
+  function fieldLabel(j, f) {
+    if (f === 'sido') return j.cat === 'IMPORT' ? 'DO status' : j.type === 'CRR' ? 'Documents' : 'SI status';
+    if (f === 'ed') return j.cat === 'IMPORT' ? 'Customs (ED) status' : 'ED status';
+    if (f === 'bl') return j.mode === 'air' ? 'AWB status' : j.type === 'CRR' ? 'Tracking / AWB status' : 'BL status';
+    if (f === 'loadlist') return j.cat === 'IMPORT' ? 'Discharge list' : 'Loadlist';
+    return { docs: 'Original docs', costing: 'Costing', status: 'Job status', etd: j.mode === 'courier' ? 'Pick-up date' : 'ETD', eta: j.mode === 'courier' ? 'Delivery date' : 'ETA', delivery: 'Delivery date', against: 'Against job no.' }[f] || f;
+  }
+  function stopEditor(no, id) {
+    return () => {
+      const j = findJob(no); if (!j) return '';
+      const s = j.journey.all.find((x) => x.id === id); if (!s) return '';
+      const d = s.def;
+      const head = '<div class="pop-title">' + esc(s.name) + '</div><div class="pop-state is-' + s.state + '">' + stopDot(s) + '<span>' + esc(s.sub) + '</span></div>';
+      if (s.kind === 'field') {
+        const choices = d.choices || OPTS[d.field];
+        const cur = j[d.field] || '';
+        const lbl = fieldLabel(j, d.field);
+        const chips = (lbl.toLowerCase() === s.name.toLowerCase() ? '' : '<div class="pop-label">' + esc(lbl) + '</div>') + '<div class="choice-row">' + choices.map((v) => '<button type="button" class="choice' + (v === cur ? ' is-on' : '') + (d.done.includes(v) ? ' is-good' : '') + '" data-set="' + esc(d.field) + '" data-val="' + esc(v) + '" aria-pressed="' + (v === cur) + '">' + esc(v === NA ? 'Not needed' : v) + '</button>').join('') + '</div>';
+        const primary = s.state === 'done' ? '' : '<button type="button" class="btn-brutal pop-main" data-primary data-set="' + esc(d.field) + '" data-val="' + esc(d.primary) + '">MARK DONE · ' + esc(d.primary) + '</button>';
+        return head + chips + primary + (s.optional && s.state !== 'skip' ? '<button type="button" class="btn-ghost pop-wide" data-set="' + esc(d.field) + '" data-val="' + NA + '">Not needed</button>' : '') + SAVE_NOTE;
+      }
+      if (s.kind === 'date') {
+        const val = asInput(d.field, j.raw[d.field]);
+        const lbl = { etd: j.mode === 'courier' ? 'Pick-up date' : 'ETD', eta: j.mode === 'courier' ? 'Delivery date' : 'ETA', delivery: 'Delivered on' }[d.field];
+        const hint = d.manual ? 'Tick it by entering the delivery date.' : (d.field === 'etd' ? 'Ticks itself once the ETD has passed.' : 'Ticks itself once the ETA has passed.');
+        return head + '<form class="pop-form" data-date="' + esc(d.field) + '"><label class="pop-label" for="popDate">' + esc(lbl) + '</label>' +
+          '<div class="date-row"><input type="date" id="popDate" value="' + esc(/^\d{4}-\d{2}-\d{2}$/.test(val) ? val : '') + '"><button type="button" class="choice" data-day="0">Today</button><button type="button" class="choice" data-day="1">Tomorrow</button></div>' +
+          '<button type="submit" class="btn-brutal pop-main" data-primary>SAVE DATE</button>' +
+          (s.optional && s.state !== 'skip' ? '<button type="button" class="btn-ghost pop-wide" data-set="' + esc(d.field) + '" data-val="' + NA + '">Not needed</button>' : '') +
+          (val ? '<button type="button" class="link-btn quiet pop-clear" data-set="' + esc(d.field) + '" data-val="">Clear date</button>' : '') +
+          '<div class="pop-hint">' + esc(hint) + '</div></form>' + SAVE_NOTE;
+      }
+      if (s.kind === 'status') {
+        if (j.status === 'COMPLETED') return head + '<p class="pop-text">This job is closed.</p><button type="button" class="btn-ghost pop-wide" data-set="status" data-val="ONGOING">Reopen job</button>' + SAVE_NOTE;
+        const open = j.journey.all.filter((x) => x !== s && !x.optional && (x.state === 'todo' || x.state === 'late' || x.state === 'current') && x.kind !== 'auto');
+        return head + (open.length ? '<p class="pop-text">Still open: ' + esc(open.map((x) => x.name).join(', ')) + '.</p>' : '<p class="pop-text">Every stop is done. Close the job?</p>') +
+          '<button type="button" class="btn-brutal pop-main" data-primary data-set="status" data-val="COMPLETED">MARK COMPLETED</button>' + SAVE_NOTE;
+      }
+      if (s.kind === 'link') {
+        return head + '<form class="pop-form" data-text="against"><label class="pop-label" for="popText">Against job no.</label><input type="text" id="popText" value="' + esc(j.against) + '" autocomplete="off" list="dlJobs"><button type="submit" class="btn-brutal pop-main" data-primary>SAVE</button></form>' + datalist('dlJobs', state.jobs.slice(-400).map((x) => x.jobNo)) + SAVE_NOTE;
+      }
+      if (s.kind === 'auto') {
+        return head + '<div class="kv"><span class="kv-k">' + (j.mode === 'courier' ? 'Pick-up' : 'ETD') + '</span><span class="kv-v">' + esc(fmt(j.etd, true)) + '</span></div><div class="kv"><span class="kv-k">' + (j.mode === 'courier' ? 'Delivery' : 'ETA') + '</span><span class="kv-v">' + esc(fmt(j.eta, true)) + '</span></div><p class="pop-text">This follows the dates by itself.</p><button type="button" class="btn-ghost pop-wide" data-act="edit">Edit dates</button>';
+      }
+      return head + '<div class="kv"><span class="kv-k">Job opened</span><span class="kv-v">' + esc(fmt(j.opened, true)) + '</span></div><button type="button" class="btn-ghost pop-wide" data-act="edit">Edit details</button>';
+    };
+  }
+  function statusEditor(no) {
+    return () => {
+      const j = findJob(no); if (!j) return '';
+      return '<div class="pop-title">Job status</div><div class="choice-row is-stack">' + OPTS.status.map((v) => '<button type="button" class="choice' + (j.status === v ? ' is-on' : '') + '" data-set="status" data-val="' + v + '" aria-pressed="' + (j.status === v) + '">' + ({ ONGOING: 'Ongoing', HOLD: 'On hold', COMPLETED: 'Completed', CANCELLED: 'Cancelled' }[v]) + '</button>').join('') + '</div>' +
+        '<label class="pop-label" for="holdNote">Reason (optional — posted as a note)</label><input type="text" id="holdNote" maxlength="300" placeholder="e.g. customer asked to roll over" autocomplete="off">' + SAVE_NOTE;
+    };
+  }
+  function quickEditor(no) {
+    return () => {
+      const j = findJob(no); if (!j) return '';
+      const fields = FORM_STATUS[j.type] || ['sido', 'ed', 'bl', 'costing'];
+      return '<h2 class="peek-job" id="drawerTitle">' + esc(j.jobNo) + '</h2><p class="pop-text">Tap a value to save it straight away.</p>' +
+        ['status'].concat(fields.filter((f) => f !== 'delivery')).map((f) => '<div class="quick-row"><div class="pop-label">' + esc(fieldLabel(j, f)) + '</div><div class="choice-row">' + OPTS[f].map((v) => '<button type="button" class="choice' + ((j[f] || '') === v ? ' is-on' : '') + '" data-set="' + f + '" data-val="' + esc(v) + '" aria-pressed="' + ((j[f] || '') === v) + '">' + esc(v === NA ? 'N/A' : v) + '</button>').join('') + '</div></div>').join('') + SAVE_NOTE;
+    };
+  }
+
+  function onSet(no, field, val) {
+    const j = findJob(no); if (!j) return;
+    if ((j.raw[field] || '') === val && field !== 'status') { closeOverlays(); return; }
+    const label = fieldLabel(j, field);
+    const holdNote = $('#holdNote') ? $('#holdNote').value.trim() : '';
+    if (state.overlay !== 'quick') closeOverlays();
+    const shown = /^\d{4}-\d{2}-\d{2}$/.test(val) ? fmt(parseDate(val), true) : val === NA ? 'not needed' : val;
+    saveJob(j.jobNo, { [field]: val }, { toast: (val === '' ? label + ' cleared' : label + ' → ' + shown) });
+    if (field === 'status' && holdNote) postNote(j.jobNo, (val === 'HOLD' ? 'On hold: ' : 'Status ' + val.toLowerCase() + ': ') + holdNote);
+  }
+
+  async function postNote(no, text) {
+    const k = String(no).toUpperCase();
+    try {
+      setSaving(1);
+      const res = await api.call('ethixAddNote', [no, text, '']);
+      if (res && res.ok) { state.stories.set(k, { data: res.story, at: Date.now(), loading: false }); rerender(); return true; }
+      toast((res && res.error) || 'The note was not saved.', { error: true });
+    } catch (e) { if (e.kind !== 'auth') toast('Note not saved: ' + e.message, { error: true }); }
+    finally { setSaving(-1); }
+    return false;
+  }
+
+  function initVoyage() {
+    const view = $('#view');
+    view.addEventListener('click', (e) => {
+      const r = state.route; if (!r || r.name !== 'job') return;
+      const no = r.jobNo;
+      const st = e.target.closest('[data-stop]');
+      if (st) {
+        const j = findJob(no); if (!j) return;
+        const s = j.journey.all.find((x) => x.id === st.dataset.stop);
+        if (st.dataset.quick && s && s.kind === 'field' && s.state !== 'done') { onSet(no, s.def.field, s.def.primary); return; }
+        openPop(st, s && s.kind === 'info' ? 'JOB' : 'UPDATE STOP', stopEditor(no, st.dataset.stop));
+        return;
+      }
+      if (e.target.closest('[data-act="status"]')) { openPop(e.target.closest('[data-act="status"]'), 'JOB STATUS', statusEditor(no)); return; }
+      if (e.target.closest('[data-act="quick"]')) { openQuick(no, e.target.closest('[data-act="quick"]')); return; }
+      if (e.target.closest('[data-act="edit"]')) { openEdit(no); return; }
+      if (e.target.closest('[data-act="back"]')) { if (state.navDepth > 0) history.back(); else go('#/jobs'); return; }
+      const t = e.target.closest('[data-tab]');
+      if (t) { state.voyageTab[findJob(no) ? findJob(no).jobNo : no] = t.dataset.tab; rerender(); }
+    });
+    view.addEventListener('submit', (e) => {
+      const f = e.target.closest('[data-act="note"]'); if (!f) return;
+      e.preventDefault();
+      const inp = $('#noteInput', f); const text = inp.value.trim(); if (!text) return;
+      const r = state.route; if (!r || r.name !== 'job') return;
+      inp.value = '';
+      postNote(r.jobNo, text).then((ok) => { if (!ok) { const i2 = $('#noteInput'); if (i2 && !i2.value) i2.value = text; } });
+    });
+    // inside the popover / sheet
+    const onOverlayClick = (e) => {
+      const r = state.route; const no = r && r.jobNo;
+      if (e.target.closest('[data-act="pop-close"]')) { closeOverlays(); return; }
+      if (e.target.closest('[data-act="edit"]') && no) { closeOverlays(); openEdit(no); return; }
+      const set = e.target.closest('[data-set]');
+      if (set && no) { onSet(no, set.dataset.set, set.dataset.val); return; }
+      const day = e.target.closest('[data-day]');
+      if (day) { const inp = $('#popDate'); if (inp) inp.value = iso(addDays(today0(), +day.dataset.day)); }
+    };
+    const onOverlaySubmit = (e) => {
+      const r = state.route; const no = r && r.jobNo; if (!no) return;
+      const df = e.target.closest('[data-date]');
+      if (df) { e.preventDefault(); const v = $('#popDate').value; if (!v) { toast('Pick a date first.', { error: true }); return; } onSet(no, df.dataset.date, v); return; }
+      const tf = e.target.closest('[data-text]');
+      if (tf) { e.preventDefault(); onSet(no, tf.dataset.text, $('#popText').value.trim().toUpperCase()); }
+    };
+    $('#pop').addEventListener('click', onOverlayClick);
+    $('#pop').addEventListener('submit', onOverlaySubmit);
+    $('#drawerBody').addEventListener('click', (e) => { if (state.overlay === 'sheet' || state.overlay === 'quick') onOverlayClick(e); });
+    $('#drawerBody').addEventListener('submit', (e) => { if (state.overlay === 'sheet') onOverlaySubmit(e); });
+    document.addEventListener('pointerdown', (e) => { if (state.overlay === 'pop' && !e.target.closest('#pop') && !e.target.closest('[data-stop], [data-act="status"]')) closeOverlays(); }, true);
+    window.addEventListener('resize', placePop);
+    view.addEventListener('scroll', () => { if (state.overlay === 'pop') placePop(); }, { passive: true });
+  }
+  function openQuick(no, opener) {
+    closeOverlays(true);
+    popRender = quickEditor(no);
+    $('#drawerKicker').textContent = 'QUICK UPDATE';
+    $('#drawerBody').innerHTML = popRender();
+    showDrawer(opener);
+    state.overlay = 'quick';
+  }
+
+  // ================================================================ FORMS
+  const SALES_NAMES = ['VINEETH', 'PRAVEEN', 'RAKHI', 'ANUSANKAR', 'ROSHIN', 'SHYLA', 'SHAKIR', 'VISHNU', 'VARTHIKA', 'NANCY', 'SUHAIL', 'CHINCHU', 'DIYA', 'SATHYAJITH', 'ASHNA', 'ATHIRA', 'KEERTHI', 'KRISHNA', 'SINAN', 'MIDHUN', 'MANJIMA', 'NAJIYA', 'NAYEEM', 'SANOOB'];
+  const TYPE_FIELDS = {
+    SFEF: ['c20', 'c40', 'dg', 'pol', 'pod', 'etd', 'eta', 'siCut', 'edCut', 'dgCut', 'freight'],
+    SFEL: ['dg', 'pol', 'pod', 'etd', 'eta', 'siCut', 'edCut', 'dgCut'],
+    AFE: ['dg', 'pol', 'pod', 'etd', 'eta', 'siCut', 'edCut'],
+    SFIF: ['c20', 'c40', 'dg', 'pol', 'pod', 'etd', 'eta', 'lineFree', 'portFree', 'freight'],
+    SFIL: ['dg', 'pol', 'pod', 'etd', 'eta', 'lineFree', 'portFree'],
+    AFI: ['dg', 'pol', 'pod', 'etd', 'eta'],
+    CND: ['c20', 'c40', 'dg', 'pol', 'pod', 'eta', 'lineFree', 'portFree'],
+    SFC: ['c20', 'c40', 'pol', 'pod', 'etd', 'eta', 'siCut'],
+    AFC: ['pol', 'pod', 'etd', 'eta', 'siCut'],
+    CRR: ['pol', 'pod', 'etd', 'eta'],
+    MIS: ['against']
+  };
+  const FORM_STATUS = {
+    SFEF: ['loadlist', 'sido', 'ed', 'bl', 'costing'], SFEL: ['loadlist', 'sido', 'ed', 'bl', 'costing'], AFE: ['sido', 'ed', 'bl', 'costing'],
+    SFIF: ['loadlist', 'sido', 'ed', 'bl', 'docs', 'delivery', 'costing'], SFIL: ['loadlist', 'sido', 'ed', 'bl', 'docs', 'delivery', 'costing'],
+    AFI: ['sido', 'ed', 'bl', 'delivery', 'costing'], CND: ['loadlist', 'sido', 'ed', 'bl', 'docs', 'delivery', 'costing'],
+    SFC: ['sido', 'bl', 'costing'], AFC: ['sido', 'bl', 'costing'], CRR: ['sido', 'bl', 'costing'], MIS: ['costing']
+  };
+  const TYPE_GROUPS = [
+    ['Sea export', [['SFEF', 'FCL'], ['SFEL', 'LCL']], 'ship'],
+    ['Sea import', [['SFIF', 'FCL'], ['SFIL', 'LCL']], 'ship'],
+    ['Air', [['AFE', 'Export'], ['AFI', 'Import']], 'plane'],
+    ['Cross-trade', [['SFC', 'Sea'], ['AFC', 'Air']], 'globe'],
+    ['Clearance & delivery', [['CND', 'CND']], 'truck'],
+    ['Courier', [['CRR', 'CRR']], 'van'],
+    ['Miscellaneous', [['MIS', 'Costing only']], 'costing']
+  ];
+  function datalist(id, values) {
+    const seen = new Set(); const out = [];
+    values.forEach((v) => { v = String(v || '').trim(); if (v && !seen.has(v)) { seen.add(v); out.push(v); } });
+    return '<datalist id="' + id + '">' + out.slice(0, 600).map((v) => '<option value="' + esc(v) + '"></option>').join('') + '</datalist>';
+  }
+  function loadLists() {
+    if (state.lists || state.listsLoading) return;
+    state.listsLoading = true;
+    api.call('getMasterLists').then((l) => { state.lists = l || { customers: [], vendors: [] }; }).catch(() => { state.lists = { customers: [], vendors: [] }; }).finally(() => { state.listsLoading = false; });
+  }
+  function fieldMeta(key, type) {
+    const air = ['AFE', 'AFI', 'AFC'].includes(type), crr = type === 'CRR', imp = ['SFIF', 'SFIL', 'AFI', 'CND'].includes(type);
+    const M = {
+      jobNo: { label: 'Job no.', kind: 'text', req: true, upper: true, ph: 'e.g. 202600812' },
+      customer: { label: 'Customer', kind: 'text', req: true, upper: true, list: 'dlCustomers' },
+      vendor: { label: air ? 'Airline / vendor' : crr ? 'Courier company' : 'Line / vendor', kind: 'text', upper: true, list: 'dlVendors' },
+      cs: { label: 'CS (owns the job)', kind: 'cs' },
+      sales: { label: 'Sales person', kind: 'text', upper: true, list: 'dlSales' },
+      opened: { label: 'Job opened', kind: 'date' },
+      c20: { label: '20′ containers', kind: 'count' }, c40: { label: '40′ containers', kind: 'count' },
+      dg: { label: 'Cargo', kind: 'select', opts: ['NON DG', 'DG'] },
+      pol: { label: crr ? 'From' : 'POL — origin', kind: 'text', upper: true, list: 'dlPorts' },
+      pod: { label: crr ? 'To' : 'POD — destination', kind: 'text', upper: true, list: 'dlPorts' },
+      etd: { label: crr ? 'Pick-up date' : air ? 'ETD (flight)' : 'ETD', kind: 'date' },
+      eta: { label: crr ? 'Delivery date' : 'ETA', kind: 'date' },
+      siCut: { label: 'SI cutoff', kind: 'date' }, edCut: { label: 'ED cutoff', kind: 'date' }, dgCut: { label: 'DG cutoff', kind: 'date', dgOnly: true },
+      lineFree: { label: 'Line free time (days)', kind: 'free' }, portFree: { label: 'Port free time (days)', kind: 'free' },
+      delivery: { label: 'Delivered on', kind: 'date' },
+      freight: { label: 'Line freight (USD)', kind: 'text', inputmode: 'decimal' },
+      against: { label: 'Against job no.', kind: 'text', upper: true, list: 'dlJobs' },
+      remarks: { label: 'Remarks', kind: 'area' },
+      status: { label: 'Job status', kind: 'select', opts: OPTS.status },
+      type: { label: 'Job type', kind: 'select', opts: OPTS.type },
+      sido: { label: imp ? 'DO status' : crr ? 'Documents (SI)' : 'SI status', kind: 'select', opts: OPTS.sido, blank: true },
+      ed: { label: imp ? 'Customs (ED) status' : 'ED status', kind: 'select', opts: OPTS.ed, blank: true },
+      bl: { label: air ? 'AWB status' : crr ? 'Tracking / AWB status' : 'BL status', kind: 'select', opts: OPTS.bl, blank: true },
+      loadlist: { label: imp ? 'Discharge list' : 'Loadlist', kind: 'select', opts: OPTS.loadlist, blank: true },
+      docs: { label: 'Original docs', kind: 'select', opts: OPTS.docs, blank: true },
+      costing: { label: 'Costing', kind: 'select', opts: OPTS.costing, blank: true }
+    };
+    return M[key];
+  }
+  function csOptions(current) {
+    const t = loadTeam();
+    const names = new Set((t ? t.cs : []).concat(state.users.filter((u) => String(u.role || '').toUpperCase() !== 'SALES').map((u) => String(u.name || '').toUpperCase())));
+    if (current) names.add(current);
+    names.delete('MASTER');
+    return Array.from(names).filter(Boolean).sort();
+  }
+  function input(key, type, val, extra = {}) {
+    const m = fieldMeta(key, type);
+    const id = 'f_' + key;
+    const req = m.req ? ' required' : '';
+    let ctl;
+    if (m.kind === 'select' || m.kind === 'cs') {
+      const opts = m.kind === 'cs' ? csOptions(val) : m.opts.slice();
+      if (val && !opts.includes(val)) opts.unshift(val);
+      ctl = '<select id="' + id + '" name="' + key + '"' + req + '>' + (m.blank || m.kind === 'cs' ? '<option value=""' + (!val ? ' selected' : '') + '>—</option>' : '') + opts.map((o) => '<option value="' + esc(o) + '"' + (o === val ? ' selected' : '') + '>' + esc(o) + '</option>').join('') + '</select>';
+    } else if (m.kind === 'area') {
+      ctl = '<textarea id="' + id + '" name="' + key + '" rows="3" maxlength="500">' + esc(val) + '</textarea>';
+    } else if (m.kind === 'date') {
+      const ok = !val || /^\d{4}-\d{2}-\d{2}$/.test(val);
+      ctl = ok ? '<input type="date" id="' + id + '" name="' + key + '" value="' + esc(val) + '">' : '<input type="text" id="' + id + '" name="' + key + '" value="' + esc(val) + '" placeholder="yyyy-mm-dd">';
+    } else if (m.kind === 'count') {
+      ctl = '<input type="number" min="0" max="999" step="1" inputmode="numeric" id="' + id + '" name="' + key + '" value="' + esc(val) + '">';
+    } else if (m.kind === 'free') {
+      ctl = /^\d*$/.test(val) ? '<input type="number" min="0" max="365" step="1" inputmode="numeric" id="' + id + '" name="' + key + '" value="' + esc(val) + '" placeholder="days">' : '<input type="text" id="' + id + '" name="' + key + '" value="' + esc(val) + '" placeholder="days">';
+    } else {
+      ctl = '<input type="text" id="' + id + '" name="' + key + '" value="' + esc(val) + '"' + req + (m.list ? ' list="' + m.list + '"' : '') + (m.ph ? ' placeholder="' + esc(m.ph) + '"' : '') + (m.inputmode ? ' inputmode="' + m.inputmode + '"' : '') + (m.upper ? ' autocapitalize="characters" class="is-upper"' : '') + ' autocomplete="off" spellcheck="false">';
+    }
+    return '<div class="field' + (m.kind === 'area' ? ' is-wide' : '') + (m.dgOnly ? ' dg-only' : '') + (extra.cls ? ' ' + extra.cls : '') + '" data-field="' + key + '"><label for="' + id + '">' + esc(m.label) + (m.req ? ' <b aria-hidden="true">*</b>' : '') + '</label>' + ctl + '<div class="field-err" id="' + id + '_err"></div></div>';
+  }
+  function formLists() {
+    const L = state.lists || { customers: [], vendors: [] };
+    return datalist('dlCustomers', L.customers.concat(state.jobs.map((j) => j.customer))) + datalist('dlVendors', L.vendors.concat(state.jobs.map((j) => j.vendor))) +
+      datalist('dlPorts', state.jobs.map((j) => j.pol).concat(state.jobs.map((j) => j.pod), ['JEBEL ALI', 'DUBAI', 'KHOR FAKKAN', 'SHARJAH', 'ABU DHABI'])) +
+      datalist('dlSales', SALES_NAMES.concat(state.jobs.map((j) => j.sales))) + datalist('dlJobs', state.jobs.slice(-400).map((j) => j.jobNo));
+  }
+  function typeTiles(sel) {
+    return '<div class="type-grid" role="radiogroup" aria-label="Job type">' + TYPE_GROUPS.map(([title, opts, ic]) =>
+      '<div class="type-group"><div class="tg-title">' + (ic === 'ship' ? SHIP(26) : ic === 'plane' ? PLANE(20) : ic === 'van' ? VAN(20) : icon(ic === 'globe' ? 'globe' : ic === 'truck' ? 'truck' : 'costing', 18)) + '<span>' + esc(title) + '</span></div><div class="tg-opts">' +
+      opts.map(([code, l]) => '<button type="button" class="type-opt" role="radio" data-type="' + code + '" aria-checked="' + (sel === code) + '"><span class="badge">' + code + '</span><span>' + esc(l) + '</span></button>').join('') + '</div></div>').join('') + '</div>';
+  }
+
+  // ---------- New job ----------
+  function openNewJob(type) {
+    if (!state.signedIn) return;
+    loadLists();
+    closeOverlays(true);
+    state.newJob = { type: type || '' };
+    $('#drawer').classList.add('is-wide');
+    $('#drawerKicker').textContent = 'NEW JOB';
+    renderNewJob();
+    showDrawer(document.activeElement);
+    state.overlay = 'form';
+  }
+  function renderNewJob() {
+    const t = state.newJob.type;
+    if (!t) { $('#drawerBody').innerHTML = '<h2 class="peek-job form-title" id="drawerTitle">What kind of job?</h2>' + typeTiles(''); return; }
+    const d = { cs: csOptions(state.user).includes(state.user) ? state.user : '', opened: iso(today0()), dg: 'NON DG' };
+    if (['SFEF', 'SFEL'].includes(t)) d.pol = 'JEBEL ALI';
+    if (t === 'AFE') d.pol = 'DUBAI';
+    if (['SFIF', 'SFIL', 'CND'].includes(t)) d.pod = 'JEBEL ALI';
+    if (t === 'AFI') d.pod = 'DUBAI';
+    const tf = TYPE_FIELDS[t];
+    $('#drawerBody').innerHTML = '<h2 class="peek-job form-title" id="drawerTitle"><span class="badge badge-lg">' + t + '</span> ' + esc(TYPE_NAMES[t]) + '</h2>' +
+      '<button type="button" class="link-btn quiet form-back" data-act="nj-type">' + icon('back', 14) + 'Change type</button>' +
+      '<form class="job-form" id="jobForm" novalidate>' +
+        '<fieldset><legend>JOB</legend><div class="fgrid">' + ['jobNo', 'customer', 'vendor', 'cs', 'sales', 'opened'].map((k) => input(k, t, d[k] || '')).join('') + '</div></fieldset>' +
+        (tf.length ? '<fieldset><legend>' + (t === 'MIS' ? 'LINK' : 'CARGO & ROUTE') + '</legend><div class="fgrid' + (d.dg === 'DG' ? ' has-dg' : '') + '">' + tf.map((k) => input(k, t, d[k] || '')).join('') + '</div></fieldset>' : '') +
+        '<fieldset><legend>REMARKS</legend><div class="fgrid">' + input('remarks', t, '') + '</div></fieldset>' +
+        '<div class="form-error" id="formError" role="alert"></div>' +
+        '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit">CREATE JOB</button></div>' +
+      '</form>' + formLists();
+    syncDg();
+  }
+  function syncDg() { const f = $('#jobForm'); if (!f) return; const dg = f.querySelector('[name="dg"]'); const g = f.querySelector('.dg-only'); if (g) g.hidden = !(dg && dg.value === 'DG'); }
+  function readForm(form) {
+    const out = {};
+    $$('input, select, textarea', form).forEach((el) => { if (!el.name) return; let v = el.value.trim(); if (el.classList.contains('is-upper')) v = v.toUpperCase().replace(/\s+/g, ' '); out[el.name] = v; });
+    return out;
+  }
+  function fieldError(key, msg) {
+    const e = $('#f_' + key + '_err'); if (e) e.textContent = msg || '';
+    const f = $('.field[data-field="' + key + '"]'); if (f) f.classList.toggle('has-error', !!msg);
+  }
+  async function submitNewJob(form) {
+    const t = state.newJob.type;
+    const v = readForm(form);
+    $$('.field-err', form).forEach((e) => { e.textContent = ''; }); $$('.field.has-error', form).forEach((e) => e.classList.remove('has-error'));
+    let bad = false;
+    if (!/^[A-Z0-9][A-Z0-9\-\/]{2,29}$/.test(v.jobNo || '')) { fieldError('jobNo', 'Enter the job number (3–30 letters or numbers).'); bad = true; }
+    else if (findJob(v.jobNo)) { fieldError('jobNo', 'Job ' + v.jobNo + ' already exists.'); bad = true; }
+    if (!v.customer) { fieldError('customer', 'Customer is required.'); bad = true; }
+    if (['SFEF', 'SFIF'].includes(t) && !(+v.c20 > 0) && !(+v.c40 > 0)) { fieldError('c20', 'Enter 20′ or 40′ containers.'); bad = true; }
+    if (v.etd && v.eta && v.eta < v.etd) { fieldError('eta', 'ETA is before ETD.'); bad = true; }
+    if (bad) { const first = $('.field.has-error input, .field.has-error select', form); if (first) first.focus(); return; }
+    if (v.dg !== 'DG') delete v.dgCut;
+    const payload = Object.assign({ type: t }, v);
+    const btn = $('#formSubmit'); btn.disabled = true; btn.textContent = 'CREATING…';
+    try {
+      const res = await api.call('ethixAddJob', [payload, '']);
+      if (res && res.ok && Array.isArray(res.row)) {
+        const k = String(res.row[state.ix.jobNo] || v.jobNo).toUpperCase();
+        state.rowMap.set(k, res.row);
+        rebuildJob(k);
+        closeOverlays();
+        toast('Job ' + v.jobNo + ' created');
+        openJob(v.jobNo);
+        renderChrome(); updateNav();
+        return;
+      }
+      if (res && res.duplicate) fieldError('jobNo', res.error);
+      $('#formError').textContent = (res && res.error) || 'The job was not created.';
+    } catch (e) {
+      if (e.kind !== 'auth') $('#formError').textContent = /not available/i.test(e.message) ? 'Creating jobs needs the Phase 2 Code.gs update.' : e.message;
+    }
+    btn.disabled = false; btn.textContent = 'CREATE JOB';
+  }
+
+  // ---------- Edit details ----------
+  function openEdit(no) {
+    const j = findJob(no); if (!j) return;
+    loadLists();
+    closeOverlays(true);
+    const t = j.type;
+    const keys = ['customer', 'vendor', 'cs', 'sales', 'opened'];
+    const route = TYPE_FIELDS[t] || [];
+    const docs = FORM_STATUS[t] || ['sido', 'ed', 'bl', 'costing'];
+    const val = (k) => asInput(k, j.raw[k]);
+    state.editing = { no: j.jobNo, initial: {} };
+    const norm = (k, v) => (fieldMeta(k, t) && fieldMeta(k, t).upper ? String(v).toUpperCase().replace(/\s+/g, ' ') : v);
+    ['type', 'status'].concat(keys, route, docs, ['remarks', 'dgCut']).forEach((k) => { state.editing.initial[k] = norm(k, val(k)); });
+    $('#drawer').classList.add('is-wide');
+    $('#drawerKicker').textContent = 'EDIT DETAILS';
+    $('#drawerBody').innerHTML = '<h2 class="peek-job form-title" id="drawerTitle">' + esc(j.jobNo) + '</h2>' +
+      '<form class="job-form" id="editForm" novalidate>' +
+        '<fieldset><legend>JOB</legend><div class="fgrid">' + input('type', t, val('type')) + input('status', t, val('status')) + keys.map((k) => input(k, t, val(k))).join('') + '</div><div class="type-warn" id="typeWarn" hidden>Changing the type changes the voyage stops for this job.</div></fieldset>' +
+        (route.length ? '<fieldset><legend>' + (t === 'MIS' ? 'LINK' : 'CARGO & ROUTE') + '</legend><div class="fgrid">' + route.map((k) => input(k, t, val(k))).join('') + '</div></fieldset>' : '') +
+        '<fieldset><legend>DOCUMENTS</legend><div class="fgrid">' + docs.map((k) => input(k, t, val(k))).join('') + '</div></fieldset>' +
+        '<fieldset><legend>REMARKS</legend><div class="fgrid">' + input('remarks', t, val('remarks')) + '</div></fieldset>' +
+        '<div class="form-error" id="formError" role="alert"></div>' +
+        '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit">SAVE CHANGES</button></div>' +
+      '</form>' + formLists();
+    const f = $('#editForm'); const dg = f.querySelector('[name="dg"]'); const g = f.querySelector('.dg-only'); if (g) g.hidden = !(dg && dg.value === 'DG');
+    showDrawer(document.activeElement);
+    state.overlay = 'form';
+  }
+  function submitEdit(form) {
+    const ed = state.editing; if (!ed) return;
+    const v = readForm(form);
+    $$('.field-err', form).forEach((e) => { e.textContent = ''; });
+    if (!v.customer) { fieldError('customer', 'Customer is required.'); return; }
+    if (v.etd && v.eta && /^\d{4}/.test(v.etd) && /^\d{4}/.test(v.eta) && v.eta < v.etd) { fieldError('eta', 'ETA is before ETD.'); return; }
+    const changes = {};
+    Object.keys(v).forEach((k) => { if (k in ed.initial && String(v[k]) !== String(ed.initial[k])) changes[k] = v[k]; });
+    closeOverlays();
+    if (!Object.keys(changes).length) { toast('No changes to save'); return; }
+    saveJob(ed.no, changes, { toast: Object.keys(changes).length === 1 ? fieldMeta(Object.keys(changes)[0], findJob(ed.no).type).label + ' saved' : Object.keys(changes).length + ' changes saved' });
+  }
+
+  function initForms() {
+    const body = $('#drawerBody');
+    body.addEventListener('click', (e) => {
+      if (state.overlay !== 'form') return;
+      const tp = e.target.closest('[data-type]');
+      if (tp) { state.newJob.type = tp.dataset.type; renderNewJob(); const f = $('#f_jobNo'); if (f) f.focus(); return; }
+      if (e.target.closest('[data-act="nj-type"]')) { state.newJob.type = ''; renderNewJob(); return; }
+      if (e.target.closest('[data-act="form-cancel"]')) closeOverlays();
+    });
+    body.addEventListener('change', (e) => {
+      if (state.overlay !== 'form') return;
+      if (e.target.name === 'dg') { const g = e.target.form && e.target.form.querySelector('.dg-only'); if (g) g.hidden = e.target.value !== 'DG'; }
+      if (e.target.name === 'type' && e.target.form && e.target.form.id === 'editForm') $('#typeWarn').hidden = !state.editing || e.target.value === state.editing.initial.type;
+    });
+    body.addEventListener('submit', (e) => {
+      if (state.overlay !== 'form') return;
+      e.preventDefault();
+      if (e.target.id === 'jobForm') submitNewJob(e.target);
+      if (e.target.id === 'editForm') submitEdit(e.target);
+    });
+  }
+
+  // ------------------------------------------------------------ lists & menus
   function openList(kind, opener) {
     const m = lastMetrics; if (!m) return;
     const map = {
-      active: ['ACTIVE JOBS', m.active], costing: ['COSTING PENDING', m.costing], sied: ['SI / ED PENDING', m.sied],
+      active: ['ACTIVE JOBS', m.active], costing: ['COSTING DUE', m.costing], sied: ['SI / ED DUE', m.sied],
       free: ['FREE TIME ENDING ≤ 2 DAYS', m.freeJobs], atsea: ['AT SEA NOW', m.atSea], arriving: ['ARRIVING THIS WEEK', m.arriving],
       departing: ['DEPARTING THIS WEEK', m.departing], hold: ['ON HOLD', m.hold], watch: ['TODAY’S WATCH', m.watch.map((w) => w.j)]
     };
     const entry = map[kind]; if (!entry) return;
     const list = Array.from(new Set(entry[1]));
+    closeOverlays(true);
     $('#drawerKicker').textContent = list.length + (list.length === 1 ? ' JOB' : ' JOBS');
-    $('#drawerBody').innerHTML = '<h2 class="peek-job" id="drawerTitle" style="font-family:var(--f-display);font-stretch:120%;font-weight:800;font-size:26px">' + esc(entry[0]) + '</h2>' +
+    $('#drawerBody').innerHTML = '<h2 class="peek-job list-title" id="drawerTitle">' + esc(entry[0]) + '</h2>' +
       (list.length ? '<div>' + list.map((j) =>
-        '<button type="button" class="list-row" data-job="' + esc(j.jobNo) + '"><span style="min-width:0"><span class="li-job" style="display:block">' + esc(j.jobNo) + ' · ' + esc(j.type) + '</span>' +
-        '<span class="li-sub" style="display:block;font-weight:700;color:var(--ink)">' + esc(j.customer || '—') + '</span><span class="li-sub" style="display:block">' + esc(j.route) + '</span></span>' +
-        '<span class="mono small">' + esc(j.cs || '') + '</span></button>'
+        '<button type="button" class="list-row" data-job="' + esc(j.jobNo) + '"><span class="lr-main"><span class="li-job">' + esc(j.jobNo) + ' · ' + esc(j.type) + '</span>' +
+        '<span class="lr-cust">' + esc(j.customer || '—') + '</span><span class="li-sub">' + esc(j.route) + '</span></span>' + toneChip(j.next) + '</button>'
       ).join('') + '</div>' : '<div class="tile-empty">Nothing here right now.</div>');
     showDrawer(opener);
+    state.overlay = 'drawer';
   }
 
   function openMore(opener) {
+    closeOverlays(true);
     $('#drawerKicker').textContent = 'ACCOUNT';
     $('#drawerBody').innerHTML =
-      '<div style="display:flex;align-items:center;gap:12px"><span class="avatar">' + esc(state.user.charAt(0)) + '</span><div><div style="font-weight:800">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(roleLabel(state.role, state.user)) + '</div></div></div>' +
+      '<div class="acct"><span class="avatar">' + esc(state.user.charAt(0)) + '</span><div><div class="acct-name" id="drawerTitle">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(roleLabel(state.role, state.user)) + '</div></div></div>' +
       '<button type="button" class="btn-brutal" data-act="logout" style="width:100%">Log out</button>' +
-      '<div class="peek-card"><h3>COMING SOON</h3>' + ['Jobs and the voyage view', 'Sales enquiries', 'Fleet timeline', 'Costing, analysis and admin'].map((t) => '<div class="kv"><span class="kv-k">' + esc(t) + '</span><span class="kv-v">SOON</span></div>').join('') + '</div>';
+      '<div class="peek-card"><h3>COMING SOON</h3>' + ['Sales enquiries', 'Fleet timeline', 'Costing, analysis and admin'].map((t) => '<div class="kv"><span class="kv-k">' + esc(t) + '</span><span class="kv-v">SOON</span></div>').join('') + '</div>';
     showDrawer(opener);
+    state.overlay = 'drawer';
   }
 
   let drawerOpener = null;
@@ -685,11 +1782,13 @@
     drawerOpener = opener || document.activeElement;
     $('#scrim').hidden = false; $('#drawer').hidden = false;
     $('#drawerBody').scrollTop = 0;
-    $('#drawerClose').focus();
+    $('#drawerClose').focus({ preventScroll: true });
   }
-  function hideDrawer() {
+  function hideDrawer(silent) {
     $('#scrim').hidden = true; $('#drawer').hidden = true;
-    if (drawerOpener && document.body.contains(drawerOpener)) drawerOpener.focus();
+    $('#drawer').classList.remove('is-wide');
+    popRender = null;
+    if (!silent && drawerOpener && document.body.contains(drawerOpener)) drawerOpener.focus({ preventScroll: true });
   }
 
   // ------------------------------------------------------------------ search
@@ -699,7 +1798,7 @@
     q = q.trim().toUpperCase();
     if (!q) { box.hidden = true; return; }
     const hits = state.jobs.filter((j) => (j.jobNo + ' ' + j.customer + ' ' + j.pol + ' ' + j.pod + ' ' + j.cs + ' ' + j.sales + ' ' + j.type).toUpperCase().includes(q))
-      .sort((a, b) => (b.active - a.active) || (a.jobNo.startsWith(q) ? -1 : 0))
+      .sort((a, b) => (b.active - a.active) || ((b.jobNo.toUpperCase().startsWith(q) ? 1 : 0) - (a.jobNo.toUpperCase().startsWith(q) ? 1 : 0)))
       .slice(0, 8);
     searchIndex = -1;
     box.innerHTML = hits.length ? hits.map((j) =>
@@ -719,12 +1818,13 @@
       try { boot = await api.call('ethixBootstrap'); }
       catch (e) { if (e.kind === 'server' && /not available/i.test(e.message)) boot = await legacyBoot(state.user, state.role); else throw e; }
       applyBoot(boot);
-      const scrollY = window.scrollY;
-      renderHome(false);
-      window.scrollTo(0, scrollY);
+      if (state.overlay === 'form' || state.overlay === 'pop' || state.overlay === 'sheet') state.dirty = true;
+      else { rerender(); refreshOverlay(); }
+      updateNav();
+      if (state.route && state.route.name === 'job') loadStory(state.route.jobNo, true);
       if (manual) toast('Up to date');
     } catch (e) {
-      if (e.kind !== 'auth') toast(e.message, true);
+      if (e.kind !== 'auth') toast(e.message, { error: true });
     } finally {
       state.refreshing = false;
       const b2 = $('#refreshBtn'), s2 = $('#sync');
@@ -736,7 +1836,7 @@
   let ending = false;
   function sessionLost(msg) {
     if (ending) return; ending = true; api.token = null;
-    toast(msg || 'Your session has ended. Please sign in again.', true);
+    toast(msg || 'Your session has ended. Please sign in again.', { error: true });
     setTimeout(() => window.location.reload(), 1800);
   }
   function startTimers() {
@@ -744,8 +1844,8 @@
     setInterval(() => { const el = $('#syncText'); if (el) el.textContent = syncText(); }, 30000);
     setInterval(() => {
       if (document.visibilityState !== 'visible' || !api.token) return;
-      if (Date.now() - state.lastActive < 10 * 60 * 1000) refresh(false);      // you're working: keep data fresh
-      else api.call('ethixPing').catch(() => {});                              // idle: just check the session
+      if (Date.now() - state.lastActive < 10 * 60 * 1000) refresh(false);
+      else api.call('ethixPing').catch(() => {});
     }, 3 * 60 * 1000);
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible' && api.token && Date.now() - state.syncedAt > 3 * 60 * 1000) refresh(false);
@@ -753,37 +1853,49 @@
   }
 
   function confirmLogout() {
+    closeOverlays(true);
     const wrap = $('#confirmWrap'); wrap.hidden = false; $('#confirmNo').focus();
     const close = () => { wrap.hidden = true; };
     $('#confirmNo').onclick = close;
-    $('#confirmYes').onclick = () => { api.logout(); document.body.style.opacity = '0.6'; setTimeout(() => window.location.reload(), 250); };
+    $('#confirmYes').onclick = () => { api.logout(); document.body.style.opacity = '0.6'; history.replaceState(null, '', location.pathname + location.search); setTimeout(() => window.location.reload(), 250); };
     wrap.onclick = (e) => { if (e.target === wrap) close(); };
   }
 
-  function toast(text, isError) {
+  function toast(text, opts = {}) {
+    if (typeof opts === 'boolean') opts = { error: opts };
     const t = document.createElement('div');
-    t.className = 'toast' + (isError ? ' is-error' : '');
-    t.textContent = text;
-    $('#toasts').appendChild(t);
-    setTimeout(() => { t.style.transition = 'opacity .3s'; t.style.opacity = '0'; setTimeout(() => t.remove(), 320); }, isError ? 4200 : 2200);
+    t.className = 'toast' + (opts.error ? ' is-error' : '');
+    const span = document.createElement('span'); span.textContent = text; t.appendChild(span);
+    if (opts.action) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'toast-btn'; b.textContent = opts.action.label;
+      b.onclick = () => { t.remove(); opts.action.fn(); };
+      t.appendChild(b);
+    }
+    const box = $('#toasts');
+    while (box.children.length > 1) box.firstChild.remove();
+    box.appendChild(t);
+    setTimeout(() => { t.style.transition = 'opacity .3s'; t.style.opacity = '0'; setTimeout(() => t.remove(), 320); }, opts.action ? 6000 : opts.error ? 4200 : 2200);
   }
 
   function initApp() {
-    $('#view').addEventListener('click', (e) => {
+    const view = $('#view');
+    view.addEventListener('click', (e) => {
+      const r = state.route ? state.route.name : 'home';
       const jobBtn = e.target.closest('[data-job]');
-      if (jobBtn) { const box = $('#searchResults'); if (box) box.hidden = true; openPeek(findJob(jobBtn.dataset.job), jobBtn); return; }
+      if (jobBtn && !e.target.closest('[data-stop]')) { const box = $('#searchResults'); if (box) box.hidden = true; openJob(jobBtn.dataset.job); return; }
+      if (r !== 'home') return;
       const listBtn = e.target.closest('[data-list]');
       if (listBtn) { openList(listBtn.dataset.list, listBtn); return; }
       const weekBtn = e.target.closest('[data-week]');
-      if (weekBtn) { state.week = weekBtn.dataset.week; renderHome(false); return; }
+      if (weekBtn) { state.week = weekBtn.dataset.week; rerender(); return; }
       const scopeBtn = e.target.closest('[data-scope]');
-      if (scopeBtn) { state.scope = scopeBtn.dataset.scope; store.set('ethix.v2.scope.' + state.user, state.scope); renderHome(false); return; }
-      if (e.target.closest('[data-act="refresh"]')) { refresh(true); }
+      if (scopeBtn) { state.scope = scopeBtn.dataset.scope; store.set('ethix.v2.scope.' + state.user, state.scope); rerender(); return; }
+      if (e.target.closest('[data-act="refresh"]')) refresh(true);
     });
-    $('#view').addEventListener('scroll', (e) => { if (e.target.classList && e.target.classList.contains('tile-body')) markOverflow(); }, true);
+    view.addEventListener('scroll', (e) => { if (e.target.classList && e.target.classList.contains('tile-body')) markOverflow(); }, true);
     window.addEventListener('resize', () => { if (!$('#shell').hidden) markOverflow(); });
-    $('#view').addEventListener('input', (e) => { if (e.target.id === 'searchInput') runSearch(e.target.value); });
-    $('#view').addEventListener('keydown', (e) => {
+    view.addEventListener('input', (e) => { if (e.target.id === 'searchInput') runSearch(e.target.value); });
+    view.addEventListener('keydown', (e) => {
       if (e.target.id !== 'searchInput') return;
       const box = $('#searchResults'); const items = box ? $$('.result', box) : [];
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -791,34 +1903,48 @@
         searchIndex = (searchIndex + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
         items.forEach((x, i) => x.classList.toggle('is-active', i === searchIndex));
       } else if (e.key === 'Enter') {
-        e.preventDefault();   // stop the same Enter from also pressing the drawer's close button
+        e.preventDefault();
         const target = items[searchIndex >= 0 ? searchIndex : 0]; if (target) target.click();
       } else if (e.key === 'Escape') { e.target.value = ''; if (box) box.hidden = true; }
     });
-    document.addEventListener('click', (e) => { const box = $('#searchResults'); if (box && !e.target.closest('.search-wrap')) box.hidden = true; });
+    document.addEventListener('click', (e) => {
+      const box = $('#searchResults'); if (box && !e.target.closest('.search-wrap')) box.hidden = true;
+      if (!state.signedIn) return;
+      const nav = e.target.closest('[data-href]');
+      if (nav && !nav.disabled) { e.preventDefault(); closeOverlays(true); go(nav.dataset.href); return; }
+      if (e.target.closest('[data-act="new-job"]')) { openNewJob(); return; }
+    });
     document.addEventListener('keydown', (e) => {
-      if (document.body.classList.contains('is-signin')) return;
-      if (e.key === 'Escape' && !$('#drawer').hidden) { hideDrawer(); return; }
-      if (e.key === 'Escape' && !$('#confirmWrap').hidden) { $('#confirmWrap').hidden = true; return; }
-      if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) { const s = $('#searchInput'); if (s) { e.preventDefault(); s.focus(); } }
+      if (!state.signedIn) return;
+      if (e.key === 'Escape') {
+        if (!$('#confirmWrap').hidden) { $('#confirmWrap').hidden = true; return; }
+        if (state.overlay || !$('#drawer').hidden) { closeOverlays(); return; }
+      }
+      const tag = document.activeElement ? document.activeElement.tagName : '';
+      if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) { const s = $('#searchInput') || $('#jobsSearch'); if (s) { e.preventDefault(); s.focus(); } }
     });
     $('#drawerBody').addEventListener('click', (e) => {
-      const jobBtn = e.target.closest('[data-job]'); if (jobBtn) { openPeek(findJob(jobBtn.dataset.job), drawerOpener); return; }
-      if (e.target.closest('[data-act="logout"]')) { hideDrawer(); confirmLogout(); }
+      if (state.overlay === 'form' || state.overlay === 'sheet' || state.overlay === 'quick') return;
+      const jobBtn = e.target.closest('[data-job]'); if (jobBtn) { openJob(jobBtn.dataset.job); return; }
+      if (e.target.closest('[data-act="logout"]')) { closeOverlays(true); confirmLogout(); }
     });
-    $('#drawerClose').addEventListener('click', hideDrawer);
-    $('#scrim').addEventListener('click', hideDrawer);
+    $('#drawerClose').addEventListener('click', () => closeOverlays());
+    $('#scrim').addEventListener('click', () => closeOverlays());
     $('#logoutBtn').addEventListener('click', confirmLogout);
     $('#bottomBar').addEventListener('click', (e) => { const b = e.target.closest('[data-act="more"]'); if (b) openMore(b); });
+    window.addEventListener('hashchange', () => { if (!state.signedIn) return; state.navDepth++; closeOverlays(true); render(false); });
   }
 
   // -------------------------------------------------------------------- start
   function start() {
     initSignin();
     initApp();
+    initJobs();
+    initVoyage();
+    initForms();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 
   // exposed for automated tests only (no data, no token)
-  window.__ethix = { parseDate, mapHeaders, buildJob, computeHome, today0 };
+  window.__ethix = { parseDate, mapHeaders, buildJob, computeHome, today0, journeyFor, nextStep };
 })();
