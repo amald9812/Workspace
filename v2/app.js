@@ -1,7 +1,7 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, shell, live Home)
    Talks to the same Apps Script backend as the current app. Nothing is stored
-   on the device except your team's names for the sign-in screen and a few view choices.
+   on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
 (() => {
   'use strict';
@@ -54,7 +54,7 @@
   // ------------------------------------------------------------------- state
   const state = {
     user: null, role: null, jobs: [], users: [], recent: [], syncedAt: 0,
-    scope: 'all', lastActive: Date.now(), pick: null, busy: false
+    scope: 'all', week: 'arr', tab: null, typing: false, lastActive: Date.now(), pick: null, busy: false
   };
 
   // ---------------------------------------------------------- dates & parsing
@@ -217,30 +217,26 @@
     refresh: '<path d="M20 11a8 8 0 0 0-14.9-4M4 4v4h4M4 13a8 8 0 0 0 14.9 4M20 20v-4h-4"/>',
     alert: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/>',
     anchor: '<circle cx="12" cy="5" r="3"/><path d="M12 22V8M5 12H2a10 10 0 0 0 20 0h-3"/>',
-    logout: '<path d="M15 4h4v16h-4M10 16l4-4-4-4M14 12H4"/>'
+    logout: '<path d="M15 4h4v16h-4M10 16l4-4-4-4M14 12H4"/>',
+    check: '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/>',
+    calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'
   };
   const icon = (name, size = 18) => '<svg viewBox="0 0 24 24" width="' + size + '" height="' + size + '" aria-hidden="true">' + I[name] + '</svg>';
   const SHIP = (w = 30) => '<svg class="art track-ship-svg" viewBox="0 0 64 30" width="' + w + '" height="' + (w / 2) + '" aria-hidden="true"><path d="M2 19 H62 L55 28 H9 Z" fill="#0B1B2B"/><rect x="7" y="8" width="9" height="11" fill="#0B1B2B"/><rect x="19" y="12" width="9" height="7" fill="#48BEBF"/><rect x="30" y="12" width="9" height="7" fill="#1C5179"/><rect x="41" y="12" width="9" height="7" fill="#A9DEDD"/></svg>';
   const PLANE = (s = 22) => '<svg class="art" viewBox="0 0 24 24" width="' + s + '" height="' + s + '" aria-hidden="true"><path transform="rotate(90 12 12)" fill="#1C5179" d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>';
 
-  const SHIELD = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 8-7 9-4-1-7-4.5-7-9V6z"/></svg>';
-
   // ============================================================== SIGN IN
-  // Names appear only on a device where someone has signed in before. The list
-  // comes from the server after a successful sign-in and is kept on the device
-  // (names and team only — nothing else).
-  const TEAM_KEY = 'ethix.v2.team', LAST_KEY = 'ethix.v2.last';
-  const TEAM_LABEL = { cs: 'CS · OPS', sales: 'SALES' };
-  const sign = { step: 'who', tab: 'cs', team: null, pickTeam: null };
-  const uniqSort = (a) => Array.from(new Set(a)).sort();
-
+  // The sign-in screen never asks the server for names. A device learns the
+  // team list from its first successful sign-in and shows it from then on.
+  const TEAM_KEY = 'ethix.v2.team';
   function loadTeam() {
     const t = store.get(TEAM_KEY, null);
     if (t && Array.isArray(t.cs) && Array.isArray(t.sales)) return t;
-    const old = store.get('ethix.v2.recent', null);           // v2.0 kept people who signed in here
-    if (Array.isArray(old)) {
-      const cs = old.map((x) => x && String(x.n || '').toUpperCase()).filter((n) => n && n !== 'MASTER');
-      if (cs.length) return { cs: uniqSort(cs), sales: [] };
+    const old = store.get('ethix.v2.recent', null);              // devices that used the first v2 build
+    if (Array.isArray(old) && old.length) {
+      const names = (r) => old.filter((x) => x && x.n && x.n !== 'MASTER' && (r ? x.r === 'SALES' : x.r !== 'SALES')).map((x) => x.n);
+      return { cs: names(false).sort(), sales: names(true).sort() };
     }
     return null;
   }
@@ -249,66 +245,71 @@
     const cs = [], sales = [];
     users.forEach((u) => {
       const n = String((u && u.name) || '').toUpperCase().trim();
-      if (!n || n === 'MASTER' || n === 'GUEST') return;
-      (String((u && u.role) || '').toUpperCase().trim() === 'SALES' ? sales : cs).push(n);
+      if (!n || n === 'MASTER') return;
+      (String(u.role || '').toUpperCase().trim() === 'SALES' ? sales : cs).push(n);
     });
-    store.set(TEAM_KEY, { cs: uniqSort(cs), sales: uniqSort(sales), at: Date.now() });
+    store.set(TEAM_KEY, { cs: cs.sort(), sales: sales.sort() });
     try { localStorage.removeItem('ethix.v2.recent'); } catch (e) { /* ignore */ }
   }
-  const hasTeam = () => !!(sign.team && (sign.team.cs.length || sign.team.sales.length));
+  function roleLabel(role, name) {
+    const r = String(role || '').toUpperCase();
+    if (name === 'MASTER' || ['ADMIN', 'CO-ADMIN', 'MASTER'].includes(r)) return 'ADMIN';
+    if (r === 'SALES') return 'SALES';
+    return 'OPS';
+  }
+  const initials = (n) => { const p = String(n).trim().split(/\s+/); return (p.length > 1 ? p[0][0] + p[p.length - 1][0] : String(n).slice(0, 1)).toUpperCase(); };
 
-  function showStep(step) {
-    sign.step = step;
-    $('#signinCard').dataset.step = step;
-    $('#stepWho').hidden = step !== 'who';
-    $('#stepFirst').hidden = step !== 'first';
-    $('#stepPin').hidden = step !== 'pin';
-    if (step === 'who') requestAnimationFrame(updateTeamFade);
+  function renderWho() {
+    const team = loadTeam();
+    const hasTeam = !!(team && (team.cs.length || team.sales.length));
+    const typing = state.typing || !hasTeam;
+    $('#teamTabs').hidden = typing;
+    $('#people').hidden = typing;
+    $('#nameForm').hidden = !typing;
+    $('#notListedBtn').hidden = !hasTeam;
+    $('#notListedBtn').textContent = typing ? 'Back to the team list' : 'Not in the list? Type your name';
+    $('#nameNote').textContent = hasTeam ? 'Type your name exactly as it is in the users list.' : 'First sign-in on this device. After it, your team appears here to tap.';
+    if (typing) return;
+    let tab = state.tab || store.get('ethix.v2.tab', 'cs');
+    if (tab !== 'sales') tab = 'cs';
+    state.tab = tab;
+    $('#countCs').textContent = team.cs.length;
+    $('#countSales').textContent = team.sales.length;
+    $$('#teamTabs [role="tab"]').forEach((b) => { const on = b.dataset.team === tab; b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; });
+    $('#people').setAttribute('aria-labelledby', tab === 'sales' ? 'tabSales' : 'tabCs');
+    const list = team[tab];
+    $('#people').innerHTML = list.length ? list.map((n) =>
+      '<button type="button" class="person" data-name="' + esc(n) + '" aria-label="Sign in as ' + esc(nice(n)) + '"><span class="disc">' + esc(initials(n)) + '</span><span class="person-name">' + esc(n) + '</span></button>'
+    ).join('') : '<div class="people-empty">' + (tab === 'sales' ? 'No sales team members yet.' : 'No CS team members yet.') + '</div>';
+    $('#people').scrollTop = 0;
+    markPeopleOverflow();
+  }
+  function markPeopleOverflow() {
+    const p = $('#people'); if (!p || p.hidden) return;
+    p.classList.toggle('has-more', p.scrollHeight - p.clientHeight - p.scrollTop > 4);
   }
 
-  function renderTeam() {
-    const t = sign.team || { cs: [], sales: [] };
-    const last = store.get(LAST_KEY, null);
-    ['cs', 'sales'].forEach((k) => {
-      const tab = $(k === 'cs' ? '#tabCs' : '#tabSales');
-      tab.setAttribute('aria-selected', String(sign.tab === k));
-      tab.tabIndex = sign.tab === k ? 0 : -1;
-      $(k === 'cs' ? '#countCs' : '#countSales').textContent = t[k].length;
-    });
-    $('#teamGrid').setAttribute('aria-labelledby', sign.tab === 'cs' ? 'tabCs' : 'tabSales');
-    const list = t[sign.tab];
-    $('#teamGrid').innerHTML = list.length ? list.map((n) =>
-      '<button type="button" class="member' + (last && last.n === n ? ' is-last' : '') + '" data-name="' + esc(n) + '" aria-label="Sign in as ' + esc(nice(n)) + '">' +
-      '<span class="disc">' + esc(n.charAt(0)) + '</span><span class="member-name">' + esc(n) + '</span></button>'
-    ).join('') : (sign.tab === 'sales'
-      ? '<div class="team-empty"><strong>No sales team yet</strong>Sales sign-ins will show here once they’re added.</div>'
-      : '<div class="team-empty"><strong>No one here yet</strong>Use “Not in the list?” below to sign in.</div>');
-    $('#teamScroll').scrollTop = 0;
-    requestAnimationFrame(updateTeamFade);
-  }
-  function updateTeamFade() {
-    const s = $('#teamScroll'); if (!s) return;
-    const more = s.scrollHeight - s.clientHeight - s.scrollTop > 4;
-    s.classList.toggle('is-scrollable', more);
-  }
-
-  function pick(name, opts = {}) {
+  function pick(name, label) {
     state.pick = name;
-    sign.pickTeam = opts.team || null;
-    $('#pinDisc').innerHTML = opts.admin ? SHIELD : esc(name.charAt(0));
-    $('#pinName').textContent = opts.label || name;
-    $('#pinSub').textContent = opts.sub || (opts.team ? TEAM_LABEL[opts.team] : '');
-    showStep('pin');
+    state.pickLabel = label || name;
+    $('#stepWho').hidden = true;
+    $('#stepPin').hidden = false;
+    $('#whoName').textContent = state.pickLabel;
+    $('#whoDisc').textContent = name === 'MASTER' ? 'AD' : initials(name);
+    $('#pinLabel').textContent = 'PIN for ' + state.pickLabel;
     setMsg('');
     resetPin();
     if (!isTouch()) $('#pinInput').focus();
   }
-  function backToNames() {
+  function backToWho() {
     if (state.busy) return;
+    const was = state.pick;
     state.pick = null;
-    resetPin(); setMsg('');
-    if (hasTeam()) { renderTeam(); showStep('who'); const tab = $(sign.tab === 'cs' ? '#tabCs' : '#tabSales'); if (!isTouch()) tab.focus(); }
-    else { $('#backToListBtn').hidden = true; showStep('first'); if (!isTouch()) $('#firstName').focus(); }
+    $('#stepPin').hidden = true;
+    $('#stepWho').hidden = false;
+    renderWho();
+    const btn = was && $('#people .person[data-name="' + (window.CSS && CSS.escape ? CSS.escape(was) : was) + '"]');
+    if (btn && !isTouch()) btn.focus();
   }
 
   function resetPin() {
@@ -339,7 +340,6 @@
         api.token = res.token;
         let boot = res.boot;
         if (!boot) boot = await legacyBoot(state.pick, res.role);   // backend without the fast-load update
-        if (state.pick !== 'MASTER') store.set(LAST_KEY, { n: state.pick, t: sign.pickTeam || null });
         $('#signinCard').classList.add('leaving');
         setTimeout(() => enterApp(boot, state.pick, res.role), 280);
         return;
@@ -349,11 +349,11 @@
       if (res && res.locked) setMsg(res.message || 'Too many wrong PINs. Try again later.', 'locked');
       else if (res && res.offline) setMsg(res.message, 'error');
       else setMsg('Incorrect PIN. Try again.', 'error');
-      setTimeout(() => { resetPin(); if (!isTouch() && sign.step === 'pin') inp.focus(); }, 650);
+      setTimeout(() => { resetPin(); if (!isTouch()) inp.focus(); }, 650);
     } catch (e) {
       $('#pinWells').classList.remove('busy');
       setMsg(e.message, 'error');
-      setTimeout(() => { resetPin(); if (!isTouch() && sign.step === 'pin') inp.focus(); }, 650);
+      setTimeout(() => { resetPin(); if (!isTouch()) inp.focus(); }, 650);
     } finally { state.busy = false; }
   }
 
@@ -363,48 +363,34 @@
   }
 
   function initSignin() {
-    sign.team = loadTeam();
-    if (hasTeam()) {
-      const last = store.get(LAST_KEY, null);
-      sign.tab = last && last.t === 'sales' && sign.team.sales.length ? 'sales' : (sign.team.cs.length ? 'cs' : 'sales');
-      renderTeam(); showStep('who');
-    } else { $('#backToListBtn').hidden = true; showStep('first'); }
-
-    // tabs
-    $('.team-tabs').addEventListener('click', (e) => {
-      const b = e.target.closest('.team-tab'); if (!b || sign.tab === b.dataset.team) return;
-      sign.tab = b.dataset.team; renderTeam();
+    document.body.classList.add('is-signin');
+    renderWho();
+    $('#teamTabs').addEventListener('click', (e) => {
+      const b = e.target.closest('[role="tab"]'); if (!b) return;
+      state.tab = b.dataset.team; store.set('ethix.v2.tab', state.tab); renderWho();
     });
-    $('.team-tabs').addEventListener('keydown', (e) => {
+    $('#teamTabs').addEventListener('keydown', (e) => {
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-      e.preventDefault(); sign.tab = sign.tab === 'cs' ? 'sales' : 'cs'; renderTeam();
-      $(sign.tab === 'cs' ? '#tabCs' : '#tabSales').focus();
+      state.tab = state.tab === 'cs' ? 'sales' : 'cs'; store.set('ethix.v2.tab', state.tab); renderWho();
+      const b = $('#teamTabs [aria-selected="true"]'); if (b) b.focus();
     });
-    $('#teamScroll').addEventListener('scroll', updateTeamFade, { passive: true });
-    window.addEventListener('resize', () => { if (sign.step === 'who') updateTeamFade(); });
-
-    // pick a person
-    $('#teamGrid').addEventListener('click', (e) => {
-      const b = e.target.closest('.member'); if (!b || state.busy) return;
-      b.classList.add('is-pressed');
-      setTimeout(() => pick(b.dataset.name, { team: sign.tab }), 140);
+    $('#people').addEventListener('click', (e) => {
+      const b = e.target.closest('.person'); if (b && !state.busy) pick(b.dataset.name);
     });
+    $('#people').addEventListener('scroll', markPeopleOverflow, { passive: true });
+    window.addEventListener('resize', markPeopleOverflow);
     $('#notListedBtn').addEventListener('click', () => {
-      $('#backToListBtn').hidden = !hasTeam(); $('#firstName').value = '';
-      showStep('first'); if (!isTouch()) $('#firstName').focus();
+      state.typing = !state.typing && !!loadTeam();
+      renderWho();
+      if (!$('#nameForm').hidden) { $('#nameInput').value = ''; $('#nameInput').focus(); }
     });
-    $('#backToListBtn').addEventListener('click', () => { renderTeam(); showStep('who'); });
-    $('#stepFirst').addEventListener('submit', (e) => {
+    $('#nameForm').addEventListener('submit', (e) => {
       e.preventDefault();
-      const name = $('#firstName').value.trim().toUpperCase().replace(/\s+/g, ' ');
-      if (!name) { $('#firstName').focus(); return; }
-      const team = sign.team && sign.team.sales.includes(name) ? 'sales' : (sign.team && sign.team.cs.includes(name) ? 'cs' : null);
-      pick(name, { team, sub: team ? undefined : 'FIRST SIGN-IN HERE' });
+      const name = $('#nameInput').value.trim().toUpperCase().replace(/\s+/g, ' ');
+      if (name) pick(name);
     });
-    $('#switchBtn').addEventListener('click', backToNames);
-    $('#adminBtn').addEventListener('click', () => { if (!state.busy) pick('MASTER', { label: 'ADMIN', sub: 'ADMIN ACCESS', admin: true }); });
-
-    // PIN entry (keyboard on laptops, keypad on phones)
+    $('#switchBtn').addEventListener('click', backToWho);
+    $('#adminBtn').addEventListener('click', () => { if (!state.busy) pick('MASTER', 'ADMIN'); });
     const inp = $('#pinInput');
     inp.addEventListener('input', () => {
       inp.value = inp.value.replace(/\D/g, '').slice(0, 4);
@@ -422,23 +408,12 @@
     });
     document.addEventListener('keydown', (e) => {
       if (!document.body.classList.contains('is-signin')) return;
-      if (e.key === 'Escape' && sign.step === 'pin') backToNames();
-      else if (sign.step === 'pin' && /^\d$/.test(e.key) && document.activeElement !== inp && !inp.disabled && !isTouch()) { inp.focus(); }
+      if (e.key === 'Escape' && !$('#stepPin').hidden) backToWho();
     });
-
-    if (!api.connected) {
-      const note = document.createElement('div');
-      note.className = 'team-empty'; note.id = 'setupNote';
-      note.innerHTML = '<strong>Not connected yet</strong>Paste your Apps Script /exec link into config.js.';
-      $('#signinCard').insertBefore(note, $('.card-foot'));
-    }
+    if (!api.connected) { const n = $('#cardNote'); n.hidden = false; n.textContent = 'Not connected yet: paste your Apps Script /exec link into config.js.'; }
   }
 
   // ================================================================ APP
-  const FIT_QUERY = window.matchMedia('(min-width: 1024px) and (min-height: 600px)');
-  const isFit = () => FIT_QUERY.matches;
-  function applyFit() { document.body.classList.toggle('fit', isFit()); }
-
   function applyBoot(boot) {
     const rows = Array.isArray(boot.jobs) ? boot.jobs : [];
     const ix = mapHeaders(rows[0] || []);
@@ -450,18 +425,13 @@
   }
 
   const isAdmin = () => ['ADMIN', 'CO-ADMIN', 'MASTER'].includes(state.role) || state.user === 'MASTER';
-  function roleLabel(role, name) {
-    const r = String(role || '').toUpperCase();
-    if (name === 'MASTER' || ['ADMIN', 'CO-ADMIN', 'MASTER'].includes(r)) return 'ADMIN';
-    if (r === 'SALES') return 'SALES';
-    return 'OPERATIONS';
-  }
 
   function enterApp(boot, name, role) {
     state.user = (boot.me && boot.me.user) || name;
     state.role = String((boot.me && boot.me.role) || role || '').toUpperCase();
     applyBoot(boot);
-    saveTeam(state.users);
+    saveTeam(boot.users);
+    if (state.user !== 'MASTER') { const t = loadTeam(); if (t) store.set('ethix.v2.tab', t.sales.includes(state.user) ? 'sales' : 'cs'); }
     const savedScope = store.get('ethix.v2.scope.' + state.user, null);
     const hasMine = state.jobs.some((j) => j.active && j.cs === state.user);
     state.scope = savedScope || (hasMine && !isAdmin() ? 'mine' : 'all');
@@ -494,7 +464,7 @@
     ).join('');
     $('#sideAvatar').textContent = state.user.charAt(0);
     $('#sideName').textContent = state.user === 'MASTER' ? 'ADMIN' : state.user;
-    $('#sideRole').textContent = roleLabel(state.role, state.user);
+    $('#sideRole').textContent = roleLabel(state.role, state.user) === 'OPS' ? 'OPERATIONS' : roleLabel(state.role, state.user);
     $('#bottomBar').innerHTML =
       '<button type="button" class="tab" aria-current="page">' + icon('home', 22) + 'Home</button>' +
       '<button type="button" class="tab" disabled title="Coming soon">' + icon('jobs', 22) + 'Jobs</button>' +
@@ -507,7 +477,8 @@
   function syncText() {
     const s = Math.round((Date.now() - state.syncedAt) / 1000);
     if (s < 60) return 'SYNCED JUST NOW';
-    return 'SYNCED ' + Math.round(s / 60) + ' MIN AGO';
+    const m = Math.round(s / 60);
+    return 'SYNCED ' + m + ' MIN AGO';
   }
   function scoped() { return state.scope === 'mine' ? state.jobs.filter((j) => j.cs === state.user) : state.jobs; }
 
@@ -518,27 +489,25 @@
     return '<div class="track" aria-hidden="true"><span class="track-ahead"></span><span class="track-done" style="width:' + pct + '%"></span><span class="track-a"></span><span class="track-b"></span><span class="track-ship" style="left:' + left + '">' + mover + '</span></div>';
   }
 
-  // How many rows each tile shows. In one-screen mode the tile scrolls instead.
-  const cap = (n) => (isFit() ? 60 : n);
-  const seeAll = (id, total, shown, dark) => (total > shown ? '<button type="button" class="tile-link"' + (dark ? ' style="color:#7FD6D5"' : '') + ' data-list="' + id + '">See all ' + total + '</button>' : '');
-  function tile(cls, id, title, headRight, body, anim, d) {
-    return '<section class="tile ' + cls + anim + '" style="--d:' + d + 'ms" aria-labelledby="' + id + '">' +
-      '<div class="tile-head"><h2 class="tile-title" id="' + id + '">' + title + '</h2>' + headRight + '</div>' +
-      '<div class="tile-body">' + body + '</div></section>';
-  }
+  // Lists show everything on laptops (the tile scrolls inside itself) and the
+  // first 6 elsewhere, with a "See all" link that opens the full list.
+  const LIST_MAX = 40;
+  const seeAll = (id, n, dark) => n > 6 ? '<button type="button" class="tile-link see-all"' + (dark ? ' style="color:#7FD6D5"' : '') + ' data-list="' + id + '">See all ' + n + '</button>' : '';
+  const empty = (iconName, text) => '<div class="tile-empty">' + icon(iconName, 22) + '<span>' + esc(text) + '</span></div>';
 
   function watchTile(m, anim) {
-    const items = m.watch.slice(0, cap(6));
     const chip = (w) => w.level === 'urgent' ? 'chip chip-urgent' : w.level === 'soon' ? 'chip chip-soon-dark' : 'chip chip-calm-dark';
-    const sub = '<span class="watch-sub">' + (m.deadlines ? m.deadlines + (m.deadlines === 1 ? ' deadline' : ' deadlines') + ' in the next 48 h' : 'Nothing urgent in the next 48 h') + '</span>';
-    const body = (items.length ? items.map((w) =>
-      '<button type="button" class="watch-item" data-job="' + esc(w.j.jobNo) + '">' +
-      '<span class="watch-job">' + esc(w.j.jobNo) + '</span>' +
-      '<span class="watch-text"><span class="watch-what">' + esc(w.what) + '</span><span class="watch-cust">' + esc(w.j.customer || '—') + ' · ' + esc(nice(w.j.route)) + '</span></span>' +
-      '<span class="' + chip(w) + '">' + (w.level === 'urgent' ? icon('alert', 13) : '') + esc(w.when) + '</span></button>'
-    ).join('') : '<div class="tile-empty">No cutoffs, sailings or free-time deadlines in the next 48 hours.</div>') +
-      (m.watch.length > items.length ? '<div style="padding-top:10px">' + seeAll('watch', m.watch.length, items.length, true) + '</div>' : '');
-    return tile('tile-ink t-watch', 'watchTitle', 'TODAY’S WATCH', sub, body, anim, 120);
+    return '<section class="tile tile-ink t-watch' + anim + '" style="--d:60ms" aria-labelledby="watchTitle">' +
+      '<div class="tile-head"><h2 class="tile-title" id="watchTitle">TODAY’S WATCH</h2><span class="watch-sub">' +
+      (m.deadlines ? m.deadlines + (m.deadlines === 1 ? ' deadline' : ' deadlines') + ' · next 48 h' : 'Nothing urgent · next 48 h') + '</span></div>' +
+      '<div class="tile-body">' +
+      (m.watch.length ? m.watch.slice(0, LIST_MAX).map((w) =>
+        '<button type="button" class="watch-item li" data-job="' + esc(w.j.jobNo) + '">' +
+        '<span class="watch-job">' + esc(w.j.jobNo) + '</span>' +
+        '<span class="watch-text"><span class="watch-what">' + esc(w.what) + '</span><span class="watch-cust">' + esc(w.j.customer || '—') + ' · ' + esc(nice(w.j.route)) + '</span></span>' +
+        '<span class="' + chip(w) + '">' + (w.level === 'urgent' ? icon('alert', 13) : '') + esc(w.when) + '</span></button>'
+      ).join('') : empty('check', 'No cutoffs, sailings or free-time deadlines in the next 48 hours.')) +
+      '</div>' + seeAll('watch', m.watch.length, true) + '</section>';
   }
 
   function kpiTiles(m, anim) {
@@ -546,50 +515,64 @@
       '<button type="button" class="kpi' + (urgent ? ' is-urgent' : '') + anim + '" style="--d:' + d + 'ms" data-list="' + id + '">' +
       '<span class="kpi-label">' + label + '</span><span class="kpi-num">' + n + '</span><span class="kpi-sub">' + esc(sub) + '</span></button>';
     return '<div class="kpis">' +
-      k('active', 'ACTIVE JOBS', m.active.length, m.atSea.length + ' on the way now', false, 40) +
-      k('costing', 'COSTING PENDING', m.costing.length, m.costingSailed + ' already sailed', false, 70) +
-      k('sied', 'SI / ED PENDING', m.sied.length, m.cut24 + (m.cut24 === 1 ? ' cutoff' : ' cutoffs') + ' within 24 h', false, 100) +
-      k('free', 'FREE TIME', m.freeJobs.length, m.freeJobs.length ? 'Ending within 2 days' : 'All clear', m.freeJobs.length > 0, 130) +
+      k('active', 'ACTIVE JOBS', m.active.length, m.atSea.length + ' at sea now', false, 100) +
+      k('costing', 'COSTING DUE', m.costing.length, m.costingSailed + ' already sailed', false, 130) +
+      k('sied', 'SI / ED DUE', m.sied.length, m.cut24 + (m.cut24 === 1 ? ' cutoff' : ' cutoffs') + ' in 24 h', false, 160) +
+      k('free', 'FREE TIME', m.freeJobs.length, m.freeJobs.length ? 'ending in ≤ 2 days' : 'all clear', m.freeJobs.length > 0, 190) +
       '</div>';
   }
 
   function seaTile(m, anim) {
-    const items = m.atSea.slice(0, cap(5));
-    const right = items.length < m.atSea.length ? seeAll('atsea', m.atSea.length, items.length) : '<span class="tile-meta">' + m.atSea.length + ' ON THE WAY</span>';
-    const body = items.length ? items.map((j) =>
-      '<button type="button" class="sea-item" data-job="' + esc(j.jobNo) + '"><span class="sea-job">' + esc(j.jobNo) + '</span><span class="sea-route">' + esc(j.route) + '</span>' + track(j, 30) +
-      '<span class="sea-day">DAY ' + j.dayN + '/' + j.dayT + '</span></button>'
-    ).join('') : '<div class="tile-empty">Nothing at sea or in the air right now.</div>';
-    return tile('t-sea', 'seaTitle', 'AT SEA NOW', right, body, anim, 160);
+    return '<section class="tile t-sea' + anim + '" style="--d:220ms" aria-labelledby="seaTitle">' +
+      '<div class="tile-head"><h2 class="tile-title" id="seaTitle">AT SEA NOW</h2><span class="tile-count">' + m.atSea.length + '</span></div>' +
+      '<div class="tile-body">' +
+      (m.atSea.length ? m.atSea.slice(0, LIST_MAX).map((j) =>
+        '<button type="button" class="sea-item li" data-job="' + esc(j.jobNo) + '"><span class="sea-job">' + esc(j.jobNo) + '</span><span class="sea-route">' + esc(j.route) + '</span>' + track(j, 30) +
+        '<span class="sea-day">DAY ' + j.dayN + '/' + j.dayT + '</span></button>'
+      ).join('') : empty('anchor', 'Nothing at sea or in the air right now.')) +
+      '</div>' + seeAll('atsea', m.atSea.length) + '</section>';
   }
 
   function holdTile(m, anim) {
-    const items = m.hold.slice(0, cap(4));
-    const right = items.length < m.hold.length ? seeAll('hold', m.hold.length, items.length) : '<span class="chip chip-hold">' + m.hold.length + '</span>';
-    const body = items.length ? items.map((j) =>
-      '<button type="button" class="list-item" data-job="' + esc(j.jobNo) + '"><span class="li-main"><span class="li-job">' + esc(j.jobNo) + ' · ' + esc(j.type) + '</span><span class="li-sub">' + esc(j.customer || '—') + ' · ' + esc(nice(j.route)) + '</span>' +
-      (j.remarks ? '<span class="li-note">“' + esc(j.remarks) + '”</span>' : '') + '</span></button>'
-    ).join('') : '<div class="tile-empty">No jobs on hold.</div>';
-    return tile('t-hold', 'holdTitle', 'ON HOLD', right, body, anim, 260);
+    return '<section class="tile t-hold' + anim + '" style="--d:250ms" aria-labelledby="holdTitle">' +
+      '<div class="tile-head"><h2 class="tile-title" id="holdTitle">ON HOLD</h2><span class="chip chip-hold">' + m.hold.length + '</span></div>' +
+      '<div class="tile-body">' +
+      (m.hold.length ? m.hold.slice(0, LIST_MAX).map((j) =>
+        '<button type="button" class="list-item li" data-job="' + esc(j.jobNo) + '"><span class="li-main"><span class="li-job">' + esc(j.jobNo) + ' · ' + esc(j.type) + '</span><span class="li-sub">' + esc(j.customer || '—') + ' · ' + esc(nice(j.route)) + '</span>' +
+        (j.remarks ? '<span class="li-sub li-note">“' + esc(j.remarks) + '”</span>' : '') + '</span></button>'
+      ).join('') : empty('check', 'No jobs on hold.')) +
+      '</div>' + seeAll('hold', m.hold.length) + '</section>';
   }
 
-  function dateList(title, id, cls, list, field, dark, anim, d) {
-    const items = list.slice(0, cap(5));
-    const right = items.length < list.length ? seeAll(id, list.length, items.length) : '<span class="tile-meta">' + list.length + '</span>';
-    const body = items.length ? items.map((j) =>
-      '<button type="button" class="list-item" data-job="' + esc(j.jobNo) + '"><span class="date-chip' + (dark ? ' is-dark' : '') + '"><span class="dow">' + DOW_UP[j[field].getDay()] + '</span><span class="day">' + j[field].getDate() + '</span></span>' +
-      '<span class="li-main"><span class="li-job">' + esc(j.jobNo) + '</span><span class="li-sub">' + esc(nice(j.route)) + (j.cargo ? ' · ' + esc(j.cargo) : '') + '</span></span></button>'
-    ).join('') : '<div class="tile-empty">Nothing this week.</div>';
-    return tile(cls, id, title, right, body, anim, d);
+  function weekTile(m, anim) {
+    const dep = state.week === 'dep';
+    const list = dep ? m.departing : m.arriving;
+    const field = dep ? 'etd' : 'eta';
+    return '<section class="tile t-week' + anim + '" style="--d:280ms" aria-labelledby="weekTitle">' +
+      '<div class="tile-head"><h2 class="tile-title" id="weekTitle">THIS WEEK</h2>' +
+      '<div class="seg seg-mini" role="group" aria-label="Arriving or departing"><button type="button" data-week="arr" aria-pressed="' + !dep + '">Arriving ' + m.arriving.length + '</button><button type="button" data-week="dep" aria-pressed="' + dep + '">Departing ' + m.departing.length + '</button></div></div>' +
+      '<div class="tile-body">' +
+      (list.length ? list.slice(0, LIST_MAX).map((j) =>
+        '<button type="button" class="list-item li" data-job="' + esc(j.jobNo) + '"><span class="date-chip' + (dep ? ' is-dark' : '') + '"><span class="dow">' + DOW_UP[j[field].getDay()] + '</span><span class="day">' + j[field].getDate() + '</span></span>' +
+        '<span class="li-main"><span class="li-job">' + esc(j.jobNo) + '</span><span class="li-sub">' + esc(nice(j.route)) + (j.cargo ? ' · ' + esc(j.cargo) : '') + '</span></span></button>'
+      ).join('') : empty('calendar', dep ? 'Nothing departing in the next 7 days.' : 'Nothing arriving in the next 7 days.')) +
+      '</div>' + seeAll(dep ? 'departing' : 'arriving', list.length) + '</section>';
   }
 
   function activityTile(anim) {
     const rows = state.recent.slice(0, 10);
-    const body = rows.length ? rows.map((r) =>
-      '<div class="act"><span class="avatar">' + esc(String(r[1] || '?').charAt(0)) + '</span><div class="act-text"><div><strong>' + esc(r[1]) + '</strong> ' + esc(String(r[2] || '').toLowerCase()) + '</div>' +
-      '<div class="act-meta">' + esc([r[3], r[0]].filter(Boolean).join(' · ')) + '</div></div></div>'
-    ).join('') : '<div class="tile-empty">No recent activity yet.</div>';
-    return tile('t-act', 'actTitle', 'RECENT ACTIVITY', '', body, anim, 300);
+    return '<section class="tile t-act' + anim + '" style="--d:340ms" aria-labelledby="actTitle">' +
+      '<div class="tile-head"><h2 class="tile-title" id="actTitle">RECENT ACTIVITY</h2></div>' +
+      '<div class="tile-body">' +
+      (rows.length ? rows.map((r) =>
+        '<div class="act li"><span class="avatar">' + esc(String(r[1] || '?').charAt(0)) + '</span><div class="act-text"><div><strong>' + esc(r[1]) + '</strong> ' + esc(String(r[2] || '').toLowerCase()) + '</div>' +
+        '<div class="act-meta">' + esc([r[3], r[0]].filter(Boolean).join(' · ')) + '</div></div></div>'
+      ).join('') : empty('clock', 'No recent activity yet.')) +
+      '</div></section>';
+  }
+
+  function markOverflow() {
+    $$('#view .tile-body, #people').forEach((b) => b.classList.toggle('has-more', b.scrollHeight - b.clientHeight - b.scrollTop > 4));
   }
 
   let lastMetrics = null;
@@ -598,34 +581,25 @@
     const m = computeHome(scoped(), t0);
     lastMetrics = m;
     const anim = first ? ' reveal' : '';
-    const view = $('#view');
-    // keep the reader's place when the screen refreshes itself
-    const keep = { view: view.scrollTop, win: window.scrollY, tiles: {} };
-    $$('.tile', view).forEach((t) => { const b = $('.tile-body', t); if (b) keep.tiles[t.className.split(' ').find((c) => c.startsWith('t-'))] = b.scrollTop; });
     const searchVal = $('#searchInput') ? $('#searchInput').value : '';
+    const view = $('#view');
+    view.classList.add('is-fit');
     view.innerHTML =
-      '<div class="home">' +
+      '<div class="wrap home">' +
       '<header class="page-head' + anim + '" style="--d:0ms">' +
-        '<div class="head-left"><div class="meta-line"><span>' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span>' +
-          '<button type="button" class="icon-btn icon-btn-sm" id="refreshBtn" data-act="refresh" aria-label="Refresh now" title="Refresh now">' + icon('refresh', 15) + '</button></div>' +
+        '<div class="head-main"><div class="meta-line"><span>' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div>' +
         '<h1 class="greeting">' + greeting() + ', ' + esc(state.user === 'MASTER' ? 'Admin' : nice(state.user)) + '</h1></div>' +
         '<div class="head-actions">' +
-          '<div class="seg" role="group" aria-label="Whose jobs"><button type="button" data-scope="mine" aria-pressed="' + (state.scope === 'mine') + '">My jobs</button><button type="button" data-scope="all" aria-pressed="' + (state.scope === 'all') + '">Everyone</button></div>' +
+          '<div class="seg" role="group" aria-label="Whose jobs"><button type="button" data-scope="mine" aria-pressed="' + (state.scope === 'mine') + '"><span class="l-full">My jobs</span><span class="l-short">Mine</span></button><button type="button" data-scope="all" aria-pressed="' + (state.scope === 'all') + '"><span class="l-full">Everyone</span><span class="l-short">All</span></button></div>' +
           '<div class="search-wrap"><label class="search">' + icon('search') + '<input id="searchInput" type="search" placeholder="Job no, customer, port…" aria-label="Search jobs" autocomplete="off" value="' + esc(searchVal) + '"><kbd>/</kbd></label><div class="search-results glass" id="searchResults" hidden></div></div>' +
+          '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' +
         '</div>' +
       '</header>' +
-      kpiTiles(m, anim) +
       '<div class="bento">' +
-        watchTile(m, anim) + seaTile(m, anim) +
-        dateList('ARRIVING THIS WEEK', 'arriving', 't-arr', m.arriving, 'eta', false, anim, 200) +
-        dateList('DEPARTING THIS WEEK', 'departing', 't-dep', m.departing, 'etd', true, anim, 230) +
-        holdTile(m, anim) + activityTile(anim) +
+        watchTile(m, anim) + kpiTiles(m, anim) + seaTile(m, anim) + holdTile(m, anim) + weekTile(m, anim) + activityTile(anim) +
       '</div>' +
       '</div>';
-    if (!first) {
-      view.scrollTop = keep.view; if (!isFit()) window.scrollTo(0, keep.win);
-      $$('.tile', view).forEach((t) => { const k = t.className.split(' ').find((c) => c.startsWith('t-')); const b = $('.tile-body', t); if (b && keep.tiles[k]) b.scrollTop = keep.tiles[k]; });
-    }
+    requestAnimationFrame(markOverflow);
   }
 
   // ------------------------------------------------------------ interactions
@@ -674,7 +648,7 @@
         kv('CS', esc(j.cs || '—')) + kv('Sales', esc(j.sales || '—')) +
         (j.remarks ? '<div class="kv"><span class="kv-k">Remarks</span><span style="font-size:13px;text-align:right">' + esc(j.remarks) + '</span></div>' : '') +
       '</div>' +
-      '<div class="peek-note">The full voyage view with one-tap updates is coming soon.</div>';
+      '<div class="peek-note">The full voyage page with one-tap updates is coming soon.</div>';
     showDrawer(opener);
   }
 
@@ -690,8 +664,8 @@
     $('#drawerKicker').textContent = list.length + (list.length === 1 ? ' JOB' : ' JOBS');
     $('#drawerBody').innerHTML = '<h2 class="peek-job" id="drawerTitle" style="font-family:var(--f-display);font-stretch:120%;font-weight:800;font-size:26px">' + esc(entry[0]) + '</h2>' +
       (list.length ? '<div>' + list.map((j) =>
-        '<button type="button" class="list-row" data-job="' + esc(j.jobNo) + '"><span style="min-width:0"><span class="li-job">' + esc(j.jobNo) + ' · ' + esc(j.type) + '</span>' +
-        '<span class="li-sub" style="font-weight:700;color:var(--ink)">' + esc(j.customer || '—') + '</span><span class="li-sub">' + esc(j.route) + '</span></span>' +
+        '<button type="button" class="list-row" data-job="' + esc(j.jobNo) + '"><span style="min-width:0"><span class="li-job" style="display:block">' + esc(j.jobNo) + ' · ' + esc(j.type) + '</span>' +
+        '<span class="li-sub" style="display:block;font-weight:700;color:var(--ink)">' + esc(j.customer || '—') + '</span><span class="li-sub" style="display:block">' + esc(j.route) + '</span></span>' +
         '<span class="mono small">' + esc(j.cs || '') + '</span></button>'
       ).join('') + '</div>' : '<div class="tile-empty">Nothing here right now.</div>');
     showDrawer(opener);
@@ -700,9 +674,9 @@
   function openMore(opener) {
     $('#drawerKicker').textContent = 'ACCOUNT';
     $('#drawerBody').innerHTML =
-      '<div style="display:flex;align-items:center;gap:12px"><span class="avatar">' + esc(state.user.charAt(0)) + '</span><div><div id="drawerTitle" style="font-weight:800">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(roleLabel(state.role, state.user)) + '</div></div></div>' +
+      '<div style="display:flex;align-items:center;gap:12px"><span class="avatar">' + esc(state.user.charAt(0)) + '</span><div><div style="font-weight:800">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(roleLabel(state.role, state.user)) + '</div></div></div>' +
       '<button type="button" class="btn-brutal" data-act="logout" style="width:100%">Log out</button>' +
-      '<div class="peek-card"><h3>COMING SOON</h3>' + ['Jobs and the voyage view', 'Fleet timeline', 'Sales enquiries', 'Costing, analysis and admin'].map((t) => '<div class="kv"><span class="kv-k">' + esc(t) + '</span><span class="soon">SOON</span></div>').join('') + '</div>';
+      '<div class="peek-card"><h3>COMING SOON</h3>' + ['Jobs and the voyage view', 'Sales enquiries', 'Fleet timeline', 'Costing, analysis and admin'].map((t) => '<div class="kv"><span class="kv-k">' + esc(t) + '</span><span class="kv-v">SOON</span></div>').join('') + '</div>';
     showDrawer(opener);
   }
 
@@ -715,7 +689,7 @@
   }
   function hideDrawer() {
     $('#scrim').hidden = true; $('#drawer').hidden = true;
-    if (drawerOpener && document.body.contains(drawerOpener)) drawerOpener.focus({ preventScroll: true });
+    if (drawerOpener && document.body.contains(drawerOpener)) drawerOpener.focus();
   }
 
   // ------------------------------------------------------------------ search
@@ -738,20 +712,23 @@
   async function refresh(manual) {
     if (state.refreshing) return;
     state.refreshing = true;
-    const busy = (on) => { const b = $('#refreshBtn'), s = $('#sync'); if (b) b.classList.toggle('is-busy', on); if (s) s.classList.toggle('is-busy', on); };
-    busy(true);
+    const btn = $('#refreshBtn'), sync = $('#sync');
+    if (btn) btn.classList.add('is-busy'); if (sync) sync.classList.add('is-busy');
     try {
       let boot;
       try { boot = await api.call('ethixBootstrap'); }
       catch (e) { if (e.kind === 'server' && /not available/i.test(e.message)) boot = await legacyBoot(state.user, state.role); else throw e; }
       applyBoot(boot);
+      const scrollY = window.scrollY;
       renderHome(false);
+      window.scrollTo(0, scrollY);
       if (manual) toast('Up to date');
     } catch (e) {
       if (e.kind !== 'auth') toast(e.message, true);
     } finally {
       state.refreshing = false;
-      busy(false);
+      const b2 = $('#refreshBtn'), s2 = $('#sync');
+      if (b2) b2.classList.remove('is-busy'); if (s2) s2.classList.remove('is-busy');
     }
   }
 
@@ -797,10 +774,14 @@
       if (jobBtn) { const box = $('#searchResults'); if (box) box.hidden = true; openPeek(findJob(jobBtn.dataset.job), jobBtn); return; }
       const listBtn = e.target.closest('[data-list]');
       if (listBtn) { openList(listBtn.dataset.list, listBtn); return; }
+      const weekBtn = e.target.closest('[data-week]');
+      if (weekBtn) { state.week = weekBtn.dataset.week; renderHome(false); return; }
       const scopeBtn = e.target.closest('[data-scope]');
       if (scopeBtn) { state.scope = scopeBtn.dataset.scope; store.set('ethix.v2.scope.' + state.user, state.scope); renderHome(false); return; }
       if (e.target.closest('[data-act="refresh"]')) { refresh(true); }
     });
+    $('#view').addEventListener('scroll', (e) => { if (e.target.classList && e.target.classList.contains('tile-body')) markOverflow(); }, true);
+    window.addEventListener('resize', () => { if (!$('#shell').hidden) markOverflow(); });
     $('#view').addEventListener('input', (e) => { if (e.target.id === 'searchInput') runSearch(e.target.value); });
     $('#view').addEventListener('keydown', (e) => {
       if (e.target.id !== 'searchInput') return;
@@ -829,13 +810,10 @@
     $('#scrim').addEventListener('click', hideDrawer);
     $('#logoutBtn').addEventListener('click', confirmLogout);
     $('#bottomBar').addEventListener('click', (e) => { const b = e.target.closest('[data-act="more"]'); if (b) openMore(b); });
-    const onFitChange = () => { applyFit(); if (state.user) renderHome(false); };
-    if (FIT_QUERY.addEventListener) FIT_QUERY.addEventListener('change', onFitChange); else FIT_QUERY.addListener(onFitChange);
   }
 
   // -------------------------------------------------------------------- start
   function start() {
-    applyFit();
     initSignin();
     initApp();
   }
