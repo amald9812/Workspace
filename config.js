@@ -5,5 +5,5 @@
 // Future updates to app.js will never overwrite this file.
 // =============================================================================
 window.ETHIX_CONFIG = {
-  apiUrl: 'PASTE_YOUR_APPS_SCRIPT_EXEC_URL_HERE'
+  apiUrl: 'https://script.google.com/macros/s/AKfycbznXOmpeyyI5XKMj5KTwBByz-Z5Pj6iw4slKftfidTfDp4JM4nDj-EuJXQBmYBUDQE/exec'
 };
