@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#EEF3F6">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="ETHIX">
+<title>ETHIX Workspace</title>
+<link rel="icon" type="image/png" href="assets/ethix-app-icon.png">
+<link rel="apple-touch-icon" href="assets/ethix-app-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;family=Manrope:wght@400;500;600;700;800&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script src="config.js"></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<div class="backdrop" aria-hidden="true"><span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span></div>
+
+<!-- ============================== SIGN IN ============================== -->
+<main id="signin" class="signin">
+  <section class="signin-hero">
+    <img class="signin-logo" src="assets/ethix-logo-color.png" alt="Ethix Shipping" width="276" height="60">
+    <div>
+      <h1 class="hero-title">Every job.<br>One glance.</h1>
+      <p class="hero-sub">Follow each shipment from enquiry to final costing as a voyage you can read in a second.</p>
+    </div>
+    <div class="hero-route" aria-hidden="true">
+      <span class="hr-quay"></span><span class="hr-sea"></span><span class="hr-dest"></span>
+      <span class="hr-dot hr-dot-a"></span><span class="hr-dot hr-dot-b"></span>
+      <svg class="hr-ship" viewBox="0 0 64 30" width="64" height="30"><path d="M2 19 H62 L55 28 H9 Z" fill="#0B1B2B"/><rect x="7" y="8" width="9" height="11" fill="#0B1B2B"/><rect x="19" y="12" width="9" height="7" fill="#1C5179"/><rect x="30" y="12" width="9" height="7" fill="#48BEBF"/><rect x="41" y="12" width="9" height="7" fill="#1C5179"/><rect x="25" y="5" width="9" height="7" fill="#48BEBF"/><rect x="36" y="5" width="9" height="7" fill="#A9DEDD"/></svg>
+      <span class="hr-label hr-label-a">JEBEL ALI</span><span class="hr-label hr-label-b">KARACHI</span>
+    </div>
+    <p class="hero-foot"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>PIN ACCESS ONLY · ENCRYPTED SESSION</p>
+  </section>
+
+  <section class="signin-panel">
+    <div class="neu-card" id="signinCard">
+      <img class="signin-logo-sm" src="assets/ethix-logo-color.png" alt="Ethix Shipping" width="184" height="40">
+      <div>
+        <div class="kicker">SIGN IN</div>
+        <h2 class="card-title" id="signinTitle">Who’s working today?</h2>
+      </div>
+
+      <div class="profiles" id="profiles" role="group" aria-labelledby="signinTitle"></div>
+
+      <form class="other-form" id="otherForm" hidden>
+        <label for="otherName" class="pin-label">YOUR NAME</label>
+        <div class="other-row">
+          <input id="otherName" type="text" autocomplete="username" autocapitalize="characters" spellcheck="false" placeholder="e.g. RAKHI" required>
+          <button type="submit" class="neu-btn">Continue</button>
+        </div>
+      </form>
+
+      <div class="hint" id="pickHint">Tap your profile to enter your PIN</div>
+
+      <div class="pin-area" id="pinArea" hidden>
+        <label class="pin-label" for="pinInput" id="pinLabel">PIN</label>
+        <input id="pinInput" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" aria-describedby="pinMsg">
+        <div class="pin-wells" id="pinWells" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+        <div class="pin-msg" id="pinMsg" role="alert"></div>
+        <div class="keypad" id="keypad">
+          <button type="button" data-k="1">1</button><button type="button" data-k="2">2</button><button type="button" data-k="3">3</button>
+          <button type="button" data-k="4">4</button><button type="button" data-k="5">5</button><button type="button" data-k="6">6</button>
+          <button type="button" data-k="7">7</button><button type="button" data-k="8">8</button><button type="button" data-k="9">9</button>
+          <span></span><button type="button" data-k="0">0</button>
+          <button type="button" data-k="back" class="kp-back" aria-label="Delete last digit"><svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path d="M21 5H9l-6 7 6 7h12z"/><path d="M17 9l-6 6M11 9l6 6"/></svg></button>
+        </div>
+      </div>
+
+      <div class="card-foot">
+        <button type="button" class="link-btn" id="adminBtn"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 8-7 9-4-1-7-4.5-7-9V6z"/></svg>Admin sign-in</button>
+        <span class="mono small">V2.0</span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ============================== APP ============================== -->
+<div id="shell" class="shell" hidden>
+  <nav class="sidebar glass" aria-label="Main">
+    <img class="side-logo" src="assets/ethix-logo-color.png" alt="Ethix Shipping" width="193" height="42">
+    <img class="side-mark" src="assets/ethix-mark-color.png" alt="Ethix" width="40" height="40">
+    <div class="nav-list" id="navList"></div>
+    <div class="side-user">
+      <div class="avatar" id="sideAvatar">A</div>
+      <div class="side-user-text"><div class="side-user-name" id="sideName">—</div><div class="mono small" id="sideRole">—</div></div>
+      <button type="button" class="icon-btn" id="logoutBtn" aria-label="Log out"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M15 4h4v16h-4M10 16l4-4-4-4M14 12H4"/></svg></button>
+    </div>
+  </nav>
+
+  <main class="view" id="view" tabindex="-1"></main>
+
+  <nav class="bottombar glass" aria-label="Main" id="bottomBar"></nav>
+</div>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer glass" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" hidden>
+  <div class="drawer-head">
+    <div id="drawerKicker" class="kicker"></div>
+    <button type="button" class="icon-btn" id="drawerClose" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+</aside>
+
+<div class="modal-wrap" id="confirmWrap" hidden>
+  <div class="modal glass" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <h2 id="confirmTitle" class="modal-title">Log out?</h2>
+    <p class="modal-text" id="confirmText">You’ll need your PIN to come back in.</p>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="confirmNo">Stay</button>
+      <button type="button" class="btn-brutal" id="confirmYes">Log out</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<noscript><p style="padding:24px;font-family:sans-serif">ETHIX needs JavaScript turned on.</p></noscript>
+</body>
+</html>
