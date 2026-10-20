@@ -1,0 +1,12 @@
+{
+  "name": "ETHIX Workspace",
+  "short_name": "ETHIX",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#EEF3F6",
+  "theme_color": "#1C5179",
+  "icons": [
+    { "src": "assets/ethix-app-icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
