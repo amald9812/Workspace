@@ -1,7 +1,7 @@
 /* =============================================================================
-   ETHIX v2 — APP (phase 1: sign-in, shell, live Home)
+   ETHIX v2 — APP (sign-in, shell, live Home)
    Talks to the same Apps Script backend as the current app. Nothing is stored
-   on the device except the names on the sign-in screen and a few view choices.
+   on the device except your team's names for the sign-in screen and a few view choices.
    ============================================================================= */
 (() => {
   'use strict';
@@ -223,46 +223,92 @@
   const SHIP = (w = 30) => '<svg class="art track-ship-svg" viewBox="0 0 64 30" width="' + w + '" height="' + (w / 2) + '" aria-hidden="true"><path d="M2 19 H62 L55 28 H9 Z" fill="#0B1B2B"/><rect x="7" y="8" width="9" height="11" fill="#0B1B2B"/><rect x="19" y="12" width="9" height="7" fill="#48BEBF"/><rect x="30" y="12" width="9" height="7" fill="#1C5179"/><rect x="41" y="12" width="9" height="7" fill="#A9DEDD"/></svg>';
   const PLANE = (s = 22) => '<svg class="art" viewBox="0 0 24 24" width="' + s + '" height="' + s + '" aria-hidden="true"><path transform="rotate(90 12 12)" fill="#1C5179" d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>';
 
+  const SHIELD = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 8-7 9-4-1-7-4.5-7-9V6z"/></svg>';
+
   // ============================================================== SIGN IN
-  const recentKey = 'ethix.v2.recent';
-  function recents() {
-    const saved = store.get(recentKey, null);
-    const list = Array.isArray(saved) && saved.length ? saved : [{ n: 'AMAL', r: 'OPS' }, { n: 'LIJO', r: 'OPS' }];
-    return list.filter((x) => x && x.n && x.n !== 'MASTER').slice(0, 7);
+  // Names appear only on a device where someone has signed in before. The list
+  // comes from the server after a successful sign-in and is kept on the device
+  // (names and team only — nothing else).
+  const TEAM_KEY = 'ethix.v2.team', LAST_KEY = 'ethix.v2.last';
+  const TEAM_LABEL = { cs: 'CS · OPS', sales: 'SALES' };
+  const sign = { step: 'who', tab: 'cs', team: null, pickTeam: null };
+  const uniqSort = (a) => Array.from(new Set(a)).sort();
+
+  function loadTeam() {
+    const t = store.get(TEAM_KEY, null);
+    if (t && Array.isArray(t.cs) && Array.isArray(t.sales)) return t;
+    const old = store.get('ethix.v2.recent', null);           // v2.0 kept people who signed in here
+    if (Array.isArray(old)) {
+      const cs = old.map((x) => x && String(x.n || '').toUpperCase()).filter((n) => n && n !== 'MASTER');
+      if (cs.length) return { cs: uniqSort(cs), sales: [] };
+    }
+    return null;
   }
-  function roleLabel(role, name) {
-    const r = String(role || '').toUpperCase();
-    if (name === 'MASTER' || ['ADMIN', 'CO-ADMIN', 'MASTER'].includes(r)) return 'ADMIN';
-    if (r === 'SALES') return 'SALES';
-    return 'OPS';
+  function saveTeam(users) {
+    if (!Array.isArray(users) || !users.length) return;
+    const cs = [], sales = [];
+    users.forEach((u) => {
+      const n = String((u && u.name) || '').toUpperCase().trim();
+      if (!n || n === 'MASTER' || n === 'GUEST') return;
+      (String((u && u.role) || '').toUpperCase().trim() === 'SALES' ? sales : cs).push(n);
+    });
+    store.set(TEAM_KEY, { cs: uniqSort(cs), sales: uniqSort(sales), at: Date.now() });
+    try { localStorage.removeItem('ethix.v2.recent'); } catch (e) { /* ignore */ }
   }
-  function saveRecent(name, role) {
-    if (name === 'MASTER') return;
-    const list = recents().filter((x) => x.n !== name);
-    list.unshift({ n: name, r: roleLabel(role, name) });
-    store.set(recentKey, list.slice(0, 7));
+  const hasTeam = () => !!(sign.team && (sign.team.cs.length || sign.team.sales.length));
+
+  function showStep(step) {
+    sign.step = step;
+    $('#signinCard').dataset.step = step;
+    $('#stepWho').hidden = step !== 'who';
+    $('#stepFirst').hidden = step !== 'first';
+    $('#stepPin').hidden = step !== 'pin';
+    if (step === 'who') requestAnimationFrame(updateTeamFade);
   }
 
-  function renderProfiles() {
-    const box = $('#profiles');
-    const html = recents().map((p) =>
-      '<button type="button" class="profile" data-name="' + esc(p.n) + '" aria-pressed="false" aria-label="Sign in as ' + esc(nice(p.n)) + '">' +
-      '<span class="disc">' + esc(p.n.charAt(0)) + '</span><span class="profile-name">' + esc(p.n) + '</span><span class="profile-sub">' + esc(p.r || 'OPS') + '</span></button>'
-    ).join('') +
-      '<button type="button" class="profile" data-other="1" aria-pressed="false" aria-label="Someone else"><span class="disc">' + icon('plus', 22) + '</span><span class="profile-name">OTHER</span><span class="profile-sub">TYPE NAME</span></button>';
-    box.innerHTML = html;
+  function renderTeam() {
+    const t = sign.team || { cs: [], sales: [] };
+    const last = store.get(LAST_KEY, null);
+    ['cs', 'sales'].forEach((k) => {
+      const tab = $(k === 'cs' ? '#tabCs' : '#tabSales');
+      tab.setAttribute('aria-selected', String(sign.tab === k));
+      tab.tabIndex = sign.tab === k ? 0 : -1;
+      $(k === 'cs' ? '#countCs' : '#countSales').textContent = t[k].length;
+    });
+    $('#teamGrid').setAttribute('aria-labelledby', sign.tab === 'cs' ? 'tabCs' : 'tabSales');
+    const list = t[sign.tab];
+    $('#teamGrid').innerHTML = list.length ? list.map((n) =>
+      '<button type="button" class="member' + (last && last.n === n ? ' is-last' : '') + '" data-name="' + esc(n) + '" aria-label="Sign in as ' + esc(nice(n)) + '">' +
+      '<span class="disc">' + esc(n.charAt(0)) + '</span><span class="member-name">' + esc(n) + '</span></button>'
+    ).join('') : (sign.tab === 'sales'
+      ? '<div class="team-empty"><strong>No sales team yet</strong>Sales sign-ins will show here once they’re added.</div>'
+      : '<div class="team-empty"><strong>No one here yet</strong>Use “Not in the list?” below to sign in.</div>');
+    $('#teamScroll').scrollTop = 0;
+    requestAnimationFrame(updateTeamFade);
+  }
+  function updateTeamFade() {
+    const s = $('#teamScroll'); if (!s) return;
+    const more = s.scrollHeight - s.clientHeight - s.scrollTop > 4;
+    s.classList.toggle('is-scrollable', more);
   }
 
-  function pick(name, label) {
+  function pick(name, opts = {}) {
     state.pick = name;
-    $$('#profiles .profile').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.name === name)));
-    $('#otherForm').hidden = true;
-    $('#pickHint').hidden = true;
-    $('#pinArea').hidden = false;
-    $('#pinLabel').textContent = 'PIN FOR ' + (label || name);
+    sign.pickTeam = opts.team || null;
+    $('#pinDisc').innerHTML = opts.admin ? SHIELD : esc(name.charAt(0));
+    $('#pinName').textContent = opts.label || name;
+    $('#pinSub').textContent = opts.sub || (opts.team ? TEAM_LABEL[opts.team] : '');
+    showStep('pin');
     setMsg('');
     resetPin();
     if (!isTouch()) $('#pinInput').focus();
+  }
+  function backToNames() {
+    if (state.busy) return;
+    state.pick = null;
+    resetPin(); setMsg('');
+    if (hasTeam()) { renderTeam(); showStep('who'); const tab = $(sign.tab === 'cs' ? '#tabCs' : '#tabSales'); if (!isTouch()) tab.focus(); }
+    else { $('#backToListBtn').hidden = true; showStep('first'); if (!isTouch()) $('#firstName').focus(); }
   }
 
   function resetPin() {
@@ -292,7 +338,8 @@
       if (res && res.success && res.token) {
         api.token = res.token;
         let boot = res.boot;
-        if (!boot) boot = await legacyBoot(state.pick, res.role);   // backend without phase-1 update
+        if (!boot) boot = await legacyBoot(state.pick, res.role);   // backend without the fast-load update
+        if (state.pick !== 'MASTER') store.set(LAST_KEY, { n: state.pick, t: sign.pickTeam || null });
         $('#signinCard').classList.add('leaving');
         setTimeout(() => enterApp(boot, state.pick, res.role), 280);
         return;
@@ -302,11 +349,11 @@
       if (res && res.locked) setMsg(res.message || 'Too many wrong PINs. Try again later.', 'locked');
       else if (res && res.offline) setMsg(res.message, 'error');
       else setMsg('Incorrect PIN. Try again.', 'error');
-      setTimeout(() => { resetPin(); if (!isTouch()) inp.focus(); }, 650);
+      setTimeout(() => { resetPin(); if (!isTouch() && sign.step === 'pin') inp.focus(); }, 650);
     } catch (e) {
       $('#pinWells').classList.remove('busy');
       setMsg(e.message, 'error');
-      setTimeout(() => { resetPin(); if (!isTouch()) inp.focus(); }, 650);
+      setTimeout(() => { resetPin(); if (!isTouch() && sign.step === 'pin') inp.focus(); }, 650);
     } finally { state.busy = false; }
   }
 
@@ -316,25 +363,48 @@
   }
 
   function initSignin() {
-    document.body.classList.add('is-signin');
-    renderProfiles();
-    $('#profiles').addEventListener('click', (e) => {
-      const b = e.target.closest('.profile'); if (!b || state.busy) return;
-      if (b.dataset.other) {
-        state.pick = null;
-        $$('#profiles .profile').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
-        $('#pinArea').hidden = true; $('#pickHint').hidden = true; $('#otherForm').hidden = false;
-        $('#otherName').value = ''; $('#otherName').focus();
-        return;
-      }
-      pick(b.dataset.name);
+    sign.team = loadTeam();
+    if (hasTeam()) {
+      const last = store.get(LAST_KEY, null);
+      sign.tab = last && last.t === 'sales' && sign.team.sales.length ? 'sales' : (sign.team.cs.length ? 'cs' : 'sales');
+      renderTeam(); showStep('who');
+    } else { $('#backToListBtn').hidden = true; showStep('first'); }
+
+    // tabs
+    $('.team-tabs').addEventListener('click', (e) => {
+      const b = e.target.closest('.team-tab'); if (!b || sign.tab === b.dataset.team) return;
+      sign.tab = b.dataset.team; renderTeam();
     });
-    $('#otherForm').addEventListener('submit', (e) => {
+    $('.team-tabs').addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault(); sign.tab = sign.tab === 'cs' ? 'sales' : 'cs'; renderTeam();
+      $(sign.tab === 'cs' ? '#tabCs' : '#tabSales').focus();
+    });
+    $('#teamScroll').addEventListener('scroll', updateTeamFade, { passive: true });
+    window.addEventListener('resize', () => { if (sign.step === 'who') updateTeamFade(); });
+
+    // pick a person
+    $('#teamGrid').addEventListener('click', (e) => {
+      const b = e.target.closest('.member'); if (!b || state.busy) return;
+      b.classList.add('is-pressed');
+      setTimeout(() => pick(b.dataset.name, { team: sign.tab }), 140);
+    });
+    $('#notListedBtn').addEventListener('click', () => {
+      $('#backToListBtn').hidden = !hasTeam(); $('#firstName').value = '';
+      showStep('first'); if (!isTouch()) $('#firstName').focus();
+    });
+    $('#backToListBtn').addEventListener('click', () => { renderTeam(); showStep('who'); });
+    $('#stepFirst').addEventListener('submit', (e) => {
       e.preventDefault();
-      const name = $('#otherName').value.trim().toUpperCase().replace(/\s+/g, ' ');
-      if (name) pick(name);
+      const name = $('#firstName').value.trim().toUpperCase().replace(/\s+/g, ' ');
+      if (!name) { $('#firstName').focus(); return; }
+      const team = sign.team && sign.team.sales.includes(name) ? 'sales' : (sign.team && sign.team.cs.includes(name) ? 'cs' : null);
+      pick(name, { team, sub: team ? undefined : 'FIRST SIGN-IN HERE' });
     });
-    $('#adminBtn').addEventListener('click', () => { $$('#profiles .profile').forEach((x) => x.setAttribute('aria-pressed', 'false')); pick('MASTER', 'ADMIN'); });
+    $('#switchBtn').addEventListener('click', backToNames);
+    $('#adminBtn').addEventListener('click', () => { if (!state.busy) pick('MASTER', { label: 'ADMIN', sub: 'ADMIN ACCESS', admin: true }); });
+
+    // PIN entry (keyboard on laptops, keypad on phones)
     const inp = $('#pinInput');
     inp.addEventListener('input', () => {
       inp.value = inp.value.replace(/\D/g, '').slice(0, 4);
@@ -352,11 +422,23 @@
     });
     document.addEventListener('keydown', (e) => {
       if (!document.body.classList.contains('is-signin')) return;
-      if (e.key === 'Escape') { state.pick = null; $('#pinArea').hidden = true; $('#otherForm').hidden = true; $('#pickHint').hidden = false; $$('#profiles .profile').forEach((x) => x.setAttribute('aria-pressed', 'false')); }
+      if (e.key === 'Escape' && sign.step === 'pin') backToNames();
+      else if (sign.step === 'pin' && /^\d$/.test(e.key) && document.activeElement !== inp && !inp.disabled && !isTouch()) { inp.focus(); }
     });
+
+    if (!api.connected) {
+      const note = document.createElement('div');
+      note.className = 'team-empty'; note.id = 'setupNote';
+      note.innerHTML = '<strong>Not connected yet</strong>Paste your Apps Script /exec link into config.js.';
+      $('#signinCard').insertBefore(note, $('.card-foot'));
+    }
   }
 
   // ================================================================ APP
+  const FIT_QUERY = window.matchMedia('(min-width: 1024px) and (min-height: 600px)');
+  const isFit = () => FIT_QUERY.matches;
+  function applyFit() { document.body.classList.toggle('fit', isFit()); }
+
   function applyBoot(boot) {
     const rows = Array.isArray(boot.jobs) ? boot.jobs : [];
     const ix = mapHeaders(rows[0] || []);
@@ -368,12 +450,18 @@
   }
 
   const isAdmin = () => ['ADMIN', 'CO-ADMIN', 'MASTER'].includes(state.role) || state.user === 'MASTER';
+  function roleLabel(role, name) {
+    const r = String(role || '').toUpperCase();
+    if (name === 'MASTER' || ['ADMIN', 'CO-ADMIN', 'MASTER'].includes(r)) return 'ADMIN';
+    if (r === 'SALES') return 'SALES';
+    return 'OPERATIONS';
+  }
 
   function enterApp(boot, name, role) {
     state.user = (boot.me && boot.me.user) || name;
     state.role = String((boot.me && boot.me.role) || role || '').toUpperCase();
     applyBoot(boot);
-    saveRecent(state.user, state.role);
+    saveTeam(state.users);
     const savedScope = store.get('ethix.v2.scope.' + state.user, null);
     const hasMine = state.jobs.some((j) => j.active && j.cs === state.user);
     state.scope = savedScope || (hasMine && !isAdmin() ? 'mine' : 'all');
@@ -401,17 +489,17 @@
 
   function renderChrome() {
     $('#navList').innerHTML = navItems().map((n) =>
-      '<button type="button" class="nav-item" ' + (n.id === 'home' ? 'aria-current="page"' : 'disabled title="Coming in a later phase"') + ' aria-label="' + esc(n.label) + '">' +
+      '<button type="button" class="nav-item" ' + (n.id === 'home' ? 'aria-current="page"' : 'disabled title="Coming soon"') + ' aria-label="' + esc(n.label) + '">' +
       icon(n.icon) + '<span class="nav-label">' + esc(n.label) + '</span>' + (n.soon ? '<span class="soon">SOON</span>' : '') + '</button>'
     ).join('');
     $('#sideAvatar').textContent = state.user.charAt(0);
     $('#sideName').textContent = state.user === 'MASTER' ? 'ADMIN' : state.user;
-    $('#sideRole').textContent = roleLabel(state.role, state.user) === 'OPS' ? 'OPERATIONS' : roleLabel(state.role, state.user);
+    $('#sideRole').textContent = roleLabel(state.role, state.user);
     $('#bottomBar').innerHTML =
       '<button type="button" class="tab" aria-current="page">' + icon('home', 22) + 'Home</button>' +
-      '<button type="button" class="tab" disabled title="Coming in phase 2">' + icon('jobs', 22) + 'Jobs</button>' +
-      '<button type="button" class="tab-plus" disabled aria-label="New job (coming in phase 2)">' + icon('plus', 22) + '</button>' +
-      '<button type="button" class="tab" disabled title="Coming in phase 2">' + icon('fleet', 22) + 'Fleet</button>' +
+      '<button type="button" class="tab" disabled title="Coming soon">' + icon('jobs', 22) + 'Jobs</button>' +
+      '<button type="button" class="tab-plus" disabled aria-label="New job (coming soon)">' + icon('plus', 22) + '</button>' +
+      '<button type="button" class="tab" disabled title="Coming soon">' + icon('fleet', 22) + 'Fleet</button>' +
       '<button type="button" class="tab" data-act="more">' + icon('more', 22) + 'More</button>';
   }
 
@@ -419,8 +507,7 @@
   function syncText() {
     const s = Math.round((Date.now() - state.syncedAt) / 1000);
     if (s < 60) return 'SYNCED JUST NOW';
-    const m = Math.round(s / 60);
-    return 'SYNCED ' + m + ' MIN AGO';
+    return 'SYNCED ' + Math.round(s / 60) + ' MIN AGO';
   }
   function scoped() { return state.scope === 'mine' ? state.jobs.filter((j) => j.cs === state.user) : state.jobs; }
 
@@ -431,21 +518,27 @@
     return '<div class="track" aria-hidden="true"><span class="track-ahead"></span><span class="track-done" style="width:' + pct + '%"></span><span class="track-a"></span><span class="track-b"></span><span class="track-ship" style="left:' + left + '">' + mover + '</span></div>';
   }
 
+  // How many rows each tile shows. In one-screen mode the tile scrolls instead.
+  const cap = (n) => (isFit() ? 60 : n);
+  const seeAll = (id, total, shown, dark) => (total > shown ? '<button type="button" class="tile-link"' + (dark ? ' style="color:#7FD6D5"' : '') + ' data-list="' + id + '">See all ' + total + '</button>' : '');
+  function tile(cls, id, title, headRight, body, anim, d) {
+    return '<section class="tile ' + cls + anim + '" style="--d:' + d + 'ms" aria-labelledby="' + id + '">' +
+      '<div class="tile-head"><h2 class="tile-title" id="' + id + '">' + title + '</h2>' + headRight + '</div>' +
+      '<div class="tile-body">' + body + '</div></section>';
+  }
+
   function watchTile(m, anim) {
-    const items = m.watch.slice(0, 6);
-    const more = m.watch.length - items.length;
+    const items = m.watch.slice(0, cap(6));
     const chip = (w) => w.level === 'urgent' ? 'chip chip-urgent' : w.level === 'soon' ? 'chip chip-soon-dark' : 'chip chip-calm-dark';
-    return '<section class="tile tile-ink' + anim + '" style="--d:60ms" aria-labelledby="watchTitle">' +
-      '<div class="tile-head"><h2 class="tile-title" id="watchTitle">TODAY’S WATCH</h2><span class="watch-sub">' +
-      (m.deadlines ? m.deadlines + (m.deadlines === 1 ? ' deadline' : ' deadlines') + ' in the next 48 h' : 'Nothing urgent in the next 48 h') + '</span></div>' +
-      (items.length ? items.map((w) =>
-        '<button type="button" class="watch-item" data-job="' + esc(w.j.jobNo) + '">' +
-        '<span class="watch-job">' + esc(w.j.jobNo) + '</span>' +
-        '<span class="watch-text"><span class="watch-what">' + esc(w.what) + '</span><span class="watch-cust">' + esc(w.j.customer || '—') + ' · ' + esc(nice(w.j.route)) + '</span></span>' +
-        '<span class="' + chip(w) + '">' + (w.level === 'urgent' ? icon('alert', 13) : '') + esc(w.when) + '</span></button>'
-      ).join('') : '<div class="tile-empty" style="color:#C9D4E0">No cutoffs, sailings or free-time deadlines coming up.</div>') +
-      (more > 0 ? '<button type="button" class="tile-link" style="color:#7FD6D5;margin-top:12px" data-list="watch">+ ' + more + ' more</button>' : '') +
-      '</section>';
+    const sub = '<span class="watch-sub">' + (m.deadlines ? m.deadlines + (m.deadlines === 1 ? ' deadline' : ' deadlines') + ' in the next 48 h' : 'Nothing urgent in the next 48 h') + '</span>';
+    const body = (items.length ? items.map((w) =>
+      '<button type="button" class="watch-item" data-job="' + esc(w.j.jobNo) + '">' +
+      '<span class="watch-job">' + esc(w.j.jobNo) + '</span>' +
+      '<span class="watch-text"><span class="watch-what">' + esc(w.what) + '</span><span class="watch-cust">' + esc(w.j.customer || '—') + ' · ' + esc(nice(w.j.route)) + '</span></span>' +
+      '<span class="' + chip(w) + '">' + (w.level === 'urgent' ? icon('alert', 13) : '') + esc(w.when) + '</span></button>'
+    ).join('') : '<div class="tile-empty">No cutoffs, sailings or free-time deadlines in the next 48 hours.</div>') +
+      (m.watch.length > items.length ? '<div style="padding-top:10px">' + seeAll('watch', m.watch.length, items.length, true) + '</div>' : '');
+    return tile('tile-ink t-watch', 'watchTitle', 'TODAY’S WATCH', sub, body, anim, 120);
   }
 
   function kpiTiles(m, anim) {
@@ -453,49 +546,50 @@
       '<button type="button" class="kpi' + (urgent ? ' is-urgent' : '') + anim + '" style="--d:' + d + 'ms" data-list="' + id + '">' +
       '<span class="kpi-label">' + label + '</span><span class="kpi-num">' + n + '</span><span class="kpi-sub">' + esc(sub) + '</span></button>';
     return '<div class="kpis">' +
-      k('active', 'ACTIVE JOBS', m.active.length, m.atSea.length + ' at sea right now', false, 100) +
-      k('costing', 'COSTING PENDING', m.costing.length, m.costingSailed + ' already sailed', false, 130) +
-      k('sied', 'SI / ED PENDING', m.sied.length, m.cut24 + (m.cut24 === 1 ? ' cutoff' : ' cutoffs') + ' within 24 h', false, 160) +
-      k('free', 'FREE TIME', m.freeJobs.length, m.freeJobs.length ? 'Ending within 2 days' : 'All clear', m.freeJobs.length > 0, 190) +
+      k('active', 'ACTIVE JOBS', m.active.length, m.atSea.length + ' on the way now', false, 40) +
+      k('costing', 'COSTING PENDING', m.costing.length, m.costingSailed + ' already sailed', false, 70) +
+      k('sied', 'SI / ED PENDING', m.sied.length, m.cut24 + (m.cut24 === 1 ? ' cutoff' : ' cutoffs') + ' within 24 h', false, 100) +
+      k('free', 'FREE TIME', m.freeJobs.length, m.freeJobs.length ? 'Ending within 2 days' : 'All clear', m.freeJobs.length > 0, 130) +
       '</div>';
   }
 
   function seaTile(m, anim) {
-    const items = m.atSea.slice(0, 6);
-    return '<section class="tile' + anim + '" style="--d:220ms" aria-labelledby="seaTitle">' +
-      '<div class="tile-head"><h2 class="tile-title" id="seaTitle">AT SEA NOW</h2>' + (m.atSea.length > 6 ? '<button type="button" class="tile-link" data-list="atsea">See all ' + m.atSea.length + '</button>' : '<span class="mono small">FLEET VIEW · PHASE 2</span>') + '</div>' +
-      (items.length ? items.map((j) =>
-        '<button type="button" class="sea-item" data-job="' + esc(j.jobNo) + '"><span class="sea-job">' + esc(j.jobNo) + '</span><span class="sea-route">' + esc(j.route) + '</span>' + track(j, 30) +
-        '<span class="sea-day">DAY ' + j.dayN + '/' + j.dayT + '</span></button>'
-      ).join('') : '<div class="tile-empty">Nothing at sea or in the air right now.</div>') + '</section>';
+    const items = m.atSea.slice(0, cap(5));
+    const right = items.length < m.atSea.length ? seeAll('atsea', m.atSea.length, items.length) : '<span class="tile-meta">' + m.atSea.length + ' ON THE WAY</span>';
+    const body = items.length ? items.map((j) =>
+      '<button type="button" class="sea-item" data-job="' + esc(j.jobNo) + '"><span class="sea-job">' + esc(j.jobNo) + '</span><span class="sea-route">' + esc(j.route) + '</span>' + track(j, 30) +
+      '<span class="sea-day">DAY ' + j.dayN + '/' + j.dayT + '</span></button>'
+    ).join('') : '<div class="tile-empty">Nothing at sea or in the air right now.</div>';
+    return tile('t-sea', 'seaTitle', 'AT SEA NOW', right, body, anim, 160);
   }
 
   function holdTile(m, anim) {
-    return '<section class="tile' + anim + '" style="--d:250ms" aria-labelledby="holdTitle">' +
-      '<div class="tile-head"><h2 class="tile-title" id="holdTitle">ON HOLD</h2><span class="chip chip-hold">' + m.hold.length + '</span></div>' +
-      (m.hold.length ? m.hold.slice(0, 5).map((j) =>
-        '<button type="button" class="list-item" data-job="' + esc(j.jobNo) + '"><span class="li-main"><span class="li-job" style="display:block">' + esc(j.jobNo) + ' · ' + esc(j.type) + '</span><span class="li-sub" style="display:block">' + esc(j.customer || '—') + ' · ' + esc(nice(j.route)) + '</span>' +
-        (j.remarks ? '<span class="li-sub" style="display:block;color:#3E4C5E">“' + esc(j.remarks) + '”</span>' : '') + '</span></button>'
-      ).join('') : '<div class="tile-empty">No jobs on hold.</div>') + '</section>';
+    const items = m.hold.slice(0, cap(4));
+    const right = items.length < m.hold.length ? seeAll('hold', m.hold.length, items.length) : '<span class="chip chip-hold">' + m.hold.length + '</span>';
+    const body = items.length ? items.map((j) =>
+      '<button type="button" class="list-item" data-job="' + esc(j.jobNo) + '"><span class="li-main"><span class="li-job">' + esc(j.jobNo) + ' · ' + esc(j.type) + '</span><span class="li-sub">' + esc(j.customer || '—') + ' · ' + esc(nice(j.route)) + '</span>' +
+      (j.remarks ? '<span class="li-note">“' + esc(j.remarks) + '”</span>' : '') + '</span></button>'
+    ).join('') : '<div class="tile-empty">No jobs on hold.</div>';
+    return tile('t-hold', 'holdTitle', 'ON HOLD', right, body, anim, 260);
   }
 
-  function dateList(title, id, list, field, dark, anim, d) {
-    return '<section class="tile' + anim + '" style="--d:' + d + 'ms" aria-labelledby="' + id + '">' +
-      '<div class="tile-head"><h2 class="tile-title" id="' + id + '">' + title + '</h2>' + (list.length > 5 ? '<button type="button" class="tile-link" data-list="' + id + '">See all ' + list.length + '</button>' : '') + '</div>' +
-      (list.length ? list.slice(0, 5).map((j) =>
-        '<button type="button" class="list-item" data-job="' + esc(j.jobNo) + '"><span class="date-chip' + (dark ? ' is-dark' : '') + '"><span class="dow" style="display:block">' + DOW_UP[j[field].getDay()] + '</span><span class="day" style="display:block">' + j[field].getDate() + '</span></span>' +
-        '<span class="li-main"><span class="li-job" style="display:block">' + esc(j.jobNo) + '</span><span class="li-sub" style="display:block">' + esc(nice(j.route)) + (j.cargo ? ' · ' + esc(j.cargo) : '') + '</span></span></button>'
-      ).join('') : '<div class="tile-empty">Nothing this week.</div>') + '</section>';
+  function dateList(title, id, cls, list, field, dark, anim, d) {
+    const items = list.slice(0, cap(5));
+    const right = items.length < list.length ? seeAll(id, list.length, items.length) : '<span class="tile-meta">' + list.length + '</span>';
+    const body = items.length ? items.map((j) =>
+      '<button type="button" class="list-item" data-job="' + esc(j.jobNo) + '"><span class="date-chip' + (dark ? ' is-dark' : '') + '"><span class="dow">' + DOW_UP[j[field].getDay()] + '</span><span class="day">' + j[field].getDate() + '</span></span>' +
+      '<span class="li-main"><span class="li-job">' + esc(j.jobNo) + '</span><span class="li-sub">' + esc(nice(j.route)) + (j.cargo ? ' · ' + esc(j.cargo) : '') + '</span></span></button>'
+    ).join('') : '<div class="tile-empty">Nothing this week.</div>';
+    return tile(cls, id, title, right, body, anim, d);
   }
 
   function activityTile(anim) {
-    const rows = state.recent.slice(0, 6);
-    return '<section class="tile' + anim + '" style="--d:340ms" aria-labelledby="actTitle">' +
-      '<div class="tile-head"><h2 class="tile-title" id="actTitle">RECENT ACTIVITY</h2></div>' +
-      (rows.length ? rows.map((r) =>
-        '<div class="act"><span class="avatar">' + esc(String(r[1] || '?').charAt(0)) + '</span><div class="act-text"><div><strong>' + esc(r[1]) + '</strong> ' + esc(String(r[2] || '').toLowerCase()) + '</div>' +
-        '<div class="act-meta">' + esc([r[3], r[0]].filter(Boolean).join(' · ')) + '</div></div></div>'
-      ).join('') : '<div class="tile-empty">No recent activity yet.</div>') + '</section>';
+    const rows = state.recent.slice(0, 10);
+    const body = rows.length ? rows.map((r) =>
+      '<div class="act"><span class="avatar">' + esc(String(r[1] || '?').charAt(0)) + '</span><div class="act-text"><div><strong>' + esc(r[1]) + '</strong> ' + esc(String(r[2] || '').toLowerCase()) + '</div>' +
+      '<div class="act-meta">' + esc([r[3], r[0]].filter(Boolean).join(' · ')) + '</div></div></div>'
+    ).join('') : '<div class="tile-empty">No recent activity yet.</div>';
+    return tile('t-act', 'actTitle', 'RECENT ACTIVITY', '', body, anim, 300);
   }
 
   let lastMetrics = null;
@@ -504,26 +598,34 @@
     const m = computeHome(scoped(), t0);
     lastMetrics = m;
     const anim = first ? ' reveal' : '';
+    const view = $('#view');
+    // keep the reader's place when the screen refreshes itself
+    const keep = { view: view.scrollTop, win: window.scrollY, tiles: {} };
+    $$('.tile', view).forEach((t) => { const b = $('.tile-body', t); if (b) keep.tiles[t.className.split(' ').find((c) => c.startsWith('t-'))] = b.scrollTop; });
     const searchVal = $('#searchInput') ? $('#searchInput').value : '';
-    $('#view').innerHTML =
-      '<div class="wrap">' +
+    view.innerHTML =
+      '<div class="home">' +
       '<header class="page-head' + anim + '" style="--d:0ms">' +
-        '<div><div class="meta-line"><span>' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div>' +
+        '<div class="head-left"><div class="meta-line"><span>' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span>' +
+          '<button type="button" class="icon-btn icon-btn-sm" id="refreshBtn" data-act="refresh" aria-label="Refresh now" title="Refresh now">' + icon('refresh', 15) + '</button></div>' +
         '<h1 class="greeting">' + greeting() + ', ' + esc(state.user === 'MASTER' ? 'Admin' : nice(state.user)) + '</h1></div>' +
         '<div class="head-actions">' +
           '<div class="seg" role="group" aria-label="Whose jobs"><button type="button" data-scope="mine" aria-pressed="' + (state.scope === 'mine') + '">My jobs</button><button type="button" data-scope="all" aria-pressed="' + (state.scope === 'all') + '">Everyone</button></div>' +
           '<div class="search-wrap"><label class="search">' + icon('search') + '<input id="searchInput" type="search" placeholder="Job no, customer, port…" aria-label="Search jobs" autocomplete="off" value="' + esc(searchVal) + '"><kbd>/</kbd></label><div class="search-results glass" id="searchResults" hidden></div></div>' +
-          '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh"><span class="spin">' + icon('refresh', 16) + '</span>Refresh</button>' +
         '</div>' +
       '</header>' +
-      '<div class="row row-a">' + watchTile(m, anim) + kpiTiles(m, anim) + '</div>' +
-      '<div class="row row-b">' + seaTile(m, anim) + holdTile(m, anim) + '</div>' +
-      '<div class="row row-c">' +
-        dateList('ARRIVING THIS WEEK', 'arriving', m.arriving, 'eta', false, anim, 280) +
-        dateList('DEPARTING THIS WEEK', 'departing', m.departing, 'etd', true, anim, 310) +
-        activityTile(anim) +
+      kpiTiles(m, anim) +
+      '<div class="bento">' +
+        watchTile(m, anim) + seaTile(m, anim) +
+        dateList('ARRIVING THIS WEEK', 'arriving', 't-arr', m.arriving, 'eta', false, anim, 200) +
+        dateList('DEPARTING THIS WEEK', 'departing', 't-dep', m.departing, 'etd', true, anim, 230) +
+        holdTile(m, anim) + activityTile(anim) +
       '</div>' +
       '</div>';
+    if (!first) {
+      view.scrollTop = keep.view; if (!isFit()) window.scrollTo(0, keep.win);
+      $$('.tile', view).forEach((t) => { const k = t.className.split(' ').find((c) => c.startsWith('t-')); const b = $('.tile-body', t); if (b && keep.tiles[k]) b.scrollTop = keep.tiles[k]; });
+    }
   }
 
   // ------------------------------------------------------------ interactions
@@ -572,7 +674,7 @@
         kv('CS', esc(j.cs || '—')) + kv('Sales', esc(j.sales || '—')) +
         (j.remarks ? '<div class="kv"><span class="kv-k">Remarks</span><span style="font-size:13px;text-align:right">' + esc(j.remarks) + '</span></div>' : '') +
       '</div>' +
-      '<div class="peek-note">The full voyage page with one-tap updates arrives in phase 2.</div>';
+      '<div class="peek-note">The full voyage view with one-tap updates is coming soon.</div>';
     showDrawer(opener);
   }
 
@@ -581,15 +683,15 @@
     const map = {
       active: ['ACTIVE JOBS', m.active], costing: ['COSTING PENDING', m.costing], sied: ['SI / ED PENDING', m.sied],
       free: ['FREE TIME ENDING ≤ 2 DAYS', m.freeJobs], atsea: ['AT SEA NOW', m.atSea], arriving: ['ARRIVING THIS WEEK', m.arriving],
-      departing: ['DEPARTING THIS WEEK', m.departing], watch: ['TODAY’S WATCH', m.watch.map((w) => w.j)]
+      departing: ['DEPARTING THIS WEEK', m.departing], hold: ['ON HOLD', m.hold], watch: ['TODAY’S WATCH', m.watch.map((w) => w.j)]
     };
     const entry = map[kind]; if (!entry) return;
     const list = Array.from(new Set(entry[1]));
     $('#drawerKicker').textContent = list.length + (list.length === 1 ? ' JOB' : ' JOBS');
     $('#drawerBody').innerHTML = '<h2 class="peek-job" id="drawerTitle" style="font-family:var(--f-display);font-stretch:120%;font-weight:800;font-size:26px">' + esc(entry[0]) + '</h2>' +
       (list.length ? '<div>' + list.map((j) =>
-        '<button type="button" class="list-row" data-job="' + esc(j.jobNo) + '"><span style="min-width:0"><span class="li-job" style="display:block">' + esc(j.jobNo) + ' · ' + esc(j.type) + '</span>' +
-        '<span class="li-sub" style="display:block;font-weight:700;color:var(--ink)">' + esc(j.customer || '—') + '</span><span class="li-sub" style="display:block">' + esc(j.route) + '</span></span>' +
+        '<button type="button" class="list-row" data-job="' + esc(j.jobNo) + '"><span style="min-width:0"><span class="li-job">' + esc(j.jobNo) + ' · ' + esc(j.type) + '</span>' +
+        '<span class="li-sub" style="font-weight:700;color:var(--ink)">' + esc(j.customer || '—') + '</span><span class="li-sub">' + esc(j.route) + '</span></span>' +
         '<span class="mono small">' + esc(j.cs || '') + '</span></button>'
       ).join('') + '</div>' : '<div class="tile-empty">Nothing here right now.</div>');
     showDrawer(opener);
@@ -598,9 +700,9 @@
   function openMore(opener) {
     $('#drawerKicker').textContent = 'ACCOUNT';
     $('#drawerBody').innerHTML =
-      '<div style="display:flex;align-items:center;gap:12px"><span class="avatar">' + esc(state.user.charAt(0)) + '</span><div><div style="font-weight:800">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(roleLabel(state.role, state.user)) + '</div></div></div>' +
+      '<div style="display:flex;align-items:center;gap:12px"><span class="avatar">' + esc(state.user.charAt(0)) + '</span><div><div id="drawerTitle" style="font-weight:800">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(roleLabel(state.role, state.user)) + '</div></div></div>' +
       '<button type="button" class="btn-brutal" data-act="logout" style="width:100%">Log out</button>' +
-      '<div class="peek-card"><h3>COMING NEXT</h3>' + ['Jobs and the voyage view', 'Fleet timeline', 'Sales enquiries', 'Costing, analysis and admin'].map((t, i) => '<div class="kv"><span class="kv-k">' + esc(t) + '</span><span class="kv-v">PHASE ' + (i + 2) + '</span></div>').join('') + '</div>';
+      '<div class="peek-card"><h3>COMING SOON</h3>' + ['Jobs and the voyage view', 'Fleet timeline', 'Sales enquiries', 'Costing, analysis and admin'].map((t) => '<div class="kv"><span class="kv-k">' + esc(t) + '</span><span class="soon">SOON</span></div>').join('') + '</div>';
     showDrawer(opener);
   }
 
@@ -613,7 +715,7 @@
   }
   function hideDrawer() {
     $('#scrim').hidden = true; $('#drawer').hidden = true;
-    if (drawerOpener && document.body.contains(drawerOpener)) drawerOpener.focus();
+    if (drawerOpener && document.body.contains(drawerOpener)) drawerOpener.focus({ preventScroll: true });
   }
 
   // ------------------------------------------------------------------ search
@@ -636,23 +738,20 @@
   async function refresh(manual) {
     if (state.refreshing) return;
     state.refreshing = true;
-    const btn = $('#refreshBtn'), sync = $('#sync');
-    if (btn) btn.classList.add('is-busy'); if (sync) sync.classList.add('is-busy');
+    const busy = (on) => { const b = $('#refreshBtn'), s = $('#sync'); if (b) b.classList.toggle('is-busy', on); if (s) s.classList.toggle('is-busy', on); };
+    busy(true);
     try {
       let boot;
       try { boot = await api.call('ethixBootstrap'); }
       catch (e) { if (e.kind === 'server' && /not available/i.test(e.message)) boot = await legacyBoot(state.user, state.role); else throw e; }
       applyBoot(boot);
-      const scrollY = window.scrollY;
       renderHome(false);
-      window.scrollTo(0, scrollY);
       if (manual) toast('Up to date');
     } catch (e) {
       if (e.kind !== 'auth') toast(e.message, true);
     } finally {
       state.refreshing = false;
-      const b2 = $('#refreshBtn'), s2 = $('#sync');
-      if (b2) b2.classList.remove('is-busy'); if (s2) s2.classList.remove('is-busy');
+      busy(false);
     }
   }
 
@@ -730,13 +829,15 @@
     $('#scrim').addEventListener('click', hideDrawer);
     $('#logoutBtn').addEventListener('click', confirmLogout);
     $('#bottomBar').addEventListener('click', (e) => { const b = e.target.closest('[data-act="more"]'); if (b) openMore(b); });
+    const onFitChange = () => { applyFit(); if (state.user) renderHome(false); };
+    if (FIT_QUERY.addEventListener) FIT_QUERY.addEventListener('change', onFitChange); else FIT_QUERY.addListener(onFitChange);
   }
 
   // -------------------------------------------------------------------- start
   function start() {
+    applyFit();
     initSignin();
     initApp();
-    if (!api.connected) setTimeout(() => { $('#pickHint').textContent = 'Not connected yet: paste your Apps Script /exec link into config.js.'; }, 0);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 
