@@ -1,5 +1,5 @@
 /* =============================================================================
-   ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job)
+   ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -57,7 +57,8 @@
     scope: 'all', week: 'arr', tab: null, typing: false, lastActive: Date.now(), pick: null, busy: false,
     header: [], ix: {}, rowMap: new Map(), order: [], jobIndex: new Map(), pending: new Map(), saving: new Map(), savingCount: 0,
     stories: new Map(), voyageTab: {}, route: null, overlay: null, dirty: false, navDepth: 0, signedIn: false,
-    jobsUi: { cat: 'all', status: 'active', q: '', sort: 'urgent', limit: 120 }, newJob: { type: '' }, editing: null, lists: null
+    jobsUi: { cat: 'all', status: 'active', q: '', sort: 'urgent', limit: 120 }, newJob: { type: '' }, editing: null, lists: null,
+    notif: null, lastNotes: {}, admin: null, activity: [], actQ: ''
   };
 
   // ---------------------------------------------------------- dates & parsing
@@ -404,141 +405,138 @@
     truck: '<rect x="2" y="7" width="13" height="9"/><path d="M15 10h4l3 3v3h-7"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/>',
     check: '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/>',
     calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
-    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/>',
+    users: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6.5 6.5 0 0 1 3.5 6"/>',
+    copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
+    lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+    note: '<path d="M4 4h16v12H8l-4 4z"/><path d="M8 9h8M8 12h5"/>'
   };
   const icon = (name, size = 18) => '<svg viewBox="0 0 24 24" width="' + size + '" height="' + size + '" aria-hidden="true">' + I[name] + '</svg>';
   const SHIP = (w = 30) => '<svg class="art track-ship-svg" viewBox="0 0 64 30" width="' + w + '" height="' + (w / 2) + '" aria-hidden="true"><path d="M2 19 H62 L55 28 H9 Z" fill="#0B1B2B"/><rect x="7" y="8" width="9" height="11" fill="#0B1B2B"/><rect x="19" y="12" width="9" height="7" fill="#48BEBF"/><rect x="30" y="12" width="9" height="7" fill="#1C5179"/><rect x="41" y="12" width="9" height="7" fill="#A9DEDD"/></svg>';
   const PLANE = (s = 22) => '<svg class="art" viewBox="0 0 24 24" width="' + s + '" height="' + s + '" aria-hidden="true"><path transform="rotate(90 12 12)" fill="#1C5179" d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>';
 
   // ============================================================== SIGN IN
-  // The sign-in screen never asks the server for names. A device learns the
-  // team list from its first successful sign-in and shows it from then on.
-  const TEAM_KEY = 'ethix.v2.team';
-  function loadTeam() {
-    const t = store.get(TEAM_KEY, null);
-    if (t && Array.isArray(t.cs) && Array.isArray(t.sales)) return t;
-    const old = store.get('ethix.v2.recent', null);              // devices that used the first v2 build
-    if (Array.isArray(old) && old.length) {
-      const names = (r) => old.filter((x) => x && x.n && x.n !== 'MASTER' && (r ? x.r === 'SALES' : x.r !== 'SALES')).map((x) => x.n);
-      return { cs: names(false).sort(), sales: names(true).sort() };
-    }
-    return null;
-  }
-  function saveTeam(users) {
-    if (!Array.isArray(users) || !users.length) return;
-    const cs = [], sales = [];
-    users.forEach((u) => {
-      const n = String((u && u.name) || '').toUpperCase().trim();
-      if (!n || n === 'MASTER') return;
-      (String(u.role || '').toUpperCase().trim() === 'SALES' ? sales : cs).push(n);
-    });
-    store.set(TEAM_KEY, { cs: cs.sort(), sales: sales.sort() });
-    try { localStorage.removeItem('ethix.v2.recent'); } catch (e) { /* ignore */ }
-  }
-  function roleLabel(role, name) {
-    const r = String(role || '').toUpperCase();
-    if (name === 'MASTER' || ['ADMIN', 'CO-ADMIN', 'MASTER'].includes(r)) return 'ADMIN';
-    if (r === 'SALES') return 'SALES';
-    return 'OPS';
-  }
-  const initials = (n) => { const p = String(n).trim().split(/\s+/); return (p.length > 1 ? p[0][0] + p[p.length - 1][0] : String(n).slice(0, 1)).toUpperCase(); };
-
-  function renderWho() {
-    const team = loadTeam();
-    const hasTeam = !!(team && (team.cs.length || team.sales.length));
-    const typing = state.typing || !hasTeam;
-    $('#teamTabs').hidden = typing;
-    $('#people').hidden = typing;
-    $('#nameForm').hidden = !typing;
-    $('#notListedBtn').hidden = !hasTeam;
-    $('#notListedBtn').textContent = typing ? 'Back to the team list' : 'Not in the list? Type your name';
-    $('#nameNote').textContent = hasTeam ? 'Type your name exactly as it is in the users list.' : 'First sign-in on this device. After it, your team appears here to tap.';
-    if (typing) return;
-    let tab = state.tab || store.get('ethix.v2.tab', 'cs');
-    if (tab !== 'sales') tab = 'cs';
-    state.tab = tab;
-    $('#countCs').textContent = team.cs.length;
-    $('#countSales').textContent = team.sales.length;
-    $$('#teamTabs [role="tab"]').forEach((b) => { const on = b.dataset.team === tab; b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; });
-    $('#people').setAttribute('aria-labelledby', tab === 'sales' ? 'tabSales' : 'tabCs');
-    const list = team[tab];
-    $('#people').innerHTML = list.length ? list.map((n) =>
-      '<button type="button" class="person" data-name="' + esc(n) + '" aria-label="Sign in as ' + esc(nice(n)) + '"><span class="disc">' + esc(initials(n)) + '</span><span class="person-name">' + esc(n) + '</span></button>'
-    ).join('') : '<div class="people-empty">' + (tab === 'sales' ? 'No sales team members yet.' : 'No CS team members yet.') + '</div>';
-    $('#people').scrollTop = 0;
-    markPeopleOverflow();
-  }
-  function markPeopleOverflow() {
-    const p = $('#people'); if (!p || p.hidden) return;
-    p.classList.toggle('has-more', p.scrollHeight - p.clientHeight - p.scrollTop > 4);
+  // Username + password. Nothing about the team is shown before sign-in; a
+  // device only remembers the last username used on it.
+  const LAST_USER = 'ethix.v2.lastUser';
+  ['ethix.v2.team', 'ethix.v2.tab', 'ethix.v2.recent'].forEach((k) => { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } });
+  const ROLE_NAMES = { CS: 'CUSTOMER SERVICE', SALES: 'SALES', ADMIN: 'ADMIN', ACCOUNTS: 'ACCOUNTS' };
+  const initials = (n) => { const p = String(n || '?').trim().split(/\s+/); return (p.length > 1 ? p[0][0] + p[p.length - 1][0] : String(n || '?').slice(0, 1)).toUpperCase(); };
+  const EYE = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+  function pwProblem(pw, user) {
+    if (pw.length < 8) return 'Use at least 8 characters.';
+    if (!/[A-Za-z]/.test(pw) || !/[0-9]/.test(pw)) return 'Use letters and numbers.';
+    if (user && pw.toUpperCase().includes(String(user).toUpperCase())) return 'Don’t use your name in the password.';
+    return '';
   }
 
-  function pick(name, label) {
-    state.pick = name;
-    state.pickLabel = label || name;
-    $('#stepWho').hidden = true;
-    $('#stepPin').hidden = false;
-    $('#whoName').textContent = state.pickLabel;
-    $('#whoDisc').textContent = name === 'MASTER' ? 'AD' : initials(name);
-    $('#pinLabel').textContent = 'PIN for ' + state.pickLabel;
-    setMsg('');
-    resetPin();
-    if (!isTouch()) $('#pinInput').focus();
+  function showKnown() {
+    const last = store.get(LAST_USER, '');
+    const known = !!last && !state.forgetKnown;
+    $('#knownUser').hidden = !known;
+    $('#userField').hidden = known;
+    if (known) { $('#knownName').textContent = last; $('#knownDisc').textContent = initials(last); $('#loginUser').value = last; }
+    $('#signinTitle').textContent = known ? 'Welcome back' : 'Sign in to your workspace';
   }
-  function backToWho() {
+  function setLoginMsg(el, text, kind) { el.className = 'pin-msg' + (kind ? ' is-' + kind : ''); el.textContent = text || ''; }
+  function loginBusy(on, label) {
+    const b = $('#loginBtn'); b.disabled = on; b.textContent = on ? (label || 'SIGNING IN…') : 'SIGN IN';
+    $('#signinCard').classList.toggle('is-busy', on);
+  }
+  function shakeCard() { const c = $('#signinCard'); c.classList.remove('shake'); void c.offsetWidth; c.classList.add('shake'); }
+
+  async function submitLogin(e) {
+    e.preventDefault();
     if (state.busy) return;
-    const was = state.pick;
-    state.pick = null;
-    $('#stepPin').hidden = true;
-    $('#stepWho').hidden = false;
-    renderWho();
-    const btn = was && $('#people .person[data-name="' + (window.CSS && CSS.escape ? CSS.escape(was) : was) + '"]');
-    if (btn && !isTouch()) btn.focus();
-  }
-
-  function resetPin() {
-    const inp = $('#pinInput'); inp.value = ''; inp.disabled = false;
-    $('#pinWells').classList.remove('error', 'busy', 'shake');
-    drawWells();
-  }
-  function drawWells() {
-    const n = $('#pinInput').value.length;
-    $$('#pinWells span').forEach((s, i) => { s.classList.toggle('filled', i < n); s.classList.toggle('next', i === n); });
-  }
-  function setMsg(text, kind) {
-    const m = $('#pinMsg');
-    m.className = 'pin-msg' + (kind ? ' is-' + kind : '');
-    m.textContent = text || '';
-  }
-
-  async function submitPin() {
-    const inp = $('#pinInput');
-    const pin = inp.value;
-    if (pin.length !== 4 || !state.pick || state.busy) return;
-    state.busy = true; inp.disabled = true;
-    $('#pinWells').classList.add('busy');
-    setMsg('Signing in…');
+    const user = $('#loginUser').value.trim().toUpperCase().replace(/\s+/g, ' ');
+    const pw = $('#loginPass').value;
+    const msg = $('#loginMsg');
+    if (!user) { setLoginMsg(msg, 'Enter your username.', 'error'); $('#loginUser').focus(); return; }
+    if (!pw) { setLoginMsg(msg, 'Enter your password.', 'error'); $('#loginPass').focus(); return; }
+    state.busy = true; loginBusy(true); setLoginMsg(msg, '');
     try {
-      const res = await api.call('verifyPinServer', [state.pick, pin, true], { timeout: 60000 });
+      const res = await api.call('ethixSignIn', [user, pw, true], { timeout: 60000 });
       if (res && res.success && res.token) {
         api.token = res.token;
+        state.pendingUser = user;
+        if (res.mustChange) { showNewPassword(user); return; }
+        store.set(LAST_USER, user);
         let boot = res.boot;
-        if (!boot) boot = await legacyBoot(state.pick, res.role);   // backend without the fast-load update
+        if (!boot) boot = await api.call('ethixBootstrap');
         $('#signinCard').classList.add('leaving');
-        setTimeout(() => enterApp(boot, state.pick, res.role), 280);
+        setTimeout(() => enterApp(boot, user, res.role), 280);
         return;
       }
-      const wells = $('#pinWells');
-      wells.classList.remove('busy'); wells.classList.add('error', 'shake');
-      if (res && res.locked) setMsg(res.message || 'Too many wrong PINs. Try again later.', 'locked');
-      else if (res && res.offline) setMsg(res.message, 'error');
-      else setMsg('Incorrect PIN. Try again.', 'error');
-      setTimeout(() => { resetPin(); if (!isTouch()) inp.focus(); }, 650);
-    } catch (e) {
-      $('#pinWells').classList.remove('busy');
-      setMsg(e.message, 'error');
-      setTimeout(() => { resetPin(); if (!isTouch()) inp.focus(); }, 650);
-    } finally { state.busy = false; }
+      $('#loginPass').value = '';
+      shakeCard();
+      if (res && res.locked) setLoginMsg(msg, res.message, 'locked');
+      else setLoginMsg(msg, (res && res.message) || 'Wrong username or password.', 'error');
+      $('#loginPass').focus();
+    } catch (err) {
+      setLoginMsg(msg, err.kind === 'auth' ? 'The server needs the Phase 3 Code.gs update before this sign-in works.' : err.message, 'error');
+    } finally { state.busy = false; if (!$('#signinCard').classList.contains('leaving')) loginBusy(false); }
+  }
+
+  function showNewPassword(user) {
+    $('#stepLogin').hidden = true;
+    $('#stepNewPw').hidden = false;
+    $('#npUser').value = user;
+    $('#newPw').value = ''; $('#newPw2').value = '';
+    setLoginMsg($('#newPwMsg'), '');
+    drawRules();
+    $('#newPw').focus();
+  }
+  function drawRules() {
+    const pw = $('#newPw').value, user = $('#npUser').value;
+    const ok = { len: pw.length >= 8, mix: /[A-Za-z]/.test(pw) && /[0-9]/.test(pw), name: !!pw && !pw.toUpperCase().includes(user.toUpperCase()) };
+    $$('#pwRules [data-rule]').forEach((li) => li.classList.toggle('is-ok', !!ok[li.dataset.rule]));
+  }
+  async function submitNewPassword(e) {
+    e.preventDefault();
+    if (state.busy) return;
+    const user = $('#npUser').value;
+    const pw = $('#newPw').value, pw2 = $('#newPw2').value;
+    const msg = $('#newPwMsg');
+    const problem = pwProblem(pw, user);
+    if (problem) { setLoginMsg(msg, problem, 'error'); return; }
+    if (pw !== pw2) { setLoginMsg(msg, 'The two passwords don’t match.', 'error'); $('#newPw2').focus(); return; }
+    state.busy = true;
+    const btn = $('#newPwBtn'); btn.disabled = true; btn.textContent = 'SAVING…';
+    try {
+      const res = await api.call('ethixSetPassword', [pw], { timeout: 60000 });
+      if (res && res.ok) {
+        store.set(LAST_USER, user);
+        $('#signinCard').classList.add('leaving');
+        setTimeout(() => enterApp(res.boot, user), 280);
+        return;
+      }
+      setLoginMsg(msg, (res && res.error) || 'The password was not saved.', 'error');
+    } catch (err) { setLoginMsg(msg, err.message, 'error'); }
+    finally { state.busy = false; btn.disabled = false; btn.textContent = 'SAVE AND CONTINUE'; }
+  }
+
+  function initSignin() {
+    document.body.classList.add('is-signin');
+    showKnown();
+    $('#stepLogin').addEventListener('submit', submitLogin);
+    $('#stepNewPw').addEventListener('submit', submitNewPassword);
+    $('#knownUser').addEventListener('click', (e) => {
+      if (e.target.closest('#notYou')) { state.forgetKnown = true; showKnown(); $('#loginUser').value = ''; $('#loginUser').focus(); return; }
+      $('#loginPass').focus();
+    });
+    $('#forgotBtn').addEventListener('click', () => { $('#forgotNote').hidden = !$('#forgotNote').hidden; });
+    $('#newPw').addEventListener('input', drawRules);
+    $('#newPwCancel').addEventListener('click', () => { api.logout(); $('#stepNewPw').hidden = true; $('#stepLogin').hidden = false; $('#loginPass').value = ''; $('#loginPass').focus(); });
+    document.addEventListener('click', (e) => {
+      const eye = e.target.closest('[data-eye]'); if (!eye) return;
+      const inp = document.getElementById(eye.dataset.eye); if (!inp) return;
+      const show = inp.type === 'password'; inp.type = show ? 'text' : 'password';
+      eye.setAttribute('aria-label', show ? 'Hide password' : 'Show password'); eye.classList.toggle('is-on', show);
+    });
+    $('#loginUser').addEventListener('input', () => { if ($('#loginMsg').classList.contains('is-error')) setLoginMsg($('#loginMsg'), ''); });
+    if (!api.connected) { const n = $('#cardNote'); n.hidden = false; n.textContent = 'Not connected yet: paste your Apps Script /exec link into config.js.'; }
+    setTimeout(() => { if (!isTouch()) ($('#userField').hidden ? $('#loginPass') : $('#loginUser')).focus(); }, 60);
   }
 
   async function legacyBoot(name, role) {
@@ -546,59 +544,18 @@
     return { me: { user: name, role: String(role || '').toUpperCase() }, jobs, users, recent: [], serverTime: Date.now() };
   }
 
-  function initSignin() {
-    document.body.classList.add('is-signin');
-    renderWho();
-    $('#teamTabs').addEventListener('click', (e) => {
-      const b = e.target.closest('[role="tab"]'); if (!b) return;
-      state.tab = b.dataset.team; store.set('ethix.v2.tab', state.tab); renderWho();
-    });
-    $('#teamTabs').addEventListener('keydown', (e) => {
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-      state.tab = state.tab === 'cs' ? 'sales' : 'cs'; store.set('ethix.v2.tab', state.tab); renderWho();
-      const b = $('#teamTabs [aria-selected="true"]'); if (b) b.focus();
-    });
-    $('#people').addEventListener('click', (e) => {
-      const b = e.target.closest('.person'); if (b && !state.busy) pick(b.dataset.name);
-    });
-    $('#people').addEventListener('scroll', markPeopleOverflow, { passive: true });
-    window.addEventListener('resize', markPeopleOverflow);
-    $('#notListedBtn').addEventListener('click', () => {
-      state.typing = !state.typing && !!loadTeam();
-      renderWho();
-      if (!$('#nameForm').hidden) { $('#nameInput').value = ''; $('#nameInput').focus(); }
-    });
-    $('#nameForm').addEventListener('submit', (e) => {
-      e.preventDefault();
-      const name = $('#nameInput').value.trim().toUpperCase().replace(/\s+/g, ' ');
-      if (name) pick(name);
-    });
-    $('#switchBtn').addEventListener('click', backToWho);
-    $('#adminBtn').addEventListener('click', () => { if (!state.busy) pick('MASTER', 'ADMIN'); });
-    const inp = $('#pinInput');
-    inp.addEventListener('input', () => {
-      inp.value = inp.value.replace(/\D/g, '').slice(0, 4);
-      $('#pinWells').classList.remove('error');
-      if ($('#pinMsg').classList.contains('is-error')) setMsg('');
-      drawWells();
-      if (inp.value.length === 4) submitPin();
-    });
-    $('#pinWells').addEventListener('click', () => { if (!isTouch()) inp.focus(); });
-    $('#keypad').addEventListener('click', (e) => {
-      const k = e.target.closest('button'); if (!k || inp.disabled) return;
-      if (k.dataset.k === 'back') inp.value = inp.value.slice(0, -1);
-      else if (inp.value.length < 4) inp.value += k.dataset.k;
-      inp.dispatchEvent(new Event('input'));
-    });
-    document.addEventListener('keydown', (e) => {
-      if (!document.body.classList.contains('is-signin')) return;
-      if (e.key === 'Escape' && !$('#stepPin').hidden) backToWho();
-    });
-    if (!api.connected) { const n = $('#cardNote'); n.hidden = false; n.textContent = 'Not connected yet: paste your Apps Script /exec link into config.js.'; }
-  }
-
   // ================================================================ APP
-  const isAdmin = () => ['ADMIN', 'CO-ADMIN', 'MASTER'].includes(state.role) || state.user === 'MASTER';
+  // Roles: CS = Customer Service (works the jobs) · SALES = own jobs, read + notes · ADMIN = people only
+  const isAdmin = () => state.role === 'ADMIN';
+  const isSales = () => state.role === 'SALES';
+  const canEdit = () => state.role === 'CS';
+  const canNote = () => state.role === 'CS' || state.role === 'SALES';
+  function normRole(r, user) {
+    r = String(r || '').toUpperCase().trim();
+    if (user === 'MASTER' || ['ADMIN', 'CO-ADMIN', 'MASTER'].includes(r)) return 'ADMIN';
+    if (r === 'SALES' || r === 'ACCOUNTS') return r;
+    return 'CS';
+  }
   const FIELD_KEYS = RULES.map((r) => r[0]);
 
   // Server rows are kept as they came from the sheet; edits waiting to be
@@ -618,6 +575,10 @@
     });
     state.users = Array.isArray(boot.users) ? boot.users : [];
     state.recent = Array.isArray(boot.recent) ? boot.recent : [];
+    state.lastNotes = boot.lastNotes || {};
+    if (boot.notif) state.notif = boot.notif;
+    if (boot.admin) state.admin = boot.admin;
+    if (Array.isArray(boot.activity)) state.activity = boot.activity;
     state.syncedAt = Date.now();
     rebuildJobs();
   }
@@ -651,14 +612,13 @@
 
   function enterApp(boot, name, role) {
     state.user = (boot.me && boot.me.user) || name;
-    state.role = String((boot.me && boot.me.role) || role || '').toUpperCase();
+    state.role = normRole((boot.me && boot.me.role) || role, state.user);
     applyBoot(boot);
-    saveTeam(boot.users);
-    if (state.user !== 'MASTER') { const t = loadTeam(); if (t) store.set('ethix.v2.tab', t.sales.includes(state.user) ? 'sales' : 'cs'); }
     const savedScope = store.get('ethix.v2.scope.' + state.user, null);
     const hasMine = state.jobs.some((j) => j.active && j.cs === state.user);
-    state.scope = savedScope || (hasMine && !isAdmin() ? 'mine' : 'all');
+    state.scope = canEdit() ? savedScope || (hasMine ? 'mine' : 'all') : 'all';
     document.body.classList.remove('is-signin');
+    document.body.dataset.role = state.role.toLowerCase();
     $('#signin').hidden = true;
     const shell = $('#shell'); shell.hidden = false; shell.classList.add('entering');
     state.signedIn = true;
@@ -671,10 +631,13 @@
   // ---------------------------------------------------------------- router
   function currentRoute() {
     const h = decodeURIComponent(location.hash || '');
-    let m = h.match(/^#\/job\/(.+)$/);
-    if (m) return { name: 'job', jobNo: m[1].trim() };
-    if (h === '#/jobs') return { name: 'jobs' };
-    return { name: 'home' };
+    const m = h.match(/^#\/job\/(.+)$/);
+    let r = m ? { name: 'job', jobNo: m[1].trim() } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : { name: 'home' };
+    if (isAdmin()) { if (r.name !== 'activity') r = { name: 'admin' }; }      // admin works with people, not jobs
+    else if (r.name === 'admin' || r.name === 'activity') r = { name: 'home' };
+    const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity)$/.test(h) ? '#/home' : null;
+    if (want && h !== want) history.replaceState(null, '', want);
+    return r;
   }
   function go(hash) { if (location.hash === hash) render(false); else location.hash = hash; }
   function openJob(no) { closeOverlays(); go('#/job/' + encodeURIComponent(no)); }
@@ -685,10 +648,13 @@
     state.route = r;
     const view = $('#view');
     const changed = !prev || prev.name !== r.name || prev.jobNo !== r.jobNo;
-    view.classList.toggle('is-fit', r.name === 'home' || r.name === 'jobs');
-    document.body.classList.toggle('on-voyage', r.name === 'job');
-    if (r.name === 'jobs') renderJobs(changed || first);
+    view.classList.toggle('is-fit', (r.name === 'home' && !isSales()) || r.name === 'jobs');
+    document.body.classList.toggle('on-voyage', r.name === 'job' && canEdit());
+    if (r.name === 'admin') renderAdmin(changed || first);
+    else if (r.name === 'activity') renderActivity(changed || first);
+    else if (r.name === 'jobs') renderJobs(changed || first);
     else if (r.name === 'job') renderVoyage(r.jobNo, changed || first);
+    else if (isSales()) renderSalesHome(changed || first);
     else renderHome(changed || first);
     if (changed) view.scrollTop = 0;
     updateNav();
@@ -709,37 +675,48 @@
   // ------------------------------------------------------------ chrome
   function navItems() {
     const active = state.jobs.filter((j) => j.active).length;
+    if (isAdmin()) return [
+      { id: 'admin', label: 'People', icon: 'users', href: '#/admin', count: state.admin ? state.admin.users.length : 0 },
+      { id: 'activity', label: 'Activity', icon: 'clock', href: '#/activity' }
+    ];
     const items = [
       { id: 'home', label: 'Home', icon: 'home', href: '#/home' },
-      { id: 'jobs', label: 'Jobs', icon: 'jobs', href: '#/jobs', count: active },
-      { id: 'fleet', label: 'Fleet', icon: 'fleet', soon: true },
-      { id: 'enq', label: 'Enquiries', icon: 'enq', soon: true },
-      { id: 'costing', label: 'Costing', icon: 'costing', soon: true },
-      { id: 'analysis', label: 'Analysis', icon: 'analysis', soon: true }
+      { id: 'jobs', label: isSales() ? 'My jobs' : 'Jobs', icon: 'jobs', href: '#/jobs', count: active },
+      { id: 'notif', label: 'Notifications', icon: 'bell', act: 'notif' }
     ];
-    if (isAdmin()) items.push({ id: 'admin', label: 'Admin', icon: 'admin', soon: true });
+    if (isSales()) items.push({ id: 'enq', label: 'Enquiries', icon: 'enq', soon: true });
+    else items.push(
+      { id: 'enq', label: 'Enquiries', icon: 'enq', soon: true }, { id: 'round', label: 'Morning round', icon: 'check', soon: true },
+      { id: 'fleet', label: 'Fleet', icon: 'fleet', soon: true }, { id: 'costing', label: 'Costing', icon: 'costing', soon: true },
+      { id: 'analysis', label: 'Analysis', icon: 'analysis', soon: true });
     return items;
   }
   function renderChrome() {
     $('#navList').innerHTML = navItems().map((n) =>
-      '<button type="button" class="nav-item" data-nav="' + n.id + '"' + (n.soon ? ' disabled title="Coming soon"' : ' data-href="' + n.href + '"') + ' aria-label="' + esc(n.label) + '">' +
-      icon(n.icon) + '<span class="nav-label">' + esc(n.label) + '</span>' + (n.soon ? '<span class="soon">SOON</span>' : n.count ? '<span class="count">' + n.count + '</span>' : '') + '</button>'
+      '<button type="button" class="nav-item" data-nav="' + n.id + '"' + (n.soon ? ' disabled title="Coming soon"' : n.act ? ' data-act="' + n.act + '"' : ' data-href="' + n.href + '"') + ' aria-label="' + esc(n.label) + '">' +
+      '<span class="nav-ic">' + icon(n.icon) + (n.act === 'notif' ? '<span class="badge-dot" hidden></span>' : '') + '</span><span class="nav-label">' + esc(n.label) + '</span>' +
+      (n.soon ? '<span class="soon">SOON</span>' : n.count ? '<span class="count">' + n.count + '</span>' : '') + '</button>'
     ).join('');
-    $('#sideAvatar').textContent = state.user.charAt(0);
+    $('#sideAvatar').textContent = initials(state.user);
     $('#sideName').textContent = state.user === 'MASTER' ? 'ADMIN' : state.user;
-    $('#sideRole').textContent = roleLabel(state.role, state.user) === 'OPS' ? 'OPERATIONS' : roleLabel(state.role, state.user);
-    $('#bottomBar').innerHTML =
-      '<button type="button" class="tab" data-nav="home" data-href="#/home">' + icon('home', 22) + 'Home</button>' +
-      '<button type="button" class="tab" data-nav="jobs" data-href="#/jobs">' + icon('jobs', 22) + 'Jobs</button>' +
-      '<button type="button" class="tab-plus" data-act="new-job" aria-label="New job">' + icon('plus', 22) + '</button>' +
-      '<button type="button" class="tab" disabled title="Coming soon">' + icon('fleet', 22) + 'Fleet</button>' +
-      '<button type="button" class="tab" data-act="more">' + icon('more', 22) + 'More</button>';
+    $('#sideRole').textContent = ROLE_NAMES[state.role] || state.role;
+    const tab = (nav, href, ic, label) => '<button type="button" class="tab" data-nav="' + nav + '" data-href="' + href + '">' + icon(ic, 22) + label + '</button>';
+    const bell = '<button type="button" class="tab" data-act="notif" aria-label="Notifications"><span class="nav-ic">' + icon('bell', 22) + '<span class="badge-dot" hidden></span></span>Alerts</button>';
+    const more = '<button type="button" class="tab" data-act="more">' + icon('more', 22) + 'More</button>';
+    const plus = (act, label) => '<button type="button" class="tab-plus" data-act="' + act + '" aria-label="' + label + '">' + icon('plus', 22) + '</button>';
+    $('#bottomBar').innerHTML = isAdmin() ? tab('admin', '#/admin', 'users', 'People') + tab('activity', '#/activity', 'clock', 'Activity') + plus('adm-add', 'Add user') + more
+      : canEdit() ? tab('home', '#/home', 'home', 'Home') + tab('jobs', '#/jobs', 'jobs', 'Jobs') + plus('new-job', 'New job') + bell + more
+      : tab('home', '#/home', 'home', 'Home') + tab('jobs', '#/jobs', 'jobs', isSales() ? 'My jobs' : 'Jobs') + bell + more;
+    $('#bottomBar').classList.toggle('is-4', !canEdit());
+    drawBadges();
   }
   function updateNav() {
     const r = state.route ? state.route.name : 'home';
     const cur = r === 'job' ? 'jobs' : r;
     $$('[data-nav]').forEach((b) => { if (b.dataset.nav === cur) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
     const c = $('#navList [data-nav="jobs"] .count'); if (c) c.textContent = state.jobs.filter((j) => j.active).length;
+    const p = $('#navList [data-nav="admin"] .count'); if (p && state.admin) p.textContent = state.admin.users.length;
+    drawBadges();
   }
 
   function greeting() { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; }
@@ -748,7 +725,7 @@
     if (s < 60) return 'SYNCED JUST NOW';
     return 'SYNCED ' + Math.round(s / 60) + ' MIN AGO';
   }
-  function scoped() { return state.scope === 'mine' ? state.jobs.filter((j) => j.cs === state.user) : state.jobs; }
+  function scoped() { return canEdit() && state.scope === 'mine' ? state.jobs.filter((j) => j.cs === state.user) : state.jobs; }
 
   function track(j, w) {
     const pct = Math.round((j.pct || 0) * 1000) / 10;
@@ -833,7 +810,7 @@
       '<div class="tile-head"><h2 class="tile-title" id="actTitle">RECENT ACTIVITY</h2></div>' +
       '<div class="tile-body">' +
       (rows.length ? rows.map((r) =>
-        '<div class="act li"><span class="avatar">' + esc(String(r[1] || '?').charAt(0)) + '</span><div class="act-text"><div><strong>' + esc(r[1]) + '</strong> ' + esc(String(r[2] || '').toLowerCase()) + '</div>' +
+        '<div class="act li"><span class="avatar">' + esc(initials(r[1])) + '</span><div class="act-text"><div><strong>' + esc(r[1]) + '</strong> ' + esc(friendly(r[2])) + '</div>' +
         '<div class="act-meta">' + esc([r[3], r[0]].filter(Boolean).join(' · ')) + '</div></div></div>'
       ).join('') : empty('clock', 'No recent activity yet.')) +
       '</div></section>';
@@ -932,16 +909,16 @@
     $('#view').innerHTML =
       '<div class="wrap jobs-page">' +
       '<header class="page-head jobs-head' + anim + '">' +
-        '<div class="head-main"><div class="meta-line"><span>' + active.length + ' ACTIVE · ' + active.filter((j) => j.hold).length + ' ON HOLD · ' + active.filter((j) => j.atSea).length + ' AT SEA</span></div><h1 class="greeting">Jobs</h1></div>' +
+        '<div class="head-main"><div class="meta-line"><span>' + active.length + ' ACTIVE · ' + active.filter((j) => j.hold).length + ' ON HOLD · ' + active.filter((j) => j.atSea).length + ' AT SEA</span></div><h1 class="greeting">' + (isSales() ? 'My jobs' : 'Jobs') + '</h1></div>' +
         '<div class="head-actions">' +
           '<label class="search">' + icon('search') + '<input id="jobsSearch" type="search" placeholder="Job no, customer, port…" aria-label="Search jobs" autocomplete="off" value="' + esc(keepQ) + '"></label>' +
-          '<button type="button" class="btn-brutal btn-icon" data-act="new-job">' + icon('plus', 16) + '<span>NEW JOB</span></button>' +
+          (canEdit() ? '<button type="button" class="btn-brutal btn-icon" data-act="new-job">' + icon('plus', 16) + '<span>NEW JOB</span></button>' : '') +
         '</div>' +
       '</header>' +
       '<div class="jobs-filters' + anim + '" style="--d:40ms">' +
         '<div class="chips-row" role="group" aria-label="Job category">' + CATS.map(([id, label]) => '<button type="button" class="fchip" data-cat="' + id + '" aria-pressed="' + (u.cat === id) + '">' + label + '</button>').join('') + '</div>' +
         '<div class="filter-tools">' +
-          '<button type="button" class="toggle" data-act="mine" aria-pressed="' + (state.scope === 'mine') + '"><span class="toggle-track"><span class="toggle-thumb"></span></span>My jobs only</button>' +
+          (canEdit() ? '<button type="button" class="toggle" data-act="mine" aria-pressed="' + (state.scope === 'mine') + '"><span class="toggle-track"><span class="toggle-thumb"></span></span>My jobs only</button>' : '') +
           '<label class="select-pill"><span>Show</span><select id="jobsStatus">' + [['active', 'Active'], ['hold', 'On hold'], ['completed', 'Completed'], ['cancelled', 'Cancelled'], ['all', 'All']].map(([v, l]) => '<option value="' + v + '"' + (u.status === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></label>' +
           '<label class="select-pill"><span>Sort</span><select id="jobsSort">' + [['urgent', 'Most urgent'], ['newest', 'Newest'], ['etd', 'ETD'], ['eta', 'ETA']].map(([v, l]) => '<option value="' + v + '"' + (u.sort === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></label>' +
         '</div>' +
@@ -973,7 +950,7 @@
     view.addEventListener('click', (e) => {
       const c = e.target.closest('[data-cat]');
       if (c) { state.jobsUi.cat = c.dataset.cat; state.jobsUi.limit = 120; rerender(); return; }
-      if (e.target.closest('[data-act="mine"]')) { state.scope = state.scope === 'mine' ? 'all' : 'mine'; store.set('ethix.v2.scope.' + state.user, state.scope); rerender(); return; }
+      if (e.target.closest('[data-act="mine"]') && canEdit()) { state.scope = state.scope === 'mine' ? 'all' : 'mine'; store.set('ethix.v2.scope.' + state.user, state.scope); rerender(); return; }
       if (e.target.closest('[data-act="jobs-more"]')) { state.jobsUi.limit += 120; rerender(); return; }
       if (e.target.closest('[data-act="jobs-clear"]')) { Object.assign(state.jobsUi, { cat: 'all', status: 'all', q: '', limit: 120 }); if (state.scope === 'mine') { state.scope = 'all'; store.set('ethix.v2.scope.' + state.user, 'all'); } rerender(); }
     });
@@ -1131,9 +1108,9 @@
       (j.freight ? '<div class="cargo-row"><span>Line freight</span><span>USD ' + esc(j.freight) + '</span></div>' : '') + '</section>';
   }
   function peopleCard(j) {
-    const person = (n, role, bg) => '<div class="person-row"><span class="avatar" style="' + bg + '">' + esc(String(n || '?').charAt(0)) + '</span><div><div class="pr-name">' + esc(n || '—') + '</div><div class="pr-role">' + role + '</div></div></div>';
+    const person = (n, role, bg) => '<div class="person-row"><span class="avatar" style="' + bg + '">' + esc(initials(n || '?')) + '</span><div><div class="pr-name">' + esc(n || '—') + (n && n === state.user ? ' <span class="you">YOU</span>' : '') + '</div><div class="pr-role">' + role + '</div></div></div>';
     return '<section class="tile side-card" aria-labelledby="peopleTitle"><div class="tile-head"><h2 class="tile-title" id="peopleTitle">PEOPLE</h2></div>' +
-      person(j.cs, 'Customer service · owns this job', '') +
+      person(j.cs, 'Customer Service · owns this job', '') +
       (j.sales ? person(j.sales, 'Sales · follows this job', 'background:var(--teal-tint);color:var(--teal-text)') : '') + '</section>';
   }
 
@@ -1154,25 +1131,30 @@
     if (m) return 'updated ' + m[1].toLowerCase();
     return a.toLowerCase();
   }
+  // Newest on top, always. The server sends an exact time (t) and order (seq) for
+  // every note and change, so old rows written in other date formats sort right too.
   function storyItems(no) {
     const st = state.stories.get(String(no).toUpperCase());
     if (!st || !st.data) return null;
     const items = [];
-    (st.data.notes || []).forEach((n) => items.push({ at: parseStamp(n.at), who: n.by, note: n.txt }));
-    (st.data.events || []).forEach((e) => items.push({ at: parseStamp(e[0]), who: e[1], what: friendly(e[2]) }));
-    items.sort((a, b) => (b.at ? b.at.getTime() : 0) - (a.at ? a.at.getTime() : 0));
+    const ms = (s) => { const d = parseStamp(s); return d ? d.getTime() : 0; };
+    (st.data.notes || []).forEach((n, i) => items.push({ t: n.t || ms(n.at), seq: n.seq != null ? n.seq : i, k: 1, who: n.by, note: n.txt }));
+    (st.data.events || []).forEach((e, i) => items.push({ t: e[4] || ms(e[0]), seq: e[5] != null ? e[5] : -i, k: 0, who: e[1], what: friendly(e[2]) }));
+    items.sort((a, b) => b.t - a.t || b.k - a.k || b.seq - a.seq);
+    items.forEach((x) => { x.at = x.t ? new Date(x.t) : null; });
     return items;
   }
   function storyList(no, limit) {
     const items = storyItems(no);
     if (!items) return '<div class="story-loading"><span class="sk"></span><span class="sk"></span><span class="sk short"></span></div>';
-    if (!items.length) return '<div class="tile-empty">' + icon('clock', 22) + '<span>No notes or changes yet. Add the first note above.</span></div>';
+    if (!items.length) return '<div class="tile-empty">' + icon('clock', 22) + '<span>' + (canNote() ? 'No notes or changes yet. Add the first note above.' : 'No notes or changes yet.') + '</span></div>';
     const list = limit ? items.slice(0, limit) : items;
-    return '<ol class="story">' + list.map((e) => '<li><div class="st-when">' + esc(stampText(e.at)) + '</div><span class="avatar' + (e.who === state.user ? '' : ' is-other') + '">' + esc(String(e.who || '?').charAt(0)) + '</span><div class="st-body"><div><strong>' + esc(e.who || '—') + '</strong> ' + (e.note !== undefined ? 'added a note' : esc(e.what)) + '</div>' + (e.note !== undefined ? '<div class="st-note">' + esc(e.note) + '</div>' : '') + '</div></li>').join('') + '</ol>' +
+    return '<ol class="story">' + list.map((e) => '<li><div class="st-when">' + esc(stampText(e.at)) + '</div><span class="avatar' + (e.who === state.user ? '' : ' is-other') + '">' + esc(initials(e.who || '?')) + '</span><div class="st-body"><div><strong>' + esc(e.who || '—') + '</strong> ' + (e.note !== undefined ? 'added a note' : esc(e.what)) + '</div>' + (e.note !== undefined ? '<div class="st-note">' + esc(e.note) + '</div>' : '') + '</div></li>').join('') + '</ol>' +
       (limit && items.length > limit ? '<button type="button" class="tile-link" data-tab="story">See all ' + items.length + '</button>' : '');
   }
   function noteBox() {
-    return '<form class="note-box" data-act="note"><input type="text" id="noteInput" maxlength="1000" placeholder="Add a note for the team…" aria-label="Add a note" autocomplete="off"><button type="submit" class="note-post">Post</button></form>';
+    if (!canNote()) return '';
+    return '<form class="note-box" data-act="note"><input type="text" id="noteInput" maxlength="1000" placeholder="' + (isSales() ? 'Add a note for Customer Service…' : 'Add a note for the team…') + '" aria-label="Add a note" autocomplete="off"><button type="submit" class="note-post">Post</button></form>';
   }
   function loadStory(no, force) {
     const k = String(no).toUpperCase();
@@ -1191,14 +1173,14 @@
 
   function allDetails(j) {
     const groups = [
-      ['JOB', [['Job no.', j.jobNo], ['Type', j.type + ' · ' + j.typeName], ['Status', j.status || '—'], ['SL.', j.sl || '—'], ['Customer', j.customer], ['Line / vendor', j.vendor], ['CS', j.cs], ['Sales', j.sales], ['Job opened', fmt(j.opened, true)]]],
+      ['JOB', [['Job no.', j.jobNo], ['Type', j.type + ' · ' + j.typeName], ['Status', j.status || '—'], ['SL.', j.sl || '—'], ['Customer', j.customer], ['Line / vendor', j.vendor], ['Customer Service', j.cs], ['Sales', j.sales], ['Job opened', fmt(j.opened, true)]]],
       ['ROUTE & DATES', [['POL', j.pol], ['POD', j.pod], ['ETD', fmt(j.etd, true)], ['ETA', fmt(j.eta, true)], ['SI cutoff', fmt(j.siCut, true)], ['ED cutoff', fmt(j.edCut, true)], ['DG cutoff', fmt(j.dgCut, true)], ['Delivery date', j.raw.delivery || '—'], ['Line free time', j.lineFreeRaw || '—'], ['Port free time', j.portFreeRaw || '—']]],
       ['CARGO', [['20′', j.c20 || '—'], ['40′', j.c40 || '—'], ['DG / non-DG', j.dg || '—'], ['Line freight USD', j.freight || '—'], ['Against job no.', j.against || '—']]],
       ['DOCUMENTS', [[j.cat === 'IMPORT' ? 'DO status' : 'SI status', j.sido || '—'], [j.cat === 'IMPORT' ? 'Customs (ED)' : 'ED status', j.ed || '—'], [j.mode === 'air' ? 'AWB status' : 'BL status', j.bl || '—'], [j.cat === 'IMPORT' ? 'Discharge list' : 'Loadlist', j.loadlist || '—'], ['Original docs', j.docs || '—'], ['Costing', j.costing || '—']]]
     ];
     return '<div class="details-grid">' + groups.map((g) => '<section class="tile"><div class="tile-head"><h2 class="tile-title">' + g[0] + '</h2></div>' +
       g[1].map((r) => '<div class="kv"><span class="kv-k">' + esc(r[0]) + '</span><span class="kv-v">' + esc(r[1] || '—') + '</span></div>').join('') + '</section>').join('') +
-      '<section class="tile details-remarks"><div class="tile-head"><h2 class="tile-title">REMARKS</h2><button type="button" class="tile-link" data-act="edit">Edit details</button></div><p>' + esc(j.remarks || 'No remarks.') + '</p></section></div>';
+      '<section class="tile details-remarks"><div class="tile-head"><h2 class="tile-title">REMARKS</h2>' + (canEdit() ? '<button type="button" class="tile-link" data-act="edit">Edit details</button>' : '') + '</div><p>' + esc(j.remarks || 'No remarks.') + '</p></section></div>';
   }
 
   function renderVoyage(no, first) {
@@ -1217,16 +1199,17 @@
     const anim = first ? ' reveal' : '';
     const n = jr.next;
     const storyCount = (storyItems(j.jobNo) || []).length;
-    const nextBar = n ? '<div class="nextbar glass" role="region" aria-label="Next stop"><div class="nb-text"><div class="kicker">NEXT STOP</div><div class="nb-name">' + esc(n.name) + ' <span class="nb-sub">' + esc(n.sub) + '</span></div></div>' +
+    const nextBar = n && canEdit() ? '<div class="nextbar glass" role="region" aria-label="Next stop"><div class="nb-text"><div class="kicker">NEXT STOP</div><div class="nb-name">' + esc(n.name) + ' <span class="nb-sub">' + esc(n.sub) + '</span></div></div>' +
       '<button type="button" class="btn-brutal" data-stop="' + n.id + '" data-quick="1">' + (n.kind === 'field' ? 'MARK DONE' : n.kind === 'date' ? 'SET DATE' : n.kind === 'status' ? 'CLOSE JOB' : 'UPDATE') + '</button></div>' : '';
     view.innerHTML =
-      '<div class="wrap voyage-page' + (jr.next ? ' has-nextbar' : '') + '">' +
+      '<div class="wrap voyage-page' + (jr.next && canEdit() ? ' has-nextbar' : '') + '">' +
       '<div class="crumbs' + anim + '"><button type="button" class="back-btn" data-act="back" aria-label="Back">' + icon('back', 18) + '</button><button type="button" class="link-btn" data-href="#/jobs">JOBS</button><span>/ ' + esc(j.jobNo) + '</span>' +
-        '<button type="button" class="status-pill tone-' + tone + '" data-act="status" aria-label="Job status: ' + sw + '. Change">' + esc(sw) + icon('chevron', 14) + '</button></div>' +
+        (canEdit() ? '<button type="button" class="status-pill tone-' + tone + '" data-act="status" aria-label="Job status: ' + sw + '. Change">' + esc(sw) + icon('chevron', 14) + '</button>' : '<span class="status-pill tone-' + tone + '">' + esc(sw) + '</span>') + '</div>' +
       '<header class="vhead' + anim + '" style="--d:30ms">' +
         '<div class="vh-titles"><div class="vh-idrow"><h1 class="vh-job">' + esc(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + '</div>' +
         '<div class="vh-cust">' + esc(j.customer || '—') + '</div></div>' +
-        '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="edit">' + icon('edit', 16) + '<span>Edit details</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>' +
+        (canEdit() ? '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="edit">' + icon('edit', 16) + '<span>Edit details</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>'
+          : '<div class="vh-actions is-ro"><span class="ro-chip">' + icon('lock', 14) + '<span>UPDATED BY ' + esc(j.cs || 'CUSTOMER SERVICE') + '</span></span>' + (canNote() ? '<button type="button" class="btn-brutal btn-icon" data-act="focus-note">' + icon('note', 16) + '<span>ADD A NOTE</span></button>' : '') + '</div>') +
       '</header>' +
       '<div class="ft-top">' + freeCard(j, t0) + '</div>' +
       '<div class="voyage-wrap' + anim + '" style="--d:60ms">' + (j.mode === 'misc' ? misCard(j, jr) : hero(j, jr, t0) + vcard(j, jr, t0)) + '</div>' +
@@ -1236,7 +1219,7 @@
       (tab === 'details' ? allDetails(j)
         : tab === 'story' ? '<section class="tile story-card">' + noteBox() + storyList(j.jobNo) + '</section>'
         : '<div class="voverview">' +
-            '<section class="tile story-card" aria-labelledby="storyTitle"><div class="tile-head"><h2 class="tile-title" id="storyTitle">THE STORY SO FAR</h2>' + (j.sales ? '<span class="small">Shared with ' + esc(j.sales) + ' (sales)</span>' : '') + '</div>' + noteBox() + storyList(j.jobNo, 6) + '</section>' +
+            '<section class="tile story-card" aria-labelledby="storyTitle"><div class="tile-head"><h2 class="tile-title" id="storyTitle">THE STORY SO FAR</h2>' + (isSales() ? (j.cs ? '<span class="small">Shared with ' + esc(j.cs) + ' (Customer Service)</span>' : '') : j.sales ? '<span class="small">Shared with ' + esc(j.sales) + ' (sales)</span>' : '') + '</div>' + noteBox() + storyList(j.jobNo, 6) + '</section>' +
             '<div class="vside"><div class="ft-side">' + freeCard(j, t0) + '</div>' + keyDates(j, t0) + cargoCard(j) + peopleCard(j) + '</div>' +
           '</div>') +
       '</div>' + nextBar;
@@ -1391,6 +1374,23 @@
       return head + '<div class="kv"><span class="kv-k">Job opened</span><span class="kv-v">' + esc(fmt(j.opened, true)) + '</span></div><button type="button" class="btn-ghost pop-wide" data-act="edit">Edit details</button>';
     };
   }
+  function stopInfo(no, id) {
+    return () => {
+      const j = findJob(no); if (!j) return '';
+      const s = j.journey.all.find((x) => x.id === id); if (!s) return '';
+      const d = s.def || {};
+      const rows = [];
+      if (s.kind === 'field') rows.push([fieldLabel(j, d.field), j[d.field] === NA ? 'NOT NEEDED' : j[d.field] || '—']);
+      if (s.kind === 'date') rows.push([d.field === 'delivery' ? 'Delivered on' : fieldLabel(j, d.field), d.field === 'delivery' && j.raw.delivery === NA ? 'NOT NEEDED' : fmt(j[d.field], true)]);
+      if (s.kind === 'auto') rows.push([j.mode === 'courier' ? 'Pick-up' : 'ETD', fmt(j.etd, true)], [j.mode === 'courier' ? 'Delivery' : 'ETA', fmt(j.eta, true)]);
+      if (s.kind === 'status') rows.push(['Job status', j.status || '—']);
+      if (s.kind === 'link') rows.push(['Against job no.', j.against || '—']);
+      if (s.kind === 'info') rows.push(['Job opened', fmt(j.opened, true)]);
+      return '<div class="pop-title">' + esc(s.name) + '</div><div class="pop-state is-' + s.state + '">' + stopDot(s) + '<span>' + esc(s.sub) + '</span></div>' +
+        rows.map((r) => '<div class="kv"><span class="kv-k">' + esc(r[0]) + '</span><span class="kv-v">' + esc(r[1]) + '</span></div>').join('') +
+        '<p class="pop-text">' + esc((j.cs ? nice(j.cs) : 'Customer Service') + ' (Customer Service) keeps this stop up to date.') + (canNote() ? ' Need something? Add a note below.' : '') + '</p>';
+    };
+  }
   function statusEditor(no) {
     return () => {
       const j = findJob(no); if (!j) return '';
@@ -1408,6 +1408,7 @@
   }
 
   function onSet(no, field, val) {
+    if (!canEdit()) return;
     const j = findJob(no); if (!j) return;
     if ((j.raw[field] || '') === val && field !== 'status') { closeOverlays(); return; }
     const label = fieldLabel(j, field);
@@ -1439,10 +1440,18 @@
       if (st) {
         const j = findJob(no); if (!j) return;
         const s = j.journey.all.find((x) => x.id === st.dataset.stop);
+        if (!canEdit()) { openPop(st, 'STOP', stopInfo(no, st.dataset.stop)); return; }
         if (st.dataset.quick && s && s.kind === 'field' && s.state !== 'done') { onSet(no, s.def.field, s.def.primary); return; }
         openPop(st, s && s.kind === 'info' ? 'JOB' : 'UPDATE STOP', stopEditor(no, st.dataset.stop));
         return;
       }
+      if (e.target.closest('[data-act="focus-note"]')) {
+        const k = findJob(no) ? findJob(no).jobNo : no;
+        if (state.voyageTab[k] === 'details') { state.voyageTab[k] = 'overview'; rerender(); }
+        const inp = $('#noteInput'); if (inp) { inp.scrollIntoView({ block: 'center', behavior: 'smooth' }); inp.focus({ preventScroll: true }); }
+        return;
+      }
+      if (!canEdit() && e.target.closest('[data-act="status"], [data-act="quick"], [data-act="edit"]')) return;
       if (e.target.closest('[data-act="status"]')) { openPop(e.target.closest('[data-act="status"]'), 'JOB STATUS', statusEditor(no)); return; }
       if (e.target.closest('[data-act="quick"]')) { openQuick(no, e.target.closest('[data-act="quick"]')); return; }
       if (e.target.closest('[data-act="edit"]')) { openEdit(no); return; }
@@ -1538,7 +1547,7 @@
       jobNo: { label: 'Job no.', kind: 'text', req: true, upper: true, ph: 'e.g. 202600812' },
       customer: { label: 'Customer', kind: 'text', req: true, upper: true, list: 'dlCustomers' },
       vendor: { label: air ? 'Airline / vendor' : crr ? 'Courier company' : 'Line / vendor', kind: 'text', upper: true, list: 'dlVendors' },
-      cs: { label: 'CS (owns the job)', kind: 'cs' },
+      cs: { label: 'Customer Service (owns it)', kind: 'cs' },
       sales: { label: 'Sales person', kind: 'text', upper: true, list: 'dlSales' },
       opened: { label: 'Job opened', kind: 'date' },
       c20: { label: '20′ containers', kind: 'count' }, c40: { label: '40′ containers', kind: 'count' },
@@ -1565,8 +1574,7 @@
     return M[key];
   }
   function csOptions(current) {
-    const t = loadTeam();
-    const names = new Set((t ? t.cs : []).concat(state.users.filter((u) => String(u.role || '').toUpperCase() !== 'SALES').map((u) => String(u.name || '').toUpperCase())));
+    const names = new Set(state.users.map((u) => String((u && u.name) || '').toUpperCase().trim()).filter((n) => n && normRole((state.users.find((u) => String(u.name || '').toUpperCase().trim() === n) || {}).role, n) === 'CS'));
     if (current) names.add(current);
     names.delete('MASTER');
     return Array.from(names).filter(Boolean).sort();
@@ -1598,7 +1606,7 @@
     const L = state.lists || { customers: [], vendors: [] };
     return datalist('dlCustomers', L.customers.concat(state.jobs.map((j) => j.customer))) + datalist('dlVendors', L.vendors.concat(state.jobs.map((j) => j.vendor))) +
       datalist('dlPorts', state.jobs.map((j) => j.pol).concat(state.jobs.map((j) => j.pod), ['JEBEL ALI', 'DUBAI', 'KHOR FAKKAN', 'SHARJAH', 'ABU DHABI'])) +
-      datalist('dlSales', SALES_NAMES.concat(state.jobs.map((j) => j.sales))) + datalist('dlJobs', state.jobs.slice(-400).map((j) => j.jobNo));
+      datalist('dlSales', SALES_NAMES.concat(state.users.filter((u) => String(u.role || '').toUpperCase().trim() === 'SALES').map((u) => String(u.name || '').toUpperCase()), state.jobs.map((j) => j.sales))) + datalist('dlJobs', state.jobs.slice(-400).map((j) => j.jobNo));
   }
   function typeTiles(sel) {
     return '<div class="type-grid" role="radiogroup" aria-label="Job type">' + TYPE_GROUPS.map(([title, opts, ic]) =>
@@ -1608,7 +1616,7 @@
 
   // ---------- New job ----------
   function openNewJob(type) {
-    if (!state.signedIn) return;
+    if (!state.signedIn || !canEdit()) return;
     loadLists();
     closeOverlays(true);
     state.newJob = { type: type || '' };
@@ -1684,6 +1692,7 @@
 
   // ---------- Edit details ----------
   function openEdit(no) {
+    if (!canEdit()) return;
     const j = findJob(no); if (!j) return;
     loadLists();
     closeOverlays(true);
@@ -1745,13 +1754,354 @@
     });
   }
 
+  // ================================================================ PEOPLE (phase 3)
+  const ago = (t) => {
+    if (!t) return '';
+    const s = Math.round((Date.now() - t) / 1000);
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.round(s / 60) + ' min ago';
+    if (s < 6 * 3600) return Math.round(s / 3600) + ' h ago';
+    const d = new Date(t), today = today0();
+    const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    if (d >= today) return 'Today ' + hm;
+    if (d >= addDays(today, -1)) return 'Yesterday ' + hm;
+    return fmt(d) + ' ' + hm;
+  };
+
+  // ---------- the bell ----------
+  function notifUnread() { const n = state.notif || {}; return (n.items || []).filter((x) => x.t > (n.seen || 0)).length; }
+  function drawBadges() {
+    const n = notifUnread();
+    $$('[data-act="notif"] .badge-dot').forEach((b) => { b.textContent = n > 9 ? '9+' : String(n); b.hidden = n === 0; });
+    $$('[data-act="notif"]').forEach((b) => b.setAttribute('aria-label', n ? 'Notifications, ' + n + ' unread' : 'Notifications'));
+  }
+  function notifText(x) {
+    if (x.kind === 'note') return '<strong>' + esc(x.from) + '</strong> added a note';
+    if (x.kind === 'job') return '<strong>' + esc(x.from) + '</strong> opened a job for you';
+    if (x.kind === 'enquiry') return '<strong>' + esc(x.from) + '</strong> sent an enquiry';
+    return '<strong>' + esc(x.from) + '</strong> updated';
+  }
+  function notifPanel() {
+    const n = state.notif || { items: [] };
+    const seen = state.notifSeenShown || 0;
+    return '<h2 class="peek-job list-title" id="drawerTitle">Notifications</h2>' +
+      (n.items && n.items.length ? '<ol class="notif-list">' + n.items.map((x) => '<li><button type="button" class="notif' + (x.t > seen ? ' is-new' : '') + '" data-job="' + esc(x.job) + '">' +
+        '<span class="avatar' + (x.kind === 'note' ? ' is-other' : '') + '">' + esc(initials(x.from)) + '</span>' +
+        '<span class="nt-body"><span class="nt-head">' + notifText(x) + ' <span class="nt-job">' + esc(x.job) + '</span></span>' +
+        '<span class="nt-text">' + esc(x.text) + '</span><span class="nt-when">' + esc(ago(x.t)) + '</span></span></button></li>').join('') + '</ol>'
+        : '<div class="tile-empty">' + icon('bell', 22) + '<span>' + (state.role === 'SALES' ? 'Updates from Customer Service on your jobs will show here.' : 'Notes from sales on your jobs will show here.') + '</span></div>');
+  }
+  function openNotifications(opener) {
+    closeOverlays(true);
+    state.notifSeenShown = (state.notif && state.notif.seen) || 0;
+    popRender = notifPanel;
+    $('#drawerKicker').textContent = 'NOTIFICATIONS';
+    $('#drawerBody').innerHTML = notifPanel();
+    showDrawer(opener);
+    state.overlay = 'drawer';
+    if (state.notif && notifUnread()) {
+      state.notif.seen = Math.max(state.notif.seen || 0, ...state.notif.items.map((x) => x.t));   // server time, not this device’s clock
+      drawBadges();
+      api.call('ethixNotifSeen').catch(() => {});
+    }
+  }
+
+  // ---------- my account ----------
+  function accountPanel() {
+    return '<div class="acct"><span class="avatar">' + esc(initials(state.user)) + '</span><div><div class="acct-name" id="drawerTitle">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(ROLE_NAMES[state.role] || state.role) + '</div></div></div>' +
+      '<form class="tile pw-form" id="pwForm" novalidate><h3 class="tile-title">CHANGE PASSWORD</h3>' +
+        '<input type="text" name="username" autocomplete="username" value="' + esc(state.user) + '" class="sr-only" tabindex="-1" aria-hidden="true" readonly>' +
+        '<label class="pop-label" for="pwCurrent">Current password</label><div class="pw-wrap is-plain"><input id="pwCurrent" type="password" autocomplete="current-password"><button type="button" class="pw-eye" data-eye="pwCurrent" aria-label="Show password">' + EYE + '</button></div>' +
+        '<label class="pop-label" for="pwNew">New password</label><div class="pw-wrap is-plain"><input id="pwNew" type="password" autocomplete="new-password"><button type="button" class="pw-eye" data-eye="pwNew" aria-label="Show password">' + EYE + '</button></div>' +
+        '<label class="pop-label" for="pwNew2">Type it again</label><div class="pw-wrap is-plain"><input id="pwNew2" type="password" autocomplete="new-password"></div>' +
+        '<div class="pop-hint">8+ characters, letters and numbers, not your name. Your other devices will be signed out.</div>' +
+        '<div class="pin-msg" id="pwMsg" role="alert"></div>' +
+        '<button type="submit" class="btn-brutal" id="pwSave">CHANGE PASSWORD</button></form>' +
+      '<button type="button" class="btn-ghost acct-logout" data-act="logout">' + icon('logout', 16) + 'Log out</button>' +
+      (state.role !== 'ADMIN' ? '<div class="peek-card"><h3>COMING SOON</h3>' + (state.role === 'SALES' ? ['Enquiries — send a booking request', 'Delays on your jobs'] : ['Enquiries from sales', 'Morning follow-up round', 'Mark delay', 'Fleet timeline', 'Costing and analysis']).map((t) => '<div class="kv"><span class="kv-k">' + esc(t) + '</span><span class="kv-v">SOON</span></div>').join('') + '</div>' : '');
+  }
+  function openAccount(opener) {
+    closeOverlays(true);
+    $('#drawerKicker').textContent = 'MY ACCOUNT';
+    $('#drawerBody').innerHTML = accountPanel();
+    showDrawer(opener);
+    state.overlay = 'account';
+  }
+  async function submitPwChange(form) {
+    const cur = $('#pwCurrent', form).value, pw = $('#pwNew', form).value, pw2 = $('#pwNew2', form).value;
+    const msg = $('#pwMsg', form);
+    const problem = pwProblem(pw, state.user);
+    if (!cur) { setLoginMsg(msg, 'Enter your current password.', 'error'); return; }
+    if (problem) { setLoginMsg(msg, problem, 'error'); return; }
+    if (pw !== pw2) { setLoginMsg(msg, 'The two new passwords don’t match.', 'error'); return; }
+    const btn = $('#pwSave', form); btn.disabled = true; btn.textContent = 'SAVING…';
+    try {
+      const res = await api.call('ethixChangePassword', [cur, pw]);
+      if (res && res.ok) { closeOverlays(); toast('Password changed. Your other devices were signed out.'); return; }
+      setLoginMsg(msg, (res && res.error) || 'Not changed.', 'error');
+    } catch (e) { if (e.kind !== 'auth') setLoginMsg(msg, /not available/i.test(e.message) ? 'Needs the Phase 3 Code.gs update.' : e.message, 'error'); }
+    btn.disabled = false; btn.textContent = 'CHANGE PASSWORD';
+  }
+
+  // ================================================================ SALES HOME
+  function salesChip(j, t0) {
+    if (j.status === 'COMPLETED') return '<span class="chip chip-done">COMPLETED</span>';
+    if (j.hold) return '<span class="chip chip-hold">ON HOLD</span>';
+    if (j.cat === 'IMPORT' && j.arrived && !j.delivery && j.lineFreeEnd) {
+      const d = days(t0, j.lineFreeEnd);
+      if (d <= 2 && d >= -30) return '<span class="chip chip-urgent">' + icon('alert', 13) + (d < 0 ? 'FREE TIME OVER' : 'FREE TIME ' + d + (d === 1 ? ' DAY' : ' DAYS')) + '</span>';
+    }
+    if (j.atSea) return '<span class="chip chip-teal">' + (j.mode === 'air' ? 'IN THE AIR' : j.mode === 'courier' ? 'IN TRANSIT' : 'AT SEA') + ' · DAY ' + j.dayN + '/' + j.dayT + '</span>';
+    if (j.arrived) return '<span class="chip chip-done">ARRIVED</span>';
+    if (j.etd) return '<span class="chip chip-calm">' + (j.mode === 'courier' ? 'PICK-UP ' : j.mode === 'air' ? 'DEPARTS ' : 'SAILS ') + fmt(j.etd) + '</span>';
+    return '<span class="chip chip-calm">BOOKING</span>';
+  }
+  function followCard(j, t0) {
+    const note = state.lastNotes[j.jobNo.toUpperCase()];
+    const free = j.cat === 'IMPORT' && j.arrived && !j.delivery && j.lineFreeEnd ? days(t0, j.lineFreeEnd) : null;
+    return '<button type="button" class="follow-card" data-job="' + esc(j.jobNo) + '">' +
+      '<span class="fc-top"><span class="fc-job">' + esc(j.jobNo) + '</span>' + salesChip(j, t0) + '</span>' +
+      '<span class="fc-cust">' + esc(j.customer || '—') + '</span>' +
+      (j.mode === 'misc' ? '' : miniTrack(j, 26) + '<span class="fc-ports"><span>' + esc((j.pol || '—') + ' · ' + fmt(j.etd)) + '</span><span>' + esc((j.pod || '—') + ' · ' + fmt(j.eta)) + '</span></span>') +
+      '<span class="fc-next"><strong>Next:</strong> ' + esc(j.next.text) + (note ? ' · <span class="fc-note">' + esc(note.by) + ': ' + esc(note.txt) + '</span>' : '') + '</span>' +
+      (free !== null && free <= 2 && free >= -30 ? '<span class="fc-heads"><strong>Heads-up:</strong> ' + (free < 0 ? 'demurrage is running since ' + DOW[j.lineFreeEnd.getDay()] + ' ' + fmt(j.lineFreeEnd) + '.' : 'demurrage starts after ' + DOW[j.lineFreeEnd.getDay()] + ' ' + fmt(j.lineFreeEnd) + '. You may want to update the customer.') + '</span>' : '') +
+    '</button>';
+  }
+  function renderSalesHome(first) {
+    const t0 = today0();
+    const m = computeHome(state.jobs, t0);
+    m.attention = m.active.filter((j) => j.next.tone === 'urgent' || j.next.tone === 'soon');
+    lastMetrics = m;
+    const anim = first ? ' reveal' : '';
+    const list = m.active.slice().sort((a, b) => a.next.rank - b.next.rank || (a.etd ? a.etd.getTime() : 9e15) - (b.etd ? b.etd.getTime() : 9e15));
+    const searchVal = $('#searchInput') ? $('#searchInput').value : '';
+    const k = (id, label, n, sub, urgent, d) => '<button type="button" class="kpi' + (urgent ? ' is-urgent' : '') + anim + '" style="--d:' + d + 'ms" data-list="' + id + '"><span class="kpi-label">' + label + '</span><span class="kpi-num">' + n + '</span><span class="kpi-sub">' + esc(sub) + '</span></button>';
+    $('#view').innerHTML =
+      '<div class="wrap sales-home">' +
+      '<header class="page-head' + anim + '">' +
+        '<div class="head-main"><div class="meta-line"><span>SALES · ' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div>' +
+        '<h1 class="greeting">Hi ' + esc(nice(state.user)) + '</h1></div>' +
+        '<div class="head-actions">' +
+          '<div class="search-wrap"><label class="search">' + icon('search') + '<input id="searchInput" type="search" placeholder="Job no, customer, port…" aria-label="Search my jobs" autocomplete="off" value="' + esc(searchVal) + '"><kbd>/</kbd></label><div class="search-results glass" id="searchResults" hidden></div></div>' +
+          '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' +
+        '</div>' +
+      '</header>' +
+      '<div class="kpis sales-kpis">' +
+        k('active', 'JOBS I FOLLOW', m.active.length, m.hold.length + ' on hold', false, 60) +
+        k('atsea', 'AT SEA NOW', m.atSea.length, m.atSea.length ? 'next arrival ' + fmt(m.atSea[0].eta) : 'nothing moving', false, 90) +
+        k('arriving', 'ARRIVING', m.arriving.length, 'in the next 7 days', false, 120) +
+        k('attention', 'NEEDS ATTENTION', m.attention.length, m.attention.length ? 'cutoffs, free time' : 'all calm', m.attention.some((j) => j.next.tone === 'urgent'), 150) +
+      '</div>' +
+      '<div class="sales-grid"><section class="follow' + anim + '" style="--d:180ms" aria-labelledby="followTitle"><div class="tile-head"><h2 class="tile-title" id="followTitle">JOBS I’M FOLLOWING</h2><button type="button" class="tile-link" data-href="#/jobs">All my jobs</button></div>' +
+        (list.length ? '<div class="follow-grid">' + list.slice(0, 24).map((j) => followCard(j, t0)).join('') + '</div>' : '<div class="tile tile-empty">' + icon('jobs', 22) + '<span>No active jobs with your name as sales person yet.</span></div>') +
+      '</section>' +
+      activityTile(anim) + '</div>' +
+      '</div>';
+  }
+
+  // ================================================================ ADMIN
+  const ROLE_CHIP = { CS: ['Customer Service', 'chip-teal'], SALES: ['Sales', 'chip-sales'], ADMIN: ['Admin', 'chip-hold'], ACCOUNTS: ['Accounts', 'chip-calm'] };
+  const PW_TEXT = { SET: 'Password set', TEMPORARY: 'Temporary — must change at sign-in', 'PIN ONLY': 'Old PIN — sets a password at next sign-in', NONE: 'No password' };
+  function tempPassword() {
+    const a = new Uint32Array(4); window.crypto.getRandomValues(a);
+    const L = 'abcdefghjkmnpqrstuvwxyz';                                // no i / l / o — easy to read out
+    return 'Ethix-' + String(1000 + (a[0] % 9000)) + '-' + L[a[1] % L.length] + L[a[2] % L.length] + L[a[3] % L.length];
+  }
+  function adminData() { return state.admin || { users: [], suggestions: [] }; }
+  function renderAdmin(first) {
+    const t0 = today0();
+    const A = adminData();
+    const anim = first ? ' reveal' : '';
+    const n = { all: A.users.length, online: A.users.filter((u) => u.online).length, locked: A.users.filter((u) => u.locked).length, waiting: A.users.filter((u) => u.password !== 'SET').length };
+    $('#view').innerHTML =
+      '<div class="wrap admin-page">' +
+      '<header class="page-head' + anim + '">' +
+        '<div class="head-main"><div class="meta-line"><span>ADMIN · ' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div><h1 class="greeting">People</h1></div>' +
+        '<div class="head-actions">' +
+          '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' +
+          '<button type="button" class="btn-ghost" data-act="adm-out-all" aria-label="Sign out everyone">' + icon('logout', 16) + '<span class="btn-label">Sign out everyone</span></button>' +
+          '<button type="button" class="btn-brutal btn-icon" data-act="adm-add">' + icon('plus', 16) + '<span>ADD USER</span></button>' +
+        '</div>' +
+      '</header>' +
+      (!state.admin ? '<section class="tile">' + empty('admin', 'The admin tools need the Phase 3 Code.gs update.') + '</section>' :
+      '<div class="admin-stats' + anim + '" style="--d:40ms"><span><b>' + n.all + '</b> users</span><span><i class="dot is-on"></i><b>' + n.online + '</b> online now</span><span' + (n.locked ? ' class="is-red"' : '') + '><b>' + n.locked + '</b> locked</span><span><b>' + n.waiting + '</b> still to set a password</span></div>' +
+      '<section class="tile users-card' + anim + '" style="--d:80ms" aria-label="Users"><div class="users-headrow" aria-hidden="true"><span>NAME</span><span>ROLE</span><span>STATUS</span><span>PASSWORD</span><span></span></div>' +
+        '<ul class="users-list">' + A.users.map((u) => {
+          const rc = ROLE_CHIP[u.role] || ROLE_CHIP.CS;
+          return '<li class="user-row">' +
+            '<span class="ur-name"><span class="avatar' + (u.role === 'SALES' ? ' is-other' : '') + '">' + esc(initials(u.name)) + '</span><span><b>' + esc(u.name) + '</b>' + (u.name === state.user ? ' <span class="you">YOU</span>' : '') + '</span></span>' +
+            '<span class="ur-role"><span class="chip ' + rc[1] + '">' + rc[0] + '</span></span>' +
+            '<span class="ur-status">' + (u.locked ? '<span class="chip chip-urgent">' + icon('alert', 13) + 'Locked · ' + u.locked + ' min</span>' : u.online ? '<span class="online"><i class="dot is-on"></i>Online' + (u.sessions > 1 ? ' · ' + u.sessions + ' devices' : '') + '</span>' : '<span class="online"><i class="dot"></i>' + (u.sessions ? 'Signed in · idle' : 'Offline') + '</span>') + '</span>' +
+            '<span class="ur-pw">' + esc(PW_TEXT[u.password] || u.password) + '</span>' +
+            '<span class="ur-act">' + (u.locked ? '<button type="button" class="btn-ghost btn-sm" data-adm="unlock" data-user="' + esc(u.name) + '">Unlock</button>' : '') +
+              (u.name !== state.user && !(u.name === 'MASTER' && state.user !== 'MASTER') ? '<button type="button" class="icon-btn" data-adm="menu" data-user="' + esc(u.name) + '" aria-label="Manage ' + esc(u.name) + '">' + icon('more', 18) + '</button>' : '') + '</span>' +
+          '</li>';
+        }).join('') + '</ul></section>' +
+      (A.suggestions.length ? '<section class="tile sugg-card' + anim + '" style="--d:120ms"><div class="tile-head"><h2 class="tile-title">SALES PEOPLE WITHOUT AN ACCOUNT</h2><span class="small">From the tracker · tap to add</span></div><div class="sugg-row">' +
+        A.suggestions.slice(0, 40).map((s) => '<button type="button" class="sugg" data-adm="add-sales" data-user="' + esc(s.name) + '"><span class="avatar is-other">' + esc(initials(s.name)) + '</span><span><b>' + esc(s.name) + '</b><small>' + s.jobs + (s.jobs === 1 ? ' job' : ' jobs') + '</small></span>' + icon('plus', 16) + '</button>').join('') + '</div></section>' : '')) +
+      '</div>';
+  }
+  function peopleAction(a) {
+    a = String(a || '');
+    const M = [
+      [/^LOGGED IN$/, () => 'signed in'], [/^LOGGED OUT$/, () => 'signed out'],
+      [/^SET A NEW PASSWORD$/, () => 'set their own password'], [/^CHANGED PASSWORD$/, () => 'changed their password'],
+      [/^CREATED USER (.+) \((.+)\)$/, (m) => 'created an account for ' + m[1] + ' · ' + nice(m[2])],
+      [/^RESET PASSWORD FOR (.+)$/, (m) => 'reset the password of ' + m[1]],
+      [/^CHANGED ROLE OF (.+) TO (.+)$/, (m) => 'made ' + m[1] + ' ' + nice(m[2])],
+      [/^REMOVED USER (.+)$/, (m) => 'removed ' + m[1]], [/^UNLOCKED (.+)$/, (m) => 'unlocked ' + m[1]],
+      [/^SIGNED OUT EVERYONE$/, () => 'signed everyone out'], [/^SIGNED OUT (.+)$/, (m) => 'signed out ' + m[1]],
+      [/^(?:LOCKED|PIN LOCKOUT) — (\d+) WRONG (PASSWORDS|PINS)$/, (m) => 'was locked after ' + m[1] + ' wrong ' + m[2].toLowerCase()]
+    ];
+    for (const [re, f] of M) { const m = a.match(re); if (m) return f(m); }
+    return friendly(a);
+  }
+  function renderActivity(first) {
+    const q = (state.actQ || '').toUpperCase();
+    const rows = (state.activity || []).filter((r) => !q || (r.join(' ').toUpperCase().includes(q)));
+    const anim = first ? ' reveal' : '';
+    $('#view').innerHTML = '<div class="wrap admin-page">' +
+      '<header class="page-head act-head' + anim + '"><div class="head-main"><div class="meta-line"><span>ADMIN · LAST ' + (state.activity || []).length + ' ACTIONS</span></div><h1 class="greeting">Activity</h1></div>' +
+        '<div class="head-actions"><label class="search">' + icon('search') + '<input id="actSearch" type="search" placeholder="Name, action, job no…" aria-label="Filter activity" autocomplete="off" value="' + esc(state.actQ || '') + '"></label>' +
+        '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button></div></header>' +
+      '<section class="tile' + anim + '" style="--d:40ms">' + (rows.length ? '<ol class="activity-list">' + rows.map((r) => '<li' + (/LOCK/.test(r[2]) && !/^UNLOCKED/.test(r[2]) ? ' class="is-alert"' : '') + '><span class="al-when">' + esc(r[0]) + '</span><span class="avatar' + (r[1] === state.user ? '' : ' is-other') + '">' + esc(initials(r[1])) + '</span><span class="al-text"><b>' + esc(r[1]) + '</b> ' + esc(peopleAction(r[2])) + (r[3] ? ' <span class="nt-job">' + esc(r[3]) + '</span>' : '') + '</span></li>').join('') + '</ol>' : empty('clock', 'Nothing matches.')) + '</section></div>';
+  }
+
+  // admin actions
+  function adminMenu(name) {
+    return () => {
+      const u = adminData().users.find((x) => x.name === name); if (!u) return '';
+      return '<div class="pop-title">' + esc(name) + '</div><div class="pop-label">Role</div><div class="choice-row is-stack">' +
+        [['CS', 'Customer Service'], ['SALES', 'Sales'], ['ADMIN', 'Admin']].map(([v, l]) => '<button type="button" class="choice' + (u.role === v ? ' is-on' : '') + '" data-adm="role" data-role="' + v + '" data-user="' + esc(name) + '" aria-pressed="' + (u.role === v) + '">' + l + '</button>').join('') + '</div>' +
+        '<button type="button" class="btn-ghost pop-wide" data-adm="reset" data-user="' + esc(name) + '">' + icon('refresh', 16) + 'Reset password</button>' +
+        '<button type="button" class="btn-ghost pop-wide" data-adm="signout" data-user="' + esc(name) + '"' + (u.sessions ? '' : ' disabled') + '>' + icon('logout', 16) + 'Sign out ' + (u.sessions ? '(' + u.sessions + (u.sessions === 1 ? ' device' : ' devices') + ')' : '— not signed in') + '</button>' +
+        (name !== 'MASTER' ? '<button type="button" class="btn-ghost pop-wide is-danger" data-adm="remove" data-user="' + esc(name) + '">Remove ' + esc(name) + '</button>' : '');
+    };
+  }
+  function credentialsCard(name, pw, isNew) {
+    return '<div class="cred-card"><div class="kicker">' + (isNew ? 'ACCOUNT READY' : 'PASSWORD RESET') + '</div>' +
+      '<div class="kv"><span class="kv-k">Username</span><span class="kv-v">' + esc(name) + '</span></div>' +
+      '<div class="kv"><span class="kv-k">Temporary password</span><span class="kv-v" id="credPw">' + esc(pw) + '</span></div>' +
+      '<p class="pop-text">Send these to ' + esc(nice(name)) + ' privately (e.g. WhatsApp). At first sign-in they must choose their own password — you won’t know it.</p>' +
+      '<div class="form-actions is-inline"><button type="button" class="btn-ghost" data-adm="copy" data-text="' + esc('Username: ' + name + '\nTemporary password: ' + pw) + '">' + icon('copy', 16) + 'Copy</button><button type="button" class="btn-brutal" data-act="form-done">DONE</button></div></div>';
+  }
+  function openAddUser(name, role) {
+    closeOverlays(true);
+    const A = adminData();
+    $('#drawer').classList.add('is-wide');
+    $('#drawerKicker').textContent = 'ADD USER';
+    $('#drawerBody').innerHTML = '<h2 class="peek-job form-title" id="drawerTitle">New account</h2>' +
+      '<form class="job-form" id="addUserForm" novalidate><div class="fgrid">' +
+        '<div class="field is-wide"><label for="auName">Name (this is their username)</label><input id="auName" class="is-upper" list="dlSugg" autocomplete="off" spellcheck="false" value="' + esc(name || '') + '" placeholder="e.g. VINEETH"><div class="field-err" id="auName_err"></div></div>' +
+        '<div class="field is-wide"><label>Role</label><div class="choice-row" role="radiogroup" aria-label="Role">' + [['CS', 'Customer Service'], ['SALES', 'Sales'], ['ADMIN', 'Admin']].map(([v, l]) => '<button type="button" class="choice' + ((role || 'CS') === v ? ' is-on' : '') + '" role="radio" data-pick-role="' + v + '" aria-checked="' + ((role || 'CS') === v) + '">' + l + '</button>').join('') + '</div><p class="pop-hint" id="auRoleHint"></p></div>' +
+        '<div class="field is-wide"><label for="auPw">Temporary password</label><div class="date-row"><input id="auPw" value="' + esc(tempPassword()) + '" autocomplete="off" spellcheck="false"><button type="button" class="choice" data-adm="gen">New</button></div><div class="field-err" id="auPw_err"></div></div>' +
+      '</div>' + datalist('dlSugg', A.suggestions.map((s) => s.name)) +
+      '<div class="form-error" id="formError" role="alert"></div>' +
+      '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit">CREATE ACCOUNT</button></div></form>';
+    state.addRole = role || 'CS';
+    roleHint();
+    showDrawer(document.activeElement);
+    state.overlay = 'admin';
+    setTimeout(() => { const f = $('#auName'); if (f && !name) f.focus(); }, 30);
+  }
+  function roleHint() {
+    const h = $('#auRoleHint'); if (!h) return;
+    h.textContent = { CS: 'Sees and updates every job.', SALES: 'Sees only the jobs with their name as sales person, and can add notes.', ADMIN: 'Manages people only — no jobs.' }[state.addRole];
+  }
+  async function adminCall(fn, args, okText) {
+    try {
+      setSaving(1);
+      const res = await api.call(fn, args);
+      if (res && res.ok) { if (res.list) state.admin = res.list; rerender(); if (okText) toast(okText); return res; }
+      toast((res && res.error) || 'Not done.', { error: true });
+    } catch (e) { if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'Needs the Phase 3 Code.gs update.' : e.message, { error: true }); }
+    finally { setSaving(-1); }
+    return null;
+  }
+  function confirmBox(title, text, yes, onYes) {
+    const wrap = $('#confirmWrap');
+    $('#confirmTitle').textContent = title; $('#confirmText').textContent = text; $('#confirmYes').textContent = yes;
+    wrap.hidden = false; $('#confirmNo').focus();
+    const close = () => { wrap.hidden = true; $('#confirmTitle').textContent = 'Log out?'; $('#confirmText').textContent = 'You’ll need your password to come back in.'; $('#confirmYes').textContent = 'Log out'; };
+    $('#confirmNo').onclick = close;
+    $('#confirmYes').onclick = () => { close(); onYes(); };
+    wrap.onclick = (e) => { if (e.target === wrap) close(); };
+  }
+  function initPeople() {
+    const view = $('#view');
+    view.addEventListener('click', (e) => {
+      if (state.role !== 'ADMIN') return;
+      const b = e.target.closest('[data-adm], [data-act="adm-out-all"]'); if (!b) return;
+      const name = b.dataset.user;
+      if (b.dataset.act === 'adm-out-all') { confirmBox('Sign out everyone?', 'Everyone except you is signed out on every device right away.', 'Sign out all', () => adminCall('ethixAdminSignOut', ['*'], 'Everyone else was signed out')); return; }
+      if (b.dataset.adm === 'unlock') { adminCall('ethixAdminUnlock', [name], name + ' unlocked'); return; }
+      if (b.dataset.adm === 'menu') { openPop(b, 'MANAGE', adminMenu(name)); return; }
+      if (b.dataset.adm === 'add-sales') { openAddUser(name, 'SALES'); }
+    });
+    view.addEventListener('input', (e) => { if (e.target.id === 'actSearch') { state.actQ = e.target.value; rerender(); } });
+    const onAdm = (e) => {
+      if (state.role !== 'ADMIN') return;
+      const b = e.target.closest('[data-adm], [data-pick-role], [data-act="form-done"]'); if (!b) return;
+      const name = b.dataset.user;
+      if (b.dataset.act === 'form-done') { closeOverlays(); return; }
+      if (b.dataset.pickRole) { state.addRole = b.dataset.pickRole; $$('[data-pick-role]').forEach((x) => { const on = x === b; x.classList.toggle('is-on', on); x.setAttribute('aria-checked', String(on)); }); roleHint(); return; }
+      if (b.dataset.adm === 'gen') { $('#auPw').value = tempPassword(); return; }
+      if (b.dataset.adm === 'copy') { const t = b.dataset.text; (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast('Copied'), () => toast('Select and copy the text instead', { error: true })); return; }
+      if (b.dataset.adm === 'role') { const r = b.dataset.role; closeOverlays(); adminCall('ethixAdminRole', [name, r], name + ' is now ' + (r === 'CS' ? 'Customer Service' : nice(r)) + ' (signed out to apply it)'); return; }
+      if (b.dataset.adm === 'signout') { closeOverlays(); adminCall('ethixAdminSignOut', [name], name + ' was signed out'); return; }
+      if (b.dataset.adm === 'remove') { closeOverlays(); confirmBox('Remove ' + name + '?', name + ' will no longer be able to sign in. Their name stays on jobs and in history.', 'Remove', () => adminCall('ethixAdminRemove', [name], name + ' removed')); return; }
+      if (b.dataset.adm === 'reset') {
+        closeOverlays(true);
+        const pw = tempPassword();
+        $('#drawer').classList.add('is-wide');
+        $('#drawerKicker').textContent = 'RESET PASSWORD';
+        $('#drawerBody').innerHTML = '<h2 class="peek-job form-title" id="drawerTitle">' + esc(name) + '</h2><form class="job-form" id="resetForm" data-user="' + esc(name) + '" novalidate><div class="field is-wide"><label for="auPw">New temporary password</label><div class="date-row"><input id="auPw" value="' + esc(pw) + '" autocomplete="off" spellcheck="false"><button type="button" class="choice" data-adm="gen">New</button></div><div class="field-err" id="auPw_err"></div></div><p class="pop-text">They are signed out everywhere and must choose a new password at their next sign-in.</p><div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit">RESET PASSWORD</button></div></form>';
+        showDrawer(document.activeElement);
+        state.overlay = 'admin';
+      }
+    };
+    $('#pop').addEventListener('click', onAdm);
+    $('#drawerBody').addEventListener('click', (e) => {
+      if (state.role !== 'ADMIN' || (state.overlay !== 'admin' && state.overlay !== 'sheet')) return;
+      if (e.target.closest('[data-act="form-cancel"]')) { closeOverlays(); return; }
+      onAdm(e);
+    });
+    $('#drawerBody').addEventListener('submit', async (e) => {
+      if (state.overlay === 'account' && e.target.id === 'pwForm') { e.preventDefault(); submitPwChange(e.target); return; }
+      if (state.overlay !== 'admin') return;
+      e.preventDefault();
+      const f = e.target;
+      const pw = $('#auPw', f).value.trim();
+      const btn = $('#formSubmit', f);
+      if (f.id === 'addUserForm') {
+        const name = $('#auName', f).value.trim().toUpperCase().replace(/\s+/g, ' ');
+        $('#auName_err').textContent = ''; $('#auPw_err').textContent = ''; $('#formError').textContent = '';
+        if (!/^[A-Z][A-Z .'-]{1,29}$/.test(name)) { $('#auName_err').textContent = 'Letters only, 2–30 characters.'; return; }
+        const p = pwProblem(pw, name); if (p) { $('#auPw_err').textContent = p; return; }
+        btn.disabled = true; btn.textContent = 'CREATING…';
+        const res = await adminCall('ethixAdminCreate', [name, state.addRole, pw], null);
+        if (res) { $('#drawerBody').innerHTML = credentialsCard(name, pw, true); return; }
+        btn.disabled = false; btn.textContent = 'CREATE ACCOUNT';
+      }
+      if (f.id === 'resetForm') {
+        const name = f.dataset.user;
+        const p = pwProblem(pw, name); if (p) { $('#auPw_err').textContent = p; return; }
+        btn.disabled = true; btn.textContent = 'RESETTING…';
+        const res = await adminCall('ethixAdminReset', [name, pw], null);
+        if (res) { $('#drawerBody').innerHTML = credentialsCard(name, pw, false); return; }
+        btn.disabled = false; btn.textContent = 'RESET PASSWORD';
+      }
+    });
+  }
+
   // ------------------------------------------------------------ lists & menus
   function openList(kind, opener) {
     const m = lastMetrics; if (!m) return;
     const map = {
       active: ['ACTIVE JOBS', m.active], costing: ['COSTING DUE', m.costing], sied: ['SI / ED DUE', m.sied],
       free: ['FREE TIME ENDING ≤ 2 DAYS', m.freeJobs], atsea: ['AT SEA NOW', m.atSea], arriving: ['ARRIVING THIS WEEK', m.arriving],
-      departing: ['DEPARTING THIS WEEK', m.departing], hold: ['ON HOLD', m.hold], watch: ['TODAY’S WATCH', m.watch.map((w) => w.j)]
+      departing: ['DEPARTING THIS WEEK', m.departing], hold: ['ON HOLD', m.hold], watch: ['TODAY’S WATCH', m.watch.map((w) => w.j)],
+      attention: ['NEEDS ATTENTION', m.attention || []]
     };
     const entry = map[kind]; if (!entry) return;
     const list = Array.from(new Set(entry[1]));
@@ -1762,17 +2112,6 @@
         '<button type="button" class="list-row" data-job="' + esc(j.jobNo) + '"><span class="lr-main"><span class="li-job">' + esc(j.jobNo) + ' · ' + esc(j.type) + '</span>' +
         '<span class="lr-cust">' + esc(j.customer || '—') + '</span><span class="li-sub">' + esc(j.route) + '</span></span>' + toneChip(j.next) + '</button>'
       ).join('') + '</div>' : '<div class="tile-empty">Nothing here right now.</div>');
-    showDrawer(opener);
-    state.overlay = 'drawer';
-  }
-
-  function openMore(opener) {
-    closeOverlays(true);
-    $('#drawerKicker').textContent = 'ACCOUNT';
-    $('#drawerBody').innerHTML =
-      '<div class="acct"><span class="avatar">' + esc(state.user.charAt(0)) + '</span><div><div class="acct-name" id="drawerTitle">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(roleLabel(state.role, state.user)) + '</div></div></div>' +
-      '<button type="button" class="btn-brutal" data-act="logout" style="width:100%">Log out</button>' +
-      '<div class="peek-card"><h3>COMING SOON</h3>' + ['Sales enquiries', 'Fleet timeline', 'Costing, analysis and admin'].map((t) => '<div class="kv"><span class="kv-k">' + esc(t) + '</span><span class="kv-v">SOON</span></div>').join('') + '</div>';
     showDrawer(opener);
     state.overlay = 'drawer';
   }
@@ -1817,12 +2156,16 @@
       let boot;
       try { boot = await api.call('ethixBootstrap'); }
       catch (e) { if (e.kind === 'server' && /not available/i.test(e.message)) boot = await legacyBoot(state.user, state.role); else throw e; }
+      const before = notifUnread(), newest = state.notif && state.notif.items[0] ? state.notif.items[0].t : 0;
       applyBoot(boot);
-      if (state.overlay === 'form' || state.overlay === 'pop' || state.overlay === 'sheet') state.dirty = true;
+      if (state.overlay === 'form' || state.overlay === 'pop' || state.overlay === 'sheet' || state.overlay === 'admin') state.dirty = true;
       else { rerender(); refreshOverlay(); }
       updateNav();
+      const fresh = state.notif ? state.notif.items.filter((x) => x.t > newest && x.t > (state.notif.seen || 0)) : [];
+      state.nudged = fresh.length && notifUnread() > before && state.overlay !== 'drawer';
+      if (state.nudged) toast(fresh.length === 1 ? nice(fresh[0].from) + ' · ' + fresh[0].job + ': ' + fresh[0].text : fresh.length + ' new notifications', { action: { label: 'View', fn: () => openNotifications() } });
       if (state.route && state.route.name === 'job') loadStory(state.route.jobNo, true);
-      if (manual) toast('Up to date');
+      if (manual && !state.nudged) toast('Up to date');
     } catch (e) {
       if (e.kind !== 'auth') toast(e.message, { error: true });
     } finally {
@@ -1854,6 +2197,7 @@
 
   function confirmLogout() {
     closeOverlays(true);
+    $('#confirmTitle').textContent = 'Log out?'; $('#confirmText').textContent = 'You’ll need your password to come back in.'; $('#confirmYes').textContent = 'Log out';
     const wrap = $('#confirmWrap'); wrap.hidden = false; $('#confirmNo').focus();
     const close = () => { wrap.hidden = true; };
     $('#confirmNo').onclick = close;
@@ -1883,14 +2227,14 @@
       const r = state.route ? state.route.name : 'home';
       const jobBtn = e.target.closest('[data-job]');
       if (jobBtn && !e.target.closest('[data-stop]')) { const box = $('#searchResults'); if (box) box.hidden = true; openJob(jobBtn.dataset.job); return; }
+      if (e.target.closest('[data-act="refresh"]')) { refresh(true); return; }
       if (r !== 'home') return;
       const listBtn = e.target.closest('[data-list]');
       if (listBtn) { openList(listBtn.dataset.list, listBtn); return; }
       const weekBtn = e.target.closest('[data-week]');
       if (weekBtn) { state.week = weekBtn.dataset.week; rerender(); return; }
       const scopeBtn = e.target.closest('[data-scope]');
-      if (scopeBtn) { state.scope = scopeBtn.dataset.scope; store.set('ethix.v2.scope.' + state.user, state.scope); rerender(); return; }
-      if (e.target.closest('[data-act="refresh"]')) refresh(true);
+      if (scopeBtn) { state.scope = scopeBtn.dataset.scope; store.set('ethix.v2.scope.' + state.user, state.scope); rerender(); }
     });
     view.addEventListener('scroll', (e) => { if (e.target.classList && e.target.classList.contains('tile-body')) markOverflow(); }, true);
     window.addEventListener('resize', () => { if (!$('#shell').hidden) markOverflow(); });
@@ -1913,6 +2257,9 @@
       const nav = e.target.closest('[data-href]');
       if (nav && !nav.disabled) { e.preventDefault(); closeOverlays(true); go(nav.dataset.href); return; }
       if (e.target.closest('[data-act="new-job"]')) { openNewJob(); return; }
+      const nb = e.target.closest('[data-act="notif"]'); if (nb) { openNotifications(nb); return; }
+      const ab = e.target.closest('[data-act="account"], [data-act="more"]'); if (ab) { openAccount(ab); return; }
+      if (e.target.closest('[data-act="adm-add"]') && isAdmin()) openAddUser();
     });
     document.addEventListener('keydown', (e) => {
       if (!state.signedIn) return;
@@ -1924,14 +2271,13 @@
       if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) { const s = $('#searchInput') || $('#jobsSearch'); if (s) { e.preventDefault(); s.focus(); } }
     });
     $('#drawerBody').addEventListener('click', (e) => {
-      if (state.overlay === 'form' || state.overlay === 'sheet' || state.overlay === 'quick') return;
+      if (['form', 'sheet', 'quick', 'admin'].includes(state.overlay)) return;
       const jobBtn = e.target.closest('[data-job]'); if (jobBtn) { openJob(jobBtn.dataset.job); return; }
       if (e.target.closest('[data-act="logout"]')) { closeOverlays(true); confirmLogout(); }
     });
     $('#drawerClose').addEventListener('click', () => closeOverlays());
     $('#scrim').addEventListener('click', () => closeOverlays());
     $('#logoutBtn').addEventListener('click', confirmLogout);
-    $('#bottomBar').addEventListener('click', (e) => { const b = e.target.closest('[data-act="more"]'); if (b) openMore(b); });
     window.addEventListener('hashchange', () => { if (!state.signedIn) return; state.navDepth++; closeOverlays(true); render(false); });
   }
 
@@ -1942,6 +2288,7 @@
     initJobs();
     initVoyage();
     initForms();
+    initPeople();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 
