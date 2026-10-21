@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, morning round, delays)
+   enquiries, follow-ups, delays)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -775,10 +775,10 @@
   function currentRoute() {
     const h = decodeURIComponent(location.hash || '');
     const m = h.match(/^#\/job\/(.+)$/);
-    let r = m ? { name: 'job', jobNo: m[1].trim() } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/round' ? { name: 'round' } : { name: 'home' };
+    let r = m ? { name: 'job', jobNo: m[1].trim() } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : { name: 'home' };
     if (isAdmin()) { if (r.name !== 'activity') r = { name: 'admin' }; }      // admin works with people, not jobs
     else if (r.name === 'admin' || r.name === 'activity' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote())) r = { name: 'home' };
-    const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity|round|enquiries)$/.test(h) ? '#/home' : null;
+    const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity|round|follow-ups|enquiries)$/.test(h) ? '#/home' : r.name === 'round' && h === '#/round' ? '#/follow-ups' : null;
     if (want && h !== want) history.replaceState(null, '', want);
     return r;
   }
@@ -831,7 +831,7 @@
     ];
     if (isSales()) items.push({ id: 'enquiries', label: 'My enquiries', icon: 'enq', href: '#/enquiries', count: enqOpen().length });
     else if (canEdit()) items.push(
-      { id: 'round', label: 'Morning round', icon: 'check', href: '#/round', count: roundRows(today0()).due.length },
+      { id: 'round', label: 'Follow-ups', icon: 'check', href: '#/follow-ups', count: roundRows(today0()).due.length },
       { id: 'enquiries', label: 'Enquiries', icon: 'enq', href: '#/enquiries', count: enqNew().length },
       { id: 'fleet', label: 'Fleet', icon: 'fleet', soon: true }, { id: 'costing', label: 'Costing', icon: 'costing', soon: true },
       { id: 'analysis', label: 'Analysis', icon: 'analysis', soon: true });
@@ -1994,7 +1994,7 @@
   // ---------- my account ----------
   function accountPanel() {
     const go2 = (href, ic, label, n) => '<button type="button" class="acct-go" data-href="' + href + '">' + icon(ic, 18) + '<span>' + label + '</span>' + (n ? '<b>' + n + '</b>' : '') + '</button>';
-    const shortcuts = canEdit() ? go2('#/round', 'check', 'Morning round', roundRows(today0()).due.length) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length)
+    const shortcuts = canEdit() ? go2('#/follow-ups', 'check', 'Follow-ups', roundRows(today0()).due.length) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length)
       : isSales() ? go2('#/enquiries', 'enq', 'My enquiries', enqOpen().length) : '';
     return (shortcuts ? '<div class="acct-shortcuts">' + shortcuts + '</div>' : '') + '<div class="acct"><span class="avatar">' + esc(initials(state.user)) + '</span><div><div class="acct-name" id="drawerTitle">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(ROLE_NAMES[state.role] || state.role) + '</div></div></div>' +
       '<form class="tile pw-form" id="pwForm" novalidate><h3 class="tile-title">CHANGE PASSWORD</h3>' +
@@ -2230,7 +2230,7 @@
   }
 
   // ================================================================ PHASE 4
-  // Morning round (follow-ups), delays and enquiries.
+  // Follow-ups (the daily check of every job), delays and enquiries.
   const EVERY_N = { DAILY: 1, '2 DAYS': 2, WEEKLY: 7, PAUSED: 0 };
   const EVERY_LABEL = { DAILY: 'Daily', '2 DAYS': 'Every 2 days', WEEKLY: 'Weekly', PAUSED: 'Paused' };
   const dayOf = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d; };
@@ -2285,7 +2285,8 @@
     const text = remark !== undefined ? remark : had ? had[2] : '';
     state.follow.checks[K] = [[had ? had[0] : Date.now(), state.user, text]].concat(prev.filter((c) => c !== had));
     state.followBusy.add(K);
-    rerender(); refreshOverlay(); updateNav();
+    if (!had) state.justChecked = K;
+    rerender(); state.justChecked = null; refreshOverlay(); updateNav();
     setSaving(1);
     try {
       const res = await api.call('ethixFollowCheck', [j.jobNo, text]);
@@ -2297,7 +2298,7 @@
       else if (remark !== undefined) toast('Remark saved');
     } catch (e) {
       state.follow.checks[K] = prev;
-      if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'The morning round needs the Phase 4 Code.gs update.' : 'Not saved: ' + e.message, { error: true });
+      if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'Follow-ups need the Phase 4 Code.gs update.' : 'Not saved: ' + e.message, { error: true });
     } finally { state.followBusy.delete(K); setSaving(-1); rerender(); refreshOverlay(); updateNav(); }
   }
   async function followUndo(no) {
@@ -2317,7 +2318,7 @@
     closeOverlays(); rerender(); updateNav();
     setSaving(1);
     try { const res = await api.call('ethixFollowPlan', [j.jobNo, every]); if (!res || !res.ok) throw new Error((res && res.error) || 'Not saved.'); toast(j.jobNo + ': ' + EVERY_LABEL[every].toLowerCase()); }
-    catch (e) { if (prev === undefined) delete state.follow.plan[K]; else state.follow.plan[K] = prev; rerender(); updateNav(); if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'The morning round needs the Phase 4 Code.gs update.' : e.message, { error: true }); }
+    catch (e) { if (prev === undefined) delete state.follow.plan[K]; else state.follow.plan[K] = prev; rerender(); updateNav(); if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'Follow-ups need the Phase 4 Code.gs update.' : e.message, { error: true }); }
     finally { setSaving(-1); }
   }
   const everyMenu = (no) => () => {
@@ -2325,7 +2326,7 @@
     const cur = planFor(j);
     return '<div class="pop-title">How often?</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p><div class="choice-row is-stack">' +
       Object.keys(EVERY_N).map((k) => '<button type="button" class="choice' + (k === cur ? ' is-on' : '') + '" data-set-every="' + esc(k) + '" data-no="' + esc(j.jobNo) + '" aria-pressed="' + (k === cur) + '">' + EVERY_LABEL[k] + '</button>').join('') + '</div>' +
-      '<div class="pop-hint">Paused jobs leave the round until you change it back.</div>';
+      '<div class="pop-hint">Paused jobs leave Follow-ups until you change it back.</div>';
   };
   const checkedMenu = (no) => () => {
     const j = findJob(no); if (!j) return '';
@@ -2377,7 +2378,7 @@
     if (!j.active && !checksFor(j).length) return '';
     const t0 = today0(), f = followState(j, t0);
     const status = f.today ? '<span class="fu-ok">' + icon('check', 16) + 'Checked today ' + hm(f.last[0]) + ' · ' + esc(f.last[1]) + '</span>'
-      : f.every === 'PAUSED' ? '<span class="fu-muted">Paused — not in the morning round</span>'
+      : f.every === 'PAUSED' ? '<span class="fu-muted">Paused — not in Follow-ups</span>'
       : f.due ? '<span class="fu-due">Due today' + (f.last ? ' · last ' + esc(lastCheckText(f, t0)) : '') + '</span>'
       : '<span class="fu-muted">Next check in ' + f.nextIn + (f.nextIn === 1 ? ' day' : ' days') + ' · last ' + esc(lastCheckText(f, t0)) + '</span>';
     const remark = f.last && f.last[2] ? '<p class="fu-remark">“' + esc(f.last[2]) + '”</p>' : '';
@@ -2389,18 +2390,23 @@
       followCalendar(j) + '</section>';
   }
 
-  // ---------- the morning round page ----------
+  // ---------- the Follow-ups page ----------
+  const TICK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="tick" d="M6.5 12.5l3.6 3.6L17.5 8.5"/></svg>';
+  function checkCircle(j, f) {
+    const mine = f.mineToday, other = f.today && !mine ? f.last : null;
+    if (mine) return '<button type="button" class="rr-check is-on' + (state.justChecked === keyOf(j) ? ' is-new' : '') + '" data-check-menu="' + esc(j.jobNo) + '" aria-label="' + esc(j.jobNo + ' checked at ' + hm(mine[0]) + '. Add a remark or undo') + '" title="Checked ' + hm(mine[0]) + ' — remark or undo">' + TICK + '</button><span class="rr-time">' + hm(mine[0]) + '</span>';
+    return '<button type="button" class="rr-check' + (other ? ' is-other' : '') + '" data-check="' + esc(j.jobNo) + '" aria-label="' + esc(other ? nice(other[1]) + ' checked ' + j.jobNo + ' at ' + hm(other[0]) + '. Add your check' : 'Mark ' + j.jobNo + ' as checked today') + '" title="' + esc(other ? nice(other[1]) + ' checked at ' + hm(other[0]) + ' — tap to add yours' : 'Mark as checked today') + '">' + TICK + '</button>';
+  }
   function roundRow(x, t0) {
     const j = x.j, f = x.f;
-    return '<li class="rr' + (f.today ? ' is-done' : '') + (f.due ? ' is-due' : '') + '">' +
+    return '<li class="rr' + (f.today ? ' is-done' : '') + (f.mineToday ? ' is-mine' : '') + (f.due ? ' is-due' : '') + '">' +
       '<button type="button" class="rr-main" data-job="' + esc(j.jobNo) + '"><span class="rr-job">' + esc(j.jobNo) + '<span class="badge">' + esc(j.type) + '</span></span>' +
         '<span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span></button>' +
       '<span class="rr-next">' + toneChip(j.next) + '</span>' +
       '<span class="rr-last"><span>' + esc(lastCheckText(f, t0)) + '</span>' + (f.last && f.last[2] ? '<span class="rr-remark">“' + esc(f.last[2]) + '”</span>' : '') + '</span>' +
       '<span class="rr-strip">' + dotStrip(j, t0, 14) + '</span>' +
       '<span class="rr-every"><button type="button" class="every-pill" data-every="' + esc(j.jobNo) + '">' + EVERY_LABEL[f.every] + icon('chevron', 13) + '</button></span>' +
-      '<span class="rr-act">' + (f.mineToday ? '<button type="button" class="rr-check is-on" data-check-menu="' + esc(j.jobNo) + '" aria-label="Checked today. Remark or undo">' + icon('check', 18) + '<span>Checked</span></button>'
-        : '<button type="button" class="rr-check" data-check="' + esc(j.jobNo) + '">' + icon('check', 18) + '<span>' + (f.today ? 'Check too' : 'Check') + '</span></button>') + '</span>' +
+      '<span class="rr-act">' + checkCircle(j, f) + '</span>' +
     '</li>';
   }
   function renderRound(first) {
@@ -2411,23 +2417,29 @@
     const match = (x) => !q || (x.j.jobNo + ' ' + x.j.customer + ' ' + x.j.route + ' ' + x.j.cs + ' ' + x.j.sales).toUpperCase().includes(q);
     const total = R.due.length + R.done.length;
     const pct = total ? Math.round((R.done.length / total) * 100) : 100;
-    const section = (id, title, rows, sub) => rows.length ? '<section class="round-sec' + anim + '" aria-labelledby="rs-' + id + '"><div class="tile-head"><h2 class="tile-title" id="rs-' + id + '">' + title + ' <span class="tile-count">' + rows.length + '</span></h2>' + (sub ? '<span class="small">' + sub + '</span>' : '') + '</div><ul class="round-list">' + rows.map((x) => roundRow(x, t0)).join('') + '</ul></section>' : '';
+    // Jobs you check stay in place while you work down the list (nothing jumps under the mouse).
+    // They regroup when you come back to the page, switch My jobs / Everyone, or press Refresh.
+    if (first || !state.roundSnap) state.roundSnap = R.due.map((x) => keyOf(x.j));
+    const inSnap = new Set(state.roundSnap), byKey = new Map(R.all.map((x) => [keyOf(x.j), x]));
+    const dueRows = state.roundSnap.map((k) => byKey.get(k)).filter((x) => x && (x.f.due || x.f.today)).concat(R.due.filter((x) => !inSnap.has(keyOf(x.j))));
+    const doneRows = R.done.filter((x) => !inSnap.has(keyOf(x.j)));
+    const section = (id, title, rows, sub, n) => rows.length ? '<section class="round-sec' + anim + '" aria-labelledby="rs-' + id + '"><div class="tile-head"><h2 class="tile-title" id="rs-' + id + '">' + title + ' <span class="tile-count">' + (n === undefined ? rows.length : n) + '</span></h2>' + (sub ? '<span class="small">' + sub + '</span>' : '') + '</div><ul class="round-list">' + rows.map((x) => roundRow(x, t0)).join('') + '</ul></section>' : '';
     const keepQ = $('#roundSearch') ? $('#roundSearch').value : state.roundQ || '';
     $('#view').innerHTML = '<div class="wrap round-page">' +
-      '<header class="page-head' + anim + '"><div class="head-main"><div class="meta-line"><span>MORNING ROUND · ' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div><h1 class="greeting">Morning round</h1></div>' +
+      '<header class="page-head' + anim + '"><div class="head-main"><div class="meta-line"><span>FOLLOW-UPS · ' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div><h1 class="greeting">Follow-ups</h1></div>' +
         '<div class="head-actions">' +
           '<div class="seg" role="group" aria-label="Whose jobs"><button type="button" data-scope="mine" aria-pressed="' + (state.scope === 'mine') + '"><span class="l-full">My jobs</span><span class="l-short">Mine</span></button><button type="button" data-scope="all" aria-pressed="' + (state.scope === 'all') + '"><span class="l-full">Everyone</span><span class="l-short">All</span></button></div>' +
-          '<label class="search">' + icon('search') + '<input id="roundSearch" type="search" placeholder="Job no, customer, port…" aria-label="Filter the round" autocomplete="off" value="' + esc(keepQ) + '"></label>' +
+          '<label class="search">' + icon('search') + '<input id="roundSearch" type="search" placeholder="Job no, customer, port…" aria-label="Filter follow-ups" autocomplete="off" value="' + esc(keepQ) + '"></label>' +
           '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' +
         '</div></header>' +
       '<section class="round-progress tile tile-ink' + anim + '" style="--d:40ms" aria-label="Progress">' +
         '<div class="rp-num"><b>' + R.done.length + '</b><span>/ ' + total + '</span></div>' +
-        '<div class="rp-main"><div class="rp-label">' + (total && R.due.length === 0 ? 'Round complete — every job due today is checked.' : 'checked today · ' + R.due.length + ' still due') + '</div>' +
+        '<div class="rp-main"><div class="rp-label">' + (total && R.due.length === 0 ? 'All followed up — every job due today is checked.' : 'checked today · ' + R.due.length + ' still due') + '</div>' +
           '<div class="rp-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '"><i style="width:' + pct + '%"></i></div>' +
-          '<div class="rp-chips"><span>' + R.later.length + ' not due today</span><span>' + R.paused.length + ' paused</span><span>Tap ✓ when you’ve checked a job · set how often per job</span></div></div>' +
+          '<div class="rp-chips"><span>' + R.later.length + ' not due today</span><span>' + R.paused.length + ' paused</span><span>Tap the circle once you’ve followed a job up · set how often per job</span></div></div>' +
       '</section>' +
-      section('due', 'DUE NOW', R.due.filter(match), 'Most urgent first') +
-      section('done', 'CHECKED TODAY', R.done.filter(match)) +
+      section('due', 'DUE NOW', dueRows.filter(match), 'Most urgent first', dueRows.filter((x) => x.f.due && match(x)).length) +
+      section('done', 'CHECKED TODAY', doneRows.filter(match)) +
       section('later', 'NOT DUE TODAY', R.later.filter(match), 'By their own pace') +
       section('paused', 'PAUSED', R.paused.filter(match)) +
       (!R.all.length ? '<section class="tile">' + empty('check', 'No active jobs in this view.') + '</section>' : '') +
@@ -2717,14 +2729,14 @@
     btn.disabled = false; btn.textContent = 'SEND ENQUIRY';
   }
 
-  // ---------- home: the round and enquiries at a glance ----------
+  // ---------- home: follow-ups and enquiries at a glance ----------
   function homeChips() {
     const t0 = today0();
     if (canEdit()) {
       const R = roundRows(t0);
       const total = R.due.length + R.done.length;
       const n = enqNew().length;
-      return '<button type="button" class="meta-chip' + (R.due.length ? '' : ' is-done') + '" data-href="#/round">' + icon('check', 12) + 'ROUND <b>' + R.done.length + '/' + total + '</b></button>' +
+      return '<button type="button" class="meta-chip' + (R.due.length ? '' : ' is-done') + '" data-href="#/follow-ups">' + icon('check', 12) + 'FOLLOW-UPS <b>' + R.done.length + '/' + total + '</b></button>' +
         (n ? '<button type="button" class="meta-chip is-teal" data-href="#/enquiries"><b>' + n + '</b> NEW ' + (n === 1 ? 'ENQUIRY' : 'ENQUIRIES') + '</button>' : '');
     }
     if (isSales()) {
@@ -2746,7 +2758,7 @@
       const b = e.target.closest('[data-check], [data-check-menu], [data-every], [data-cal], [data-enq], [data-enq-tab], [data-act="delay"], [data-act="delays"], [data-delay-rm]');
       if (!b) return;
       if (b.dataset.check && canEdit()) { followCheck(b.dataset.check); return; }
-      if (b.dataset.checkMenu && canEdit()) { openPop(b, 'MORNING ROUND', checkedMenu(b.dataset.checkMenu)); return; }
+      if (b.dataset.checkMenu && canEdit()) { openPop(b, 'FOLLOW-UP', checkedMenu(b.dataset.checkMenu)); return; }
       if (b.dataset.every && canEdit()) { openPop(b, 'FOLLOW-UP', everyMenu(b.dataset.every)); return; }
       if (b.dataset.cal) { const K = String(b.dataset.calJob).toUpperCase(); state.calOffset[K] = Math.min(0, (state.calOffset[K] || 0) + +b.dataset.cal); rerender(); return; }
       if (b.dataset.enq) { openEnquiry(b.dataset.enq, b); return; }
@@ -2764,7 +2776,8 @@
     });
     view.addEventListener('click', (e) => {          // Mine / Everyone on the round page
       const s = e.target.closest('[data-scope]');
-      if (s && state.route && state.route.name === 'round' && canEdit()) { state.scope = s.dataset.scope; store.set('ethix.v2.scope.' + state.user, state.scope); rerender(); updateNav(); }
+      if (s && state.route && state.route.name === 'round' && canEdit()) { state.scope = s.dataset.scope; store.set('ethix.v2.scope.' + state.user, state.scope); state.roundSnap = null; rerender(); updateNav(); }
+      if (e.target.closest('[data-act="refresh"]') && state.route && state.route.name === 'round') state.roundSnap = null;
     });
     // popover / sheet: frequency, remark, undo
     const onPop = (e) => {
