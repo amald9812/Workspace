@@ -1,5 +1,6 @@
 /* =============================================================================
-   ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications)
+   ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
+   enquiries, morning round, delays)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -58,7 +59,9 @@
     header: [], ix: {}, rowMap: new Map(), order: [], jobIndex: new Map(), pending: new Map(), saving: new Map(), savingCount: 0,
     stories: new Map(), voyageTab: {}, route: null, overlay: null, dirty: false, navDepth: 0, signedIn: false,
     jobsUi: { cat: 'all', status: 'active', q: '', sort: 'urgent', limit: 120 }, newJob: { type: '' }, editing: null, lists: null,
-    notif: null, lastNotes: {}, admin: null, activity: [], actQ: ''
+    notif: null, lastNotes: {}, admin: null, activity: [], actQ: '',
+    follow: { plan: {}, checks: {}, days: 35 }, followBusy: new Set(), followHist: {}, calOffset: {}, delays: {}, enquiries: [],
+    enqTab: '', enqQ: '', roundQ: '', delayForm: null, newEnq: { type: '' }, enqSub: null, enqOpenId: null
   };
 
   // ---------------------------------------------------------- dates & parsing
@@ -714,6 +717,10 @@
     if (boot.notif) state.notif = boot.notif;
     if (boot.admin) state.admin = boot.admin;
     if (Array.isArray(boot.activity)) state.activity = boot.activity;
+    if (boot.follow) state.follow = { plan: boot.follow.plan || {}, checks: boot.follow.checks || {}, days: boot.follow.days || 35 };
+    if (boot.delays) state.delays = boot.delays;
+    if (Array.isArray(boot.enquiries)) state.enquiries = boot.enquiries;
+    state.followHist = {};
     state.syncedAt = Date.now();
     rebuildJobs();
   }
@@ -768,10 +775,10 @@
   function currentRoute() {
     const h = decodeURIComponent(location.hash || '');
     const m = h.match(/^#\/job\/(.+)$/);
-    let r = m ? { name: 'job', jobNo: m[1].trim() } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : { name: 'home' };
+    let r = m ? { name: 'job', jobNo: m[1].trim() } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/round' ? { name: 'round' } : { name: 'home' };
     if (isAdmin()) { if (r.name !== 'activity') r = { name: 'admin' }; }      // admin works with people, not jobs
-    else if (r.name === 'admin' || r.name === 'activity') r = { name: 'home' };
-    const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity)$/.test(h) ? '#/home' : null;
+    else if (r.name === 'admin' || r.name === 'activity' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote())) r = { name: 'home' };
+    const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity|round|enquiries)$/.test(h) ? '#/home' : null;
     if (want && h !== want) history.replaceState(null, '', want);
     return r;
   }
@@ -789,7 +796,9 @@
     if (r.name === 'admin') renderAdmin(changed || first);
     else if (r.name === 'activity') renderActivity(changed || first);
     else if (r.name === 'jobs') renderJobs(changed || first);
-    else if (r.name === 'job') renderVoyage(r.jobNo, changed || first);
+    else if (r.name === 'round') renderRound(changed || first);
+    else if (r.name === 'enquiries') renderEnquiries(changed || first);
+    else if (r.name === 'job') { renderVoyage(r.jobNo, changed || first); fitNames(); }
     else renderHome(changed || first);
     if (changed) view.scrollTop = 0;
     updateNav();
@@ -820,18 +829,20 @@
       { id: 'jobs', label: isSales() ? 'My jobs' : 'Jobs', icon: 'jobs', href: '#/jobs', count: active },
       { id: 'notif', label: 'Notifications', icon: 'bell', act: 'notif' }
     ];
-    if (isSales()) items.push({ id: 'enq', label: 'Enquiries', icon: 'enq', soon: true });
-    else items.push(
-      { id: 'enq', label: 'Enquiries', icon: 'enq', soon: true }, { id: 'round', label: 'Morning round', icon: 'check', soon: true },
+    if (isSales()) items.push({ id: 'enquiries', label: 'My enquiries', icon: 'enq', href: '#/enquiries', count: enqOpen().length });
+    else if (canEdit()) items.push(
+      { id: 'round', label: 'Morning round', icon: 'check', href: '#/round', count: roundRows(today0()).due.length },
+      { id: 'enquiries', label: 'Enquiries', icon: 'enq', href: '#/enquiries', count: enqNew().length },
       { id: 'fleet', label: 'Fleet', icon: 'fleet', soon: true }, { id: 'costing', label: 'Costing', icon: 'costing', soon: true },
       { id: 'analysis', label: 'Analysis', icon: 'analysis', soon: true });
+    else items.push({ id: 'fleet', label: 'Fleet', icon: 'fleet', soon: true }, { id: 'costing', label: 'Costing', icon: 'costing', soon: true });
     return items;
   }
   function renderChrome() {
     $('#navList').innerHTML = navItems().map((n) =>
       '<button type="button" class="nav-item" data-nav="' + n.id + '"' + (n.soon ? ' disabled title="Coming soon"' : n.act ? ' data-act="' + n.act + '"' : ' data-href="' + n.href + '"') + ' aria-label="' + esc(n.label) + '">' +
       '<span class="nav-ic">' + icon(n.icon) + (n.act === 'notif' ? '<span class="badge-dot" hidden></span>' : '') + '</span><span class="nav-label">' + esc(n.label) + '</span>' +
-      (n.soon ? '<span class="soon">SOON</span>' : n.count ? '<span class="count">' + n.count + '</span>' : '') + '</button>'
+      (n.soon ? '<span class="soon">SOON</span>' : n.count !== undefined ? '<span class="count' + (['round', 'enquiries'].includes(n.id) ? ' is-pill' : '') + '"' + (n.count ? '' : ' hidden') + '>' + n.count + '</span>' : '') + '</button>'
     ).join('');
     $('#sideAvatar').textContent = initials(state.user);
     $('#sideName').textContent = state.user === 'MASTER' ? 'ADMIN' : state.user;
@@ -842,8 +853,9 @@
     const plus = (act, label) => '<button type="button" class="tab-plus" data-act="' + act + '" aria-label="' + label + '">' + icon('plus', 22) + '</button>';
     $('#bottomBar').innerHTML = isAdmin() ? tab('admin', '#/admin', 'users', 'People') + tab('activity', '#/activity', 'clock', 'Activity') + plus('adm-add', 'Add user') + more
       : canEdit() ? tab('home', '#/home', 'home', 'Home') + tab('jobs', '#/jobs', 'jobs', 'Jobs') + plus('new-job', 'New job') + bell + more
-      : tab('home', '#/home', 'home', 'Home') + tab('jobs', '#/jobs', 'jobs', isSales() ? 'My jobs' : 'Jobs') + bell + more;
-    $('#bottomBar').classList.toggle('is-4', !canEdit());
+      : isSales() ? tab('home', '#/home', 'home', 'Home') + tab('jobs', '#/jobs', 'jobs', 'My jobs') + plus('new-enq', 'New enquiry') + bell + more
+      : tab('home', '#/home', 'home', 'Home') + tab('jobs', '#/jobs', 'jobs', 'Jobs') + bell + more;
+    $('#bottomBar').classList.toggle('is-4', !canEdit() && !isSales());
     drawBadges();
   }
   function updateNav() {
@@ -852,6 +864,9 @@
     $$('[data-nav]').forEach((b) => { if (b.dataset.nav === cur) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
     const c = $('#navList [data-nav="jobs"] .count'); if (c) c.textContent = state.jobs.filter((j) => j.active).length;
     const p = $('#navList [data-nav="admin"] .count'); if (p && state.admin) p.textContent = state.admin.users.length;
+    const setCount = (id, n) => { const el = $('#navList [data-nav="' + id + '"] .count'); if (el) { el.textContent = n; el.hidden = !n; } };
+    if (canEdit()) { setCount('round', roundRows(today0()).due.length); setCount('enquiries', enqNew().length); }
+    if (isSales()) setCount('enquiries', enqOpen().length);
     drawBadges();
   }
 
@@ -967,7 +982,7 @@
     view.innerHTML =
       '<div class="wrap home">' +
       '<header class="page-head' + anim + '" style="--d:0ms">' +
-        '<div class="head-main"><div class="meta-line"><span>' + (isSales() ? 'SALES · ' : '') + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div>' +
+        '<div class="head-main"><div class="meta-line"><span>' + (isSales() ? 'SALES · ' : '') + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span>' + homeChips() + '</div>' +
         '<h1 class="greeting">' + greeting() + ', ' + esc(state.user === 'MASTER' ? 'Admin' : nice(state.user)) + '</h1></div>' +
         '<div class="head-actions">' +
           (canEdit() ? '<div class="seg" role="group" aria-label="Whose jobs"><button type="button" data-scope="mine" aria-pressed="' + (state.scope === 'mine') + '"><span class="l-full">My jobs</span><span class="l-short">Mine</span></button><button type="button" data-scope="all" aria-pressed="' + (state.scope === 'all') + '"><span class="l-full">Everyone</span><span class="l-short">All</span></button></div>' : '') +
@@ -1028,7 +1043,7 @@
       '<span class="jr-track">' + miniTrack(j, 26) + '</span>' +
       '<span class="jr-next">' + toneChip(j.next) + '</span>' +
       '<span class="jr-etd"><span class="jr-k">ETD</span>' + esc(j.etd ? fmt(j.etd) : '—') + '</span>' +
-      '<span class="jr-eta"><span class="jr-k">ETA</span>' + esc(j.eta ? fmt(j.eta) : '—') + '</span>' +
+      '<span class="jr-eta"><span class="jr-k">ETA</span>' + esc(j.eta ? fmt(j.eta) : '—') + (delayInfo(j) ? '<span class="jr-delay" title="Delayed">+' + delayInfo(j).total + 'D</span>' : '') + '</span>' +
       '<span class="jr-people"><span class="jr-cs">' + esc(j.cs || '—') + '</span><span class="jr-sales">' + esc(j.sales || '') + '</span></span>' +
       '<span class="jr-dates">' + esc(j.mode === 'misc' ? (j.cs || '') : (j.etd ? fmt(j.etd) : '—') + ' → ' + (j.eta ? fmt(j.eta) : '—')) + '</span>' +
       '</button></li>';
@@ -1262,6 +1277,12 @@
     let m = a.match(/^SET (.+?) TO (.+)$/);
     if (m) return 'set ' + m[1].toLowerCase().replace(/\bsi\b/g, 'SI').replace(/\bdo\b/g, 'DO').replace(/\bed\b/g, 'ED').replace(/\bbl\b/g, 'BL').replace(/\bawb\b/g, 'AWB').replace(/\betd\b/g, 'ETD').replace(/\beta\b/g, 'ETA').replace(/\bpol\b/g, 'POL').replace(/\bpod\b/g, 'POD').replace(/\bdg\b/g, 'DG').replace(/\bcs\b/g, 'CS') + ' to ' + m[2];
     if (a === 'CREATED NEW JOB') return 'opened the job';
+    m = a.match(/^MARKED DELAY \+(\d+) DAYS? — (.+?) \((.+)\)$/);
+    if (m) return 'marked a delay: +' + m[1] + (m[1] === '1' ? ' day' : ' days') + ' · ' + m[2].toLowerCase() + ' · ' + m[3].toLowerCase();
+    m = a.match(/^REMOVED DELAY \+(\d+) DAYS? — (.+)$/);
+    if (m) return 'removed a delay (+' + m[1] + (m[1] === '1' ? ' day' : ' days') + ' · ' + m[2].toLowerCase() + ')';
+    m = a.match(/^BOOKED ENQUIRY (\S+) AS JOB$/);
+    if (m) return 'booked enquiry ' + m[1] + ' as this job';
     if (a === 'UPDATED JOB DETAILS') return 'updated the job details';
     m = a.match(/^UPDATED (.+)$/);
     if (m) return 'updated ' + m[1].toLowerCase();
@@ -1342,9 +1363,9 @@
       '<div class="crumbs' + anim + '"><button type="button" class="back-btn" data-act="back" aria-label="Back">' + icon('back', 18) + '</button><button type="button" class="link-btn" data-href="#/jobs">JOBS</button><span>/ ' + esc(j.jobNo) + '</span>' +
         (canEdit() ? '<button type="button" class="status-pill tone-' + tone + '" data-act="status" aria-label="Job status: ' + sw + '. Change">' + esc(sw) + icon('chevron', 14) + '</button>' : '<span class="status-pill tone-' + tone + '">' + esc(sw) + '</span>') + '</div>' +
       '<header class="vhead' + anim + '" style="--d:30ms">' +
-        '<div class="vh-titles"><div class="vh-idrow"><h1 class="vh-job">' + esc(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + '</div>' +
+        '<div class="vh-titles"><div class="vh-idrow"><h1 class="vh-job">' + esc(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + delayChip(j) + '</div>' +
         '<div class="vh-cust">' + esc(j.customer || '—') + '</div></div>' +
-        (canEdit() ? '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="edit">' + icon('edit', 16) + '<span>Edit details</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>'
+        (canEdit() ? '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="delay" title="Mark delay" aria-label="Mark delay">' + icon('clock', 16) + '<span>Mark delay</span></button><button type="button" class="btn-ghost" data-act="edit" title="Edit details" aria-label="Edit details">' + icon('edit', 16) + '<span>Edit details</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>'
           : '<div class="vh-actions is-ro"><span class="ro-chip">' + icon('lock', 14) + '<span>UPDATED BY ' + esc(j.cs || 'CUSTOMER SERVICE') + '</span></span>' + (canNote() ? '<button type="button" class="btn-brutal btn-icon" data-act="focus-note">' + icon('note', 16) + '<span>ADD A NOTE</span></button>' : '') + '</div>') +
       '</header>' +
       '<div class="ft-top">' + freeCard(j, t0) + '</div>' +
@@ -1356,7 +1377,7 @@
         : tab === 'story' ? '<section class="tile story-card">' + noteBox() + storyList(j.jobNo) + '</section>'
         : '<div class="voverview">' +
             '<section class="tile story-card" aria-labelledby="storyTitle"><div class="tile-head"><h2 class="tile-title" id="storyTitle">THE STORY SO FAR</h2>' + (isSales() ? (j.cs ? '<span class="small">Shared with ' + esc(j.cs) + ' (Customer Service)</span>' : '') : j.sales ? '<span class="small">Shared with ' + esc(j.sales) + ' (sales)</span>' : '') + '</div>' + noteBox() + storyList(j.jobNo, 6) + '</section>' +
-            '<div class="vside"><div class="ft-side">' + freeCard(j, t0) + '</div>' + keyDates(j, t0) + cargoCard(j) + peopleCard(j) + '</div>' +
+            '<div class="vside"><div class="ft-side">' + freeCard(j, t0) + '</div>' + delayCard(j) + followCard(j) + keyDates(j, t0) + cargoCard(j) + peopleCard(j) + '</div>' +
           '</div>') +
       '</div>' + nextBar;
   }
@@ -1467,7 +1488,14 @@
   function refreshOverlay() {
     if (!popRender) return;
     if (state.overlay === 'pop' && !$('#pop').hidden) { const b = $('#pop .pop-body'); if (b) { b.innerHTML = popRender(); placePop(); } }
-    else if (state.overlay === 'sheet' || state.overlay === 'drawer' || state.overlay === 'quick') { if (!$('#drawer').hidden) $('#drawerBody').innerHTML = popRender(); }
+    else if (['sheet', 'drawer', 'quick', 'enq', 'delay'].includes(state.overlay) && !$('#drawer').hidden) {
+      const body = $('#drawerBody'), keep = {}, f = document.activeElement && document.activeElement.id, y = body.scrollTop;
+      $$('input[id], textarea[id]', body).forEach((i) => { keep[i.id] = i.value; });
+      body.innerHTML = popRender();
+      Object.keys(keep).forEach((id) => { const el = document.getElementById(id); if (el && keep[id] && !el.value) el.value = keep[id]; });
+      body.scrollTop = y;
+      if (f) { const el = document.getElementById(f); if (el) el.focus({ preventScroll: true }); }
+    }
   }
   function closeOverlays(silent) {
     const had = !$('#pop').hidden || !$('#drawer').hidden;
@@ -1760,20 +1788,20 @@
       datalist('dlPorts', state.jobs.map((j) => j.pol).concat(state.jobs.map((j) => j.pod), ['JEBEL ALI', 'DUBAI', 'KHOR FAKKAN', 'SHARJAH', 'ABU DHABI'])) +
       datalist('dlSales', SALES_NAMES.concat(state.users.filter((u) => String(u.role || '').toUpperCase().trim() === 'SALES').map((u) => String(u.name || '').toUpperCase()), state.jobs.map((j) => j.sales))) + datalist('dlJobs', state.jobs.slice(-400).map((j) => j.jobNo));
   }
-  function typeTiles(sel) {
-    return '<div class="type-grid" role="radiogroup" aria-label="Job type">' + TYPE_GROUPS.map(([title, opts, ic]) =>
+  function typeTiles(sel, noMis) {
+    return '<div class="type-grid" role="radiogroup" aria-label="Job type">' + TYPE_GROUPS.filter((g) => !noMis || g[2] !== 'costing').map(([title, opts, ic]) =>
       '<div class="type-group"><div class="tg-title">' + (ic === 'ship' ? SHIP(26) : ic === 'plane' ? PLANE(20) : ic === 'van' ? VAN(20) : icon(ic === 'globe' ? 'globe' : ic === 'truck' ? 'truck' : 'costing', 18)) + '<span>' + esc(title) + '</span></div><div class="tg-opts">' +
       opts.map(([code, l]) => '<button type="button" class="type-opt" role="radio" data-type="' + code + '" aria-checked="' + (sel === code) + '"><span class="badge">' + code + '</span><span>' + esc(l) + '</span></button>').join('') + '</div></div>').join('') + '</div>';
   }
 
   // ---------- New job ----------
-  function openNewJob(type) {
+  function openNewJob(type, opts) {
     if (!state.signedIn || !canEdit()) return;
     loadLists();
     closeOverlays(true);
-    state.newJob = { type: type || '' };
+    state.newJob = Object.assign({ type: type || '' }, opts || {});
     $('#drawer').classList.add('is-wide');
-    $('#drawerKicker').textContent = 'NEW JOB';
+    $('#drawerKicker').textContent = state.newJob.enq ? 'BOOK ENQUIRY AS JOB' : 'NEW JOB';
     renderNewJob();
     showDrawer(document.activeElement);
     state.overlay = 'form';
@@ -1786,15 +1814,16 @@
     if (t === 'AFE') d.pol = 'DUBAI';
     if (['SFIF', 'SFIL', 'CND'].includes(t)) d.pod = 'JEBEL ALI';
     if (t === 'AFI') d.pod = 'DUBAI';
+    Object.keys(state.newJob.prefill || {}).forEach((k) => { if (state.newJob.prefill[k]) d[k] = state.newJob.prefill[k]; });
     const tf = TYPE_FIELDS[t];
-    $('#drawerBody').innerHTML = '<h2 class="peek-job form-title" id="drawerTitle"><span class="badge badge-lg">' + t + '</span> ' + esc(TYPE_NAMES[t]) + '</h2>' +
+    $('#drawerBody').innerHTML = '<h2 class="peek-job form-title" id="drawerTitle"><span class="badge badge-lg">' + t + '</span> ' + esc(TYPE_NAMES[t]) + (state.newJob.enq ? ' <span class="chip chip-teal">FROM ' + esc(state.newJob.enq) + '</span>' : '') + '</h2>' +
       '<button type="button" class="link-btn quiet form-back" data-act="nj-type">' + icon('back', 14) + 'Change type</button>' +
       '<form class="job-form" id="jobForm" novalidate>' +
         '<fieldset><legend>JOB</legend><div class="fgrid">' + ['jobNo', 'customer', 'vendor', 'cs', 'sales', 'opened'].map((k) => input(k, t, d[k] || '')).join('') + '</div></fieldset>' +
         (tf.length ? '<fieldset><legend>' + (t === 'MIS' ? 'LINK' : 'CARGO & ROUTE') + '</legend><div class="fgrid' + (d.dg === 'DG' ? ' has-dg' : '') + '">' + tf.map((k) => input(k, t, d[k] || '')).join('') + '</div></fieldset>' : '') +
-        '<fieldset><legend>REMARKS</legend><div class="fgrid">' + input('remarks', t, '') + '</div></fieldset>' +
+        '<fieldset><legend>REMARKS</legend><div class="fgrid">' + input('remarks', t, d.remarks || '') + '</div></fieldset>' +
         '<div class="form-error" id="formError" role="alert"></div>' +
-        '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit">CREATE JOB</button></div>' +
+        '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit">' + (state.newJob.enq ? 'BOOK AS JOB' : 'CREATE JOB') + '</button></div>' +
       '</form>' + formLists();
     syncDg();
   }
@@ -1821,15 +1850,17 @@
     if (bad) { const first = $('.field.has-error input, .field.has-error select', form); if (first) first.focus(); return; }
     if (v.dg !== 'DG') delete v.dgCut;
     const payload = Object.assign({ type: t }, v);
-    const btn = $('#formSubmit'); btn.disabled = true; btn.textContent = 'CREATING…';
+    const btn = $('#formSubmit'); btn.disabled = true; btn.textContent = state.newJob.enq ? 'BOOKING…' : 'CREATING…';
     try {
-      const res = await api.call('ethixAddJob', [payload, '']);
+      const enqId = state.newJob.enq;
+      const res = enqId ? await api.call('ethixEnquiryBook', [enqId, payload]) : await api.call('ethixAddJob', [payload, '']);
       if (res && res.ok && Array.isArray(res.row)) {
         const k = String(res.row[state.ix.jobNo] || v.jobNo).toUpperCase();
         state.rowMap.set(k, res.row);
         rebuildJob(k);
+        if (res.enquiry) putEnq(res.enquiry);
         closeOverlays();
-        toast('Job ' + v.jobNo + ' created');
+        toast(enqId ? 'Booked as job ' + v.jobNo + ' — ' + nice(res.enquiry ? res.enquiry.sales : 'sales') + ' was told' : 'Job ' + v.jobNo + ' created');
         openJob(v.jobNo);
         renderChrome(); updateNav();
         return;
@@ -1839,7 +1870,7 @@
     } catch (e) {
       if (e.kind !== 'auth') $('#formError').textContent = /not available/i.test(e.message) ? 'Creating jobs needs the Phase 2 Code.gs update.' : e.message;
     }
-    btn.disabled = false; btn.textContent = 'CREATE JOB';
+    btn.disabled = false; btn.textContent = state.newJob.enq ? 'BOOK AS JOB' : 'CREATE JOB';
   }
 
   // ---------- Edit details ----------
@@ -1931,17 +1962,19 @@
     if (x.kind === 'note') return '<strong>' + esc(x.from) + '</strong> added a note';
     if (x.kind === 'job') return '<strong>' + esc(x.from) + '</strong> opened a job for you';
     if (x.kind === 'enquiry') return '<strong>' + esc(x.from) + '</strong> sent an enquiry';
+    if (x.kind === 'enq-update') return '<strong>' + esc(x.from) + '</strong> on enquiry';
+    if (x.kind === 'delay') return '<strong>' + esc(x.from) + '</strong> marked a delay on';
     return '<strong>' + esc(x.from) + '</strong> updated';
   }
   function notifPanel() {
     const n = state.notif || { items: [] };
     const seen = state.notifSeenShown || 0;
     return '<h2 class="peek-job list-title" id="drawerTitle">Notifications</h2>' +
-      (n.items && n.items.length ? '<ol class="notif-list">' + n.items.map((x) => '<li><button type="button" class="notif' + (x.t > seen ? ' is-new' : '') + '" data-job="' + esc(x.job) + '">' +
+      (n.items && n.items.length ? '<ol class="notif-list">' + n.items.map((x) => '<li><button type="button" class="notif' + (x.t > seen ? ' is-new' : '') + (x.kind === 'delay' ? ' is-delay' : '') + '" ' + (/^EQ-/.test(x.job) ? 'data-enq' : 'data-job') + '="' + esc(x.job) + '">' +
         '<span class="avatar' + (x.kind === 'note' ? ' is-other' : '') + '">' + esc(initials(x.from)) + '</span>' +
         '<span class="nt-body"><span class="nt-head">' + notifText(x) + ' <span class="nt-job">' + esc(x.job) + '</span></span>' +
         '<span class="nt-text">' + esc(x.text) + '</span><span class="nt-when">' + esc(ago(x.t)) + '</span></span></button></li>').join('') + '</ol>'
-        : '<div class="tile-empty">' + icon('bell', 22) + '<span>' + (state.role === 'SALES' ? 'Updates from Customer Service on your jobs will show here.' : 'Notes from sales on your jobs will show here.') + '</span></div>');
+        : '<div class="tile-empty">' + icon('bell', 22) + '<span>' + (state.role === 'SALES' ? 'Updates, delays and enquiry replies from Customer Service show here.' : 'Notes and enquiries from sales show here.') + '</span></div>');
   }
   function openNotifications(opener) {
     closeOverlays(true);
@@ -1960,7 +1993,10 @@
 
   // ---------- my account ----------
   function accountPanel() {
-    return '<div class="acct"><span class="avatar">' + esc(initials(state.user)) + '</span><div><div class="acct-name" id="drawerTitle">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(ROLE_NAMES[state.role] || state.role) + '</div></div></div>' +
+    const go2 = (href, ic, label, n) => '<button type="button" class="acct-go" data-href="' + href + '">' + icon(ic, 18) + '<span>' + label + '</span>' + (n ? '<b>' + n + '</b>' : '') + '</button>';
+    const shortcuts = canEdit() ? go2('#/round', 'check', 'Morning round', roundRows(today0()).due.length) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length)
+      : isSales() ? go2('#/enquiries', 'enq', 'My enquiries', enqOpen().length) : '';
+    return (shortcuts ? '<div class="acct-shortcuts">' + shortcuts + '</div>' : '') + '<div class="acct"><span class="avatar">' + esc(initials(state.user)) + '</span><div><div class="acct-name" id="drawerTitle">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(ROLE_NAMES[state.role] || state.role) + '</div></div></div>' +
       '<form class="tile pw-form" id="pwForm" novalidate><h3 class="tile-title">CHANGE PASSWORD</h3>' +
         '<input type="text" name="username" autocomplete="username" value="' + esc(state.user) + '" class="sr-only" tabindex="-1" aria-hidden="true" readonly>' +
         '<label class="pop-label" for="pwCurrent">Current password</label><div class="pw-wrap is-plain"><input id="pwCurrent" type="password" autocomplete="current-password"><button type="button" class="pw-eye" data-eye="pwCurrent" aria-label="Show password">' + EYE + '</button></div>' +
@@ -1970,7 +2006,7 @@
         '<div class="pin-msg" id="pwMsg" role="alert"></div>' +
         '<button type="submit" class="btn-brutal" id="pwSave">CHANGE PASSWORD</button></form>' +
       '<button type="button" class="btn-ghost acct-logout" data-act="logout">' + icon('logout', 16) + 'Log out</button>' +
-      (state.role !== 'ADMIN' ? '<div class="peek-card"><h3>COMING SOON</h3>' + (state.role === 'SALES' ? ['Enquiries — send a booking request', 'Delays on your jobs'] : ['Enquiries from sales', 'Morning follow-up round', 'Mark delay', 'Fleet timeline', 'Costing and analysis']).map((t) => '<div class="kv"><span class="kv-k">' + esc(t) + '</span><span class="kv-v">SOON</span></div>').join('') + '</div>' : '');
+      (canEdit() ? '<div class="peek-card"><h3>COMING SOON</h3>' + ['Fleet timeline', 'Costing and analysis'].map((t) => '<div class="kv"><span class="kv-k">' + esc(t) + '</span><span class="kv-v">SOON</span></div>').join('') + '</div>' : '');
   }
   function openAccount(opener) {
     closeOverlays(true);
@@ -2047,7 +2083,10 @@
       [/^CHANGED ROLE OF (.+) TO (.+)$/, (m) => 'made ' + m[1] + ' ' + nice(m[2])],
       [/^REMOVED USER (.+)$/, (m) => 'removed ' + m[1]], [/^UNLOCKED (.+)$/, (m) => 'unlocked ' + m[1]],
       [/^SIGNED OUT EVERYONE$/, () => 'signed everyone out'], [/^SIGNED OUT (.+)$/, (m) => 'signed out ' + m[1]],
-      [/^(?:LOCKED|PIN LOCKOUT) — (\d+) WRONG (PASSWORDS|PINS)$/, (m) => 'was locked after ' + m[1] + ' wrong ' + m[2].toLowerCase()]
+      [/^(?:LOCKED|PIN LOCKOUT) — (\d+) WRONG (PASSWORDS|PINS)$/, (m) => 'was locked after ' + m[1] + ' wrong ' + m[2].toLowerCase()],
+      [/^NEW ENQUIRY (\S+) — (.+)$/, (m) => 'raised enquiry ' + m[1] + ' · ' + m[2]], [/^TOOK ENQUIRY (\S+)$/, (m) => 'took enquiry ' + m[1]],
+      [/^DECLINED ENQUIRY (\S+)$/, (m) => 'declined enquiry ' + m[1]], [/^CANCELLED ENQUIRY (\S+)$/, (m) => 'cancelled enquiry ' + m[1]],
+      [/^REOPENED ENQUIRY (\S+)$/, (m) => 'reopened enquiry ' + m[1]]
     ];
     for (const [re, f] of M) { const m = a.match(re); if (m) return f(m); }
     return friendly(a);
@@ -2190,13 +2229,640 @@
     });
   }
 
+  // ================================================================ PHASE 4
+  // Morning round (follow-ups), delays and enquiries.
+  const EVERY_N = { DAILY: 1, '2 DAYS': 2, WEEKLY: 7, PAUSED: 0 };
+  const EVERY_LABEL = { DAILY: 'Daily', '2 DAYS': 'Every 2 days', WEEKLY: 'Weekly', PAUSED: 'Paused' };
+  const dayOf = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d; };
+  const hm = (t) => { const d = new Date(t); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  const keyOf = (j) => String(j.jobNo || j).toUpperCase();
+
+  // ---------- follow-ups ----------
+  function planFor(j) { const p = state.follow.plan[keyOf(j)]; return EVERY_N[p] !== undefined ? p : j.hold ? 'WEEKLY' : 'DAILY'; }
+  function checksFor(j) { return state.follow.checks[keyOf(j)] || []; }
+  function followState(j, t0) {
+    const every = planFor(j), checks = checksFor(j), last = checks[0] || null;
+    const since = last ? days(dayOf(last[0]), t0) : null;
+    const today = since === 0;
+    const mineToday = checks.find((c) => days(dayOf(c[0]), t0) === 0 && c[1] === state.user) || null;
+    const n = EVERY_N[every];
+    const due = every !== 'PAUSED' && !today && (since === null || since >= n);
+    const nextIn = every === 'PAUSED' ? null : today ? n : since === null ? 0 : Math.max(0, n - since);
+    return { every, checks, last, since, today, mineToday, due, nextIn };
+  }
+  function roundRows(t0, list) {
+    const rows = (list || scoped().filter((j) => j.active)).map((j) => ({ j, f: followState(j, t0) }));
+    return {
+      due: rows.filter((x) => x.f.due).sort((a, b) => a.j.next.rank - b.j.next.rank || (b.f.since === null ? 1e9 : b.f.since) - (a.f.since === null ? 1e9 : a.f.since)),
+      done: rows.filter((x) => x.f.today).sort((a, b) => b.f.last[0] - a.f.last[0]),
+      later: rows.filter((x) => !x.f.due && !x.f.today && x.f.every !== 'PAUSED').sort((a, b) => a.f.nextIn - b.f.nextIn),
+      paused: rows.filter((x) => x.f.every === 'PAUSED' && !x.f.today),
+      all: rows
+    };
+  }
+  const lastCheckText = (f, t0) => {
+    if (!f.last) return 'Not checked yet';
+    const d = days(dayOf(f.last[0]), t0);
+    return (d === 0 ? 'Today ' + hm(f.last[0]) : d === 1 ? 'Yesterday' : d + ' days ago') + ' · ' + f.last[1];
+  };
+  function dotStrip(j, t0, n) {
+    const by = {};
+    checksFor(j).forEach((c) => { const k = days(dayOf(c[0]), t0); (by[k] = by[k] || []).push(c); });
+    let out = '';
+    for (let i = n - 1; i >= 0; i--) {
+      const c = by[-i], d = addDays(t0, -i);
+      out += '<i class="' + (c ? 'on' : '') + (i === 0 ? ' is-today' : '') + '" title="' + esc(fmt(d) + (c ? ' · ' + c.map((x) => x[1] + ' ' + hm(x[0])).join(', ') : ' · not checked')) + '"></i>';
+    }
+    return '<span class="dots" aria-hidden="true">' + out + '</span>';
+  }
+  async function followCheck(no, remark) {
+    const j = findJob(no); if (!j || !canEdit()) return;
+    const K = keyOf(j);
+    if (state.followBusy.has(K)) return;
+    const prev = (state.follow.checks[K] || []).slice();
+    const t0 = today0();
+    const had = prev.find((c) => days(dayOf(c[0]), t0) === 0 && c[1] === state.user);
+    const text = remark !== undefined ? remark : had ? had[2] : '';
+    state.follow.checks[K] = [[had ? had[0] : Date.now(), state.user, text]].concat(prev.filter((c) => c !== had));
+    state.followBusy.add(K);
+    rerender(); refreshOverlay(); updateNav();
+    setSaving(1);
+    try {
+      const res = await api.call('ethixFollowCheck', [j.jobNo, text]);
+      if (!res || !res.ok) throw new Error((res && res.error) || 'Not saved.');
+      const now = state.follow.checks[K] || [];
+      const mine = now.find((c) => days(dayOf(c[0]), today0()) === 0 && c[1] === state.user);
+      if (mine) mine[0] = res.t || mine[0];
+      if (!had && remark === undefined) toast(j.jobNo + ' checked', { action: { label: 'Undo', fn: () => followUndo(j.jobNo) } });
+      else if (remark !== undefined) toast('Remark saved');
+    } catch (e) {
+      state.follow.checks[K] = prev;
+      if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'The morning round needs the Phase 4 Code.gs update.' : 'Not saved: ' + e.message, { error: true });
+    } finally { state.followBusy.delete(K); setSaving(-1); rerender(); refreshOverlay(); updateNav(); }
+  }
+  async function followUndo(no) {
+    const j = findJob(no); if (!j) return;
+    const K = keyOf(j), prev = (state.follow.checks[K] || []).slice(), t0 = today0();
+    state.follow.checks[K] = prev.filter((c) => !(days(dayOf(c[0]), t0) === 0 && c[1] === state.user));
+    closeOverlays(); rerender(); updateNav();
+    setSaving(1);
+    try { const res = await api.call('ethixFollowUndo', [j.jobNo]); if (!res || !res.ok) throw new Error((res && res.error) || 'Not undone.'); toast('Check undone'); }
+    catch (e) { state.follow.checks[K] = prev; rerender(); updateNav(); if (e.kind !== 'auth') toast(e.message, { error: true }); }
+    finally { setSaving(-1); }
+  }
+  async function followPlan(no, every) {
+    const j = findJob(no); if (!j || !canEdit()) return;
+    const K = keyOf(j), prev = state.follow.plan[K];
+    state.follow.plan[K] = every;
+    closeOverlays(); rerender(); updateNav();
+    setSaving(1);
+    try { const res = await api.call('ethixFollowPlan', [j.jobNo, every]); if (!res || !res.ok) throw new Error((res && res.error) || 'Not saved.'); toast(j.jobNo + ': ' + EVERY_LABEL[every].toLowerCase()); }
+    catch (e) { if (prev === undefined) delete state.follow.plan[K]; else state.follow.plan[K] = prev; rerender(); updateNav(); if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'The morning round needs the Phase 4 Code.gs update.' : e.message, { error: true }); }
+    finally { setSaving(-1); }
+  }
+  const everyMenu = (no) => () => {
+    const j = findJob(no); if (!j) return '';
+    const cur = planFor(j);
+    return '<div class="pop-title">How often?</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p><div class="choice-row is-stack">' +
+      Object.keys(EVERY_N).map((k) => '<button type="button" class="choice' + (k === cur ? ' is-on' : '') + '" data-set-every="' + esc(k) + '" data-no="' + esc(j.jobNo) + '" aria-pressed="' + (k === cur) + '">' + EVERY_LABEL[k] + '</button>').join('') + '</div>' +
+      '<div class="pop-hint">Paused jobs leave the round until you change it back.</div>';
+  };
+  const checkedMenu = (no) => () => {
+    const j = findJob(no); if (!j) return '';
+    const f = followState(j, today0());
+    const mine = f.mineToday;
+    return '<div class="pop-title">' + (mine ? 'Checked today ' + hm(mine[0]) : 'Check ' + esc(j.jobNo)) + '</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p>' +
+      '<form class="pop-form" data-remark="' + esc(j.jobNo) + '"><label class="pop-label" for="remarkInput">Remark (optional)</label><input type="text" id="remarkInput" maxlength="200" value="' + esc(mine ? mine[2] : '') + '" placeholder="e.g. called customer, docs tomorrow" autocomplete="off">' +
+      '<button type="submit" class="btn-brutal pop-main" data-primary>' + (mine ? 'SAVE REMARK' : 'CHECK WITH REMARK') + '</button></form>' +
+      (mine ? '<button type="button" class="btn-ghost pop-wide" data-undo-check="' + esc(j.jobNo) + '">Undo today’s check</button>' : '');
+  };
+  // the month calendar of checked days (older months load when you go back)
+  function followCalendar(j) {
+    const K = keyOf(j), t0 = today0();
+    const off = state.calOffset[K] || 0;
+    const first = new Date(t0.getFullYear(), t0.getMonth() + off, 1);
+    const hist = state.followHist[K];
+    const windowStart = addDays(t0, -(state.follow.days || 35));
+    if (!hist && first < windowStart) loadFollowHistory(j);
+    const all = hist || checksFor(j);
+    const by = {};
+    all.forEach((c) => { const d = dayOf(c[0]); const k = d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate(); (by[k] = by[k] || []).push(c); });
+    const lead = (first.getDay() + 6) % 7;                         // Monday first
+    const n = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+    let cells = '';
+    for (let i = 0; i < lead; i++) cells += '<span></span>';
+    let count = 0;
+    for (let d = 1; d <= n; d++) {
+      const day = new Date(first.getFullYear(), first.getMonth(), d);
+      const c = by[day.getFullYear() + '-' + day.getMonth() + '-' + d];
+      if (c) count++;
+      const tip = fmt(day) + (c ? ' · ' + c.map((x) => x[1] + ' ' + hm(x[0]) + (x[2] ? ' — ' + x[2] : '')).join(' · ') : '');
+      cells += '<span class="cal-d' + (c ? ' is-on' : '') + (+day === +t0 ? ' is-today' : '') + (day > t0 ? ' is-future' : '') + '" title="' + esc(tip) + '">' + d + '</span>';
+    }
+    const MONTH = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'];
+    return '<div class="cal"><div class="cal-head"><button type="button" class="icon-btn cal-nav" data-cal="-1" data-cal-job="' + esc(j.jobNo) + '" aria-label="Previous month">' + icon('back', 14) + '</button>' +
+      '<span class="cal-title">' + MONTH[first.getMonth()] + ' ' + first.getFullYear() + '<small>' + count + (count === 1 ? ' day checked' : ' days checked') + '</small></span>' +
+      '<button type="button" class="icon-btn cal-nav is-next" data-cal="1" data-cal-job="' + esc(j.jobNo) + '" aria-label="Next month"' + (off >= 0 ? ' disabled' : '') + '>' + icon('back', 14) + '</button></div>' +
+      '<div class="cal-grid" role="img" aria-label="Days this job was checked"><b>M</b><b>T</b><b>W</b><b>T</b><b>F</b><b>S</b><b>S</b>' + cells + '</div>' +
+      (state.followHist[K] === null ? '<div class="pop-hint">Loading older checks…</div>' : '') + '</div>';
+  }
+  function loadFollowHistory(j) {
+    const K = keyOf(j);
+    if (state.followHist[K] !== undefined) return;
+    state.followHist[K] = null;
+    api.call('ethixFollowHistory', [j.jobNo]).then((rows) => { state.followHist[K] = Array.isArray(rows) ? rows : []; rerender(); })
+      .catch(() => { state.followHist[K] = checksFor(j); rerender(); });
+  }
+  function followCard(j) {
+    if (!j.active && !checksFor(j).length) return '';
+    const t0 = today0(), f = followState(j, t0);
+    const status = f.today ? '<span class="fu-ok">' + icon('check', 16) + 'Checked today ' + hm(f.last[0]) + ' · ' + esc(f.last[1]) + '</span>'
+      : f.every === 'PAUSED' ? '<span class="fu-muted">Paused — not in the morning round</span>'
+      : f.due ? '<span class="fu-due">Due today' + (f.last ? ' · last ' + esc(lastCheckText(f, t0)) : '') + '</span>'
+      : '<span class="fu-muted">Next check in ' + f.nextIn + (f.nextIn === 1 ? ' day' : ' days') + ' · last ' + esc(lastCheckText(f, t0)) + '</span>';
+    const remark = f.last && f.last[2] ? '<p class="fu-remark">“' + esc(f.last[2]) + '”</p>' : '';
+    return '<section class="tile side-card fu-card" aria-labelledby="fuTitle"><div class="tile-head"><h2 class="tile-title" id="fuTitle">FOLLOW-UP</h2>' +
+      (canEdit() ? '<button type="button" class="every-pill" data-every="' + esc(j.jobNo) + '">' + EVERY_LABEL[f.every] + icon('chevron', 13) + '</button>' : '<span class="every-pill is-ro">' + EVERY_LABEL[f.every] + '</span>') + '</div>' +
+      '<div class="fu-status">' + status + '</div>' + remark +
+      (canEdit() && j.active ? (f.mineToday ? '<button type="button" class="btn-ghost fu-btn" data-check-menu="' + esc(j.jobNo) + '">' + icon('edit', 15) + 'Remark or undo</button>'
+        : '<button type="button" class="btn-brutal fu-btn" data-check="' + esc(j.jobNo) + '">' + icon('check', 16) + 'CHECKED TODAY</button>') : '') +
+      followCalendar(j) + '</section>';
+  }
+
+  // ---------- the morning round page ----------
+  function roundRow(x, t0) {
+    const j = x.j, f = x.f;
+    return '<li class="rr' + (f.today ? ' is-done' : '') + (f.due ? ' is-due' : '') + '">' +
+      '<button type="button" class="rr-main" data-job="' + esc(j.jobNo) + '"><span class="rr-job">' + esc(j.jobNo) + '<span class="badge">' + esc(j.type) + '</span></span>' +
+        '<span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span></button>' +
+      '<span class="rr-next">' + toneChip(j.next) + '</span>' +
+      '<span class="rr-last"><span>' + esc(lastCheckText(f, t0)) + '</span>' + (f.last && f.last[2] ? '<span class="rr-remark">“' + esc(f.last[2]) + '”</span>' : '') + '</span>' +
+      '<span class="rr-strip">' + dotStrip(j, t0, 14) + '</span>' +
+      '<span class="rr-every"><button type="button" class="every-pill" data-every="' + esc(j.jobNo) + '">' + EVERY_LABEL[f.every] + icon('chevron', 13) + '</button></span>' +
+      '<span class="rr-act">' + (f.mineToday ? '<button type="button" class="rr-check is-on" data-check-menu="' + esc(j.jobNo) + '" aria-label="Checked today. Remark or undo">' + icon('check', 18) + '<span>Checked</span></button>'
+        : '<button type="button" class="rr-check" data-check="' + esc(j.jobNo) + '">' + icon('check', 18) + '<span>' + (f.today ? 'Check too' : 'Check') + '</span></button>') + '</span>' +
+    '</li>';
+  }
+  function renderRound(first) {
+    const t0 = today0();
+    const anim = first ? ' reveal' : '';
+    const q = (state.roundQ || '').trim().toUpperCase();
+    const R = roundRows(t0);
+    const match = (x) => !q || (x.j.jobNo + ' ' + x.j.customer + ' ' + x.j.route + ' ' + x.j.cs + ' ' + x.j.sales).toUpperCase().includes(q);
+    const total = R.due.length + R.done.length;
+    const pct = total ? Math.round((R.done.length / total) * 100) : 100;
+    const section = (id, title, rows, sub) => rows.length ? '<section class="round-sec' + anim + '" aria-labelledby="rs-' + id + '"><div class="tile-head"><h2 class="tile-title" id="rs-' + id + '">' + title + ' <span class="tile-count">' + rows.length + '</span></h2>' + (sub ? '<span class="small">' + sub + '</span>' : '') + '</div><ul class="round-list">' + rows.map((x) => roundRow(x, t0)).join('') + '</ul></section>' : '';
+    const keepQ = $('#roundSearch') ? $('#roundSearch').value : state.roundQ || '';
+    $('#view').innerHTML = '<div class="wrap round-page">' +
+      '<header class="page-head' + anim + '"><div class="head-main"><div class="meta-line"><span>MORNING ROUND · ' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div><h1 class="greeting">Morning round</h1></div>' +
+        '<div class="head-actions">' +
+          '<div class="seg" role="group" aria-label="Whose jobs"><button type="button" data-scope="mine" aria-pressed="' + (state.scope === 'mine') + '"><span class="l-full">My jobs</span><span class="l-short">Mine</span></button><button type="button" data-scope="all" aria-pressed="' + (state.scope === 'all') + '"><span class="l-full">Everyone</span><span class="l-short">All</span></button></div>' +
+          '<label class="search">' + icon('search') + '<input id="roundSearch" type="search" placeholder="Job no, customer, port…" aria-label="Filter the round" autocomplete="off" value="' + esc(keepQ) + '"></label>' +
+          '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' +
+        '</div></header>' +
+      '<section class="round-progress tile tile-ink' + anim + '" style="--d:40ms" aria-label="Progress">' +
+        '<div class="rp-num"><b>' + R.done.length + '</b><span>/ ' + total + '</span></div>' +
+        '<div class="rp-main"><div class="rp-label">' + (total && R.due.length === 0 ? 'Round complete — every job due today is checked.' : 'checked today · ' + R.due.length + ' still due') + '</div>' +
+          '<div class="rp-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '"><i style="width:' + pct + '%"></i></div>' +
+          '<div class="rp-chips"><span>' + R.later.length + ' not due today</span><span>' + R.paused.length + ' paused</span><span>Tap ✓ when you’ve checked a job · set how often per job</span></div></div>' +
+      '</section>' +
+      section('due', 'DUE NOW', R.due.filter(match), 'Most urgent first') +
+      section('done', 'CHECKED TODAY', R.done.filter(match)) +
+      section('later', 'NOT DUE TODAY', R.later.filter(match), 'By their own pace') +
+      section('paused', 'PAUSED', R.paused.filter(match)) +
+      (!R.all.length ? '<section class="tile">' + empty('check', 'No active jobs in this view.') + '</section>' : '') +
+      '</div>';
+    if (keepQ && state.roundFocus) { const s = $('#roundSearch'); s.focus(); s.setSelectionRange(keepQ.length, keepQ.length); }
+  }
+
+  // ---------- delays ----------
+  const DELAY_WHERE = {
+    sea: ['ORIGIN PORT', 'TRANSSHIPMENT', 'AT SEA', 'DESTINATION PORT', 'CUSTOMS', 'DELIVERY'],
+    air: ['ORIGIN AIRPORT', 'TRANSIT', 'IN FLIGHT', 'DESTINATION AIRPORT', 'CUSTOMS', 'DELIVERY'],
+    courier: ['PICK-UP', 'IN TRANSIT', 'CUSTOMS', 'DELIVERY'],
+    misc: ['CUSTOMS', 'DELIVERY']
+  };
+  const DELAY_REASONS = ['Vessel delayed', 'Port congestion', 'Weather', 'Rolled over', 'Missed cutoff', 'Documents', 'Customs hold', 'Customer request'];
+  const movesDates = (where) => ['ORIGIN PORT', 'ORIGIN AIRPORT', 'PICK-UP'].includes(where) ? { etd: true, eta: true } : ['CUSTOMS', 'DELIVERY'].includes(where) ? { etd: false, eta: false } : { etd: false, eta: true };
+  function delayInfo(j) {
+    const list = (state.delays[keyOf(j)] || []).slice().sort((a, b) => a.t - b.t);
+    if (!list.length) return null;
+    const total = list.reduce((a, d) => a + (d.days || 0), 0);
+    const firstEtd = list.map((d) => parseDate(d.etdBefore)).find(Boolean), firstEta = list.map((d) => parseDate(d.etaBefore)).find(Boolean);
+    return {
+      list, total,
+      etd: firstEtd && j.etd && +firstEtd !== +j.etd ? { from: firstEtd, to: j.etd, d: days(firstEtd, j.etd) } : null,
+      eta: firstEta && j.eta && +firstEta !== +j.eta ? { from: firstEta, to: j.eta, d: days(firstEta, j.eta) } : null,
+      plan: firstEtd && firstEta ? days(firstEtd, firstEta) : null, now: j.etd && j.eta ? days(j.etd, j.eta) : null
+    };
+  }
+  const delayChip = (j) => { const d = delayInfo(j); return d && d.total ? '<button type="button" class="delay-chip" data-act="delays">' + icon('clock', 13) + 'DELAYED +' + d.total + (d.total === 1 ? ' DAY' : ' DAYS') + '</button>' : ''; };
+  function delayCard(j) {
+    const d = delayInfo(j); if (!d) return '';
+    const sign = (n) => (n > 0 ? '+' : '') + n;
+    return '<section class="tile side-card delay-card" id="delayCard" aria-labelledby="dlTitle"><div class="tile-head"><h2 class="tile-title" id="dlTitle">DELAYS</h2>' + (canEdit() ? '<button type="button" class="tile-link" data-act="delay">+ Mark another</button>' : '') + '</div>' +
+      '<div class="dl-total"><b>+' + d.total + '</b><span>' + (d.total === 1 ? 'day' : 'days') + ' delayed in all · ' + d.list.length + (d.list.length === 1 ? ' delay' : ' delays') + '</span></div>' +
+      (d.etd ? '<div class="kv"><span class="kv-k">' + (j.mode === 'air' ? 'Departure' : j.mode === 'courier' ? 'Pick-up' : 'Sailing') + '</span><span class="kv-v">' + fmt(d.etd.from) + ' → ' + fmt(d.etd.to) + ' · ' + sign(d.etd.d) + 'D</span></div>' : '') +
+      (d.eta ? '<div class="kv"><span class="kv-k">Arrival</span><span class="kv-v">' + fmt(d.eta.from) + ' → ' + fmt(d.eta.to) + ' · ' + sign(d.eta.d) + 'D</span></div>' : '') +
+      (d.plan !== null && d.now !== null && d.plan !== d.now ? '<div class="kv"><span class="kv-k">Transit</span><span class="kv-v">planned ' + d.plan + ' days · now ' + d.now + '</span></div>' : '') +
+      '<ol class="dl-list">' + d.list.slice().reverse().map((x) => '<li><span class="dl-days">+' + x.days + 'D</span><span class="dl-body"><b>' + esc(nice(x.where)) + '</b> · ' + esc(x.reason) + (x.note ? '<span class="dl-note">' + esc(x.note) + '</span>' : '') +
+        '<span class="dl-meta">' + esc(x.by) + ' · ' + esc(ago(x.t)) + '</span></span>' + (canEdit() ? '<button type="button" class="icon-btn dl-rm" data-delay-rm="' + esc(x.id) + '" aria-label="Remove this delay">' + icon('close', 13) + '</button>' : '') + '</li>').join('') + '</ol></section>';
+  }
+  function openDelay(no) {
+    const j = findJob(no); if (!j || !canEdit()) return;
+    closeOverlays(true);
+    const where = (DELAY_WHERE[j.mode] || DELAY_WHERE.sea);
+    const start = j.atSea || j.arrived ? (j.arrived ? where[where.length - 3] || where[0] : where[2] || where[0]) : where[0];
+    state.delayForm = { no: j.jobNo, days: 2, where: start, reason: '', other: '', note: '', move: movesDates(start) };
+    $('#drawer').classList.add('is-wide');
+    $('#drawerKicker').textContent = 'MARK DELAY';
+    popRender = delayForm;
+    $('#drawerBody').innerHTML = delayForm();
+    showDrawer(document.activeElement);
+    state.overlay = 'delay';
+  }
+  function delayForm() {
+    const F = state.delayForm; const j = findJob(F.no); if (!j) return '';
+    const where = DELAY_WHERE[j.mode] || DELAY_WHERE.sea;
+    const shift = (d) => (d ? fmt(addDays(d, F.days)) : '—');
+    const reasonOk = F.reason && (F.reason !== 'Other' || F.other.trim());
+    return '<h2 class="peek-job form-title" id="drawerTitle">' + esc(j.jobNo) + ' <span class="small">' + esc(j.customer || '') + '</span></h2>' +
+      '<form class="job-form delay-form" id="delayForm" novalidate>' +
+        '<fieldset><legend>HOW MANY DAYS?</legend><div class="dl-stepper"><button type="button" class="icon-btn" data-dl-step="-1" aria-label="One day less">−</button><output id="dlDays" aria-live="polite">' + F.days + '<small>' + (F.days === 1 ? 'day' : 'days') + '</small></output><button type="button" class="icon-btn" data-dl-step="1" aria-label="One day more">+</button></div>' +
+          '<div class="choice-row">' + [1, 2, 3, 5, 7, 10, 14].map((n) => '<button type="button" class="choice' + (F.days === n ? ' is-on' : '') + '" data-dl-days="' + n + '">' + n + 'D</button>').join('') + '</div></fieldset>' +
+        '<fieldset><legend>WHERE?</legend><div class="choice-row">' + where.map((w) => '<button type="button" class="choice' + (F.where === w ? ' is-on' : '') + '" data-dl-where="' + w + '" aria-pressed="' + (F.where === w) + '">' + esc(nice(w)) + '</button>').join('') + '</div></fieldset>' +
+        '<fieldset><legend>WHY?</legend><div class="choice-row">' + DELAY_REASONS.concat(['Other']).map((r) => '<button type="button" class="choice' + (F.reason === r ? ' is-on' : '') + '" data-dl-reason="' + esc(r) + '" aria-pressed="' + (F.reason === r) + '">' + esc(r) + '</button>').join('') + '</div>' +
+          (F.reason === 'Other' ? '<div class="field is-wide"><label for="dlOther">Reason</label><input id="dlOther" maxlength="60" value="' + esc(F.other) + '" autocomplete="off"></div>' : '') +
+          '<div class="field is-wide"><label for="dlNote">Note (optional — the sales person sees it)</label><input id="dlNote" maxlength="300" value="' + esc(F.note) + '" placeholder="e.g. vessel omitted Jebel Ali, next call Friday" autocomplete="off"></div></fieldset>' +
+        '<fieldset><legend>MOVE THE DATES TOO?</legend>' +
+          (j.etd ? '<button type="button" class="toggle dl-move" data-dl-move="etd" aria-pressed="' + F.move.etd + '"><span class="toggle-track"><span class="toggle-thumb"></span></span>' + (j.mode === 'courier' ? 'Pick-up' : 'ETD') + ' ' + fmt(j.etd) + ' → <b>' + shift(j.etd) + '</b></button>' : '') +
+          (j.eta ? '<button type="button" class="toggle dl-move" data-dl-move="eta" aria-pressed="' + F.move.eta + '"><span class="toggle-track"><span class="toggle-thumb"></span></span>' + (j.mode === 'courier' ? 'Delivery' : 'ETA') + ' ' + fmt(j.eta) + ' → <b>' + shift(j.eta) + '</b></button>' : '') +
+          (!j.etd && !j.eta ? '<p class="pop-hint">This job has no ETD / ETA yet.</p>' : '<p class="pop-hint">Editing ETD or ETA by hand never counts as a delay — only this does.</p>') + '</fieldset>' +
+        '<div class="form-error" id="formError" role="alert"></div>' +
+        '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit"' + (reasonOk ? '' : ' disabled') + '>MARK DELAY +' + F.days + 'D</button></div>' +
+      '</form>';
+  }
+  async function submitDelay() {
+    const F = state.delayForm; const j = findJob(F.no); if (!j) return;
+    const reason = F.reason === 'Other' ? F.other.trim() : F.reason;
+    if (!reason) { $('#formError').textContent = 'Choose a reason.'; return; }
+    const btn = $('#formSubmit'); btn.disabled = true; btn.textContent = 'SAVING…';
+    try {
+      const res = await api.call('ethixDelayAdd', [j.jobNo, { days: F.days, where: F.where, reason, note: F.note.trim(), moveEtd: !!(F.move.etd && j.etd), moveEta: !!(F.move.eta && j.eta) }]);
+      if (res && res.ok) {
+        const K = keyOf(j);
+        if (Array.isArray(res.row)) { state.rowMap.set(K, res.row); rebuildJob(K); }
+        state.delays[K] = res.delays || [];
+        closeOverlays(); rerender();
+        toast('Delay +' + F.days + (F.days === 1 ? ' day' : ' days') + ' marked', { action: { label: 'Undo', fn: () => removeDelay(res.id, true) } });
+        state.syncedAt = Date.now();
+        return;
+      }
+      $('#formError').textContent = (res && res.error) || 'Not saved.';
+    } catch (e) { if (e.kind !== 'auth') $('#formError').textContent = /not available/i.test(e.message) ? 'Mark delay needs the Phase 4 Code.gs update.' : e.message; }
+    btn.disabled = false; btn.textContent = 'MARK DELAY +' + F.days + 'D';
+  }
+  async function removeDelay(id, quiet) {
+    setSaving(1);
+    try {
+      const res = await api.call('ethixDelayRemove', [id]);
+      if (res && res.ok) {
+        const K = String(res.jobNo || '').toUpperCase();
+        if (Array.isArray(res.row)) { state.rowMap.set(K, res.row); rebuildJob(K); }
+        state.delays[K] = res.delays || [];
+        rerender();
+        toast(quiet ? 'Delay undone' : 'Delay removed' + (res.restored && res.restored.length ? ' — dates put back' : ''));
+        return;
+      }
+      toast((res && res.error) || 'Not removed.', { error: true });
+    } catch (e) { if (e.kind !== 'auth') toast(e.message, { error: true }); }
+    finally { setSaving(-1); }
+  }
+
+  // ---------- enquiries ----------
+  const ENQ_TABS_CS = [['new', 'New'], ['progress', 'In progress'], ['booked', 'Booked'], ['closed', 'Closed']];
+  const ENQ_TABS_SALES = [['open', 'Open'], ['booked', 'Booked'], ['closed', 'Closed']];
+  const enqBucket = (e) => (e.status === 'NEW' ? 'new' : e.status === 'IN PROGRESS' ? 'progress' : e.status === 'BOOKED' ? 'booked' : 'closed');
+  const enqInTab = (e, tab) => (tab === 'open' ? ['new', 'progress'].includes(enqBucket(e)) : enqBucket(e) === tab);
+  const enqOpen = () => state.enquiries.filter((e) => ['NEW', 'IN PROGRESS'].includes(e.status));
+  const enqNew = () => state.enquiries.filter((e) => e.status === 'NEW');
+  const ENQ_CHIP = { NEW: 'chip-teal', 'IN PROGRESS': 'chip-done', BOOKED: 'chip-hold', DECLINED: 'chip-calm', CANCELLED: 'chip-calm' };
+  function findEnq(id) { return state.enquiries.find((e) => e.id === id) || null; }
+  function putEnq(e) { const i = state.enquiries.findIndex((x) => x.id === e.id); if (i > -1) state.enquiries[i] = e; else state.enquiries.unshift(e); }
+  function enqRoute(e) { return (e.pol || '—') + ' → ' + (e.pod || '—'); }
+  function enqCard(e) {
+    const urgent = e.priority === 'URGENT' && ['NEW', 'IN PROGRESS'].includes(e.status);
+    const notes = e.thread.filter((x) => x.txt && !x.ev).length;
+    return '<button type="button" class="enq-card' + (urgent ? ' is-urgent' : '') + '" data-enq="' + esc(e.id) + '">' +
+      '<span class="ec-top"><span class="ec-id">' + esc(e.id) + '</span><span class="chip ' + (ENQ_CHIP[e.status] || 'chip-calm') + '">' + esc(e.status === 'IN PROGRESS' ? 'IN PROGRESS' : e.status) + '</span></span>' +
+      '<span class="ec-cust">' + esc(e.customer) + '</span>' +
+      '<span class="ec-route"><span class="badge">' + esc(e.type) + '</span>' + esc(enqRoute(e)) + '</span>' +
+      '<span class="ec-cargo">' + esc([e.cargo, e.commodity].filter(Boolean).join(' · ') || TYPE_NAMES[e.type] || '') + (e.ready ? ' · ready ' + fmt(parseDate(e.ready)) : '') + '</span>' +
+      '<span class="ec-foot"><span class="ec-who"><span class="avatar is-other">' + esc(initials(e.sales)) + '</span>' + esc(isSales() ? (e.cs ? e.cs + ' on it' : 'Waiting for Customer Service') : e.sales + (e.cs ? ' · ' + e.cs + ' on it' : '')) + '</span>' +
+        '<span class="ec-when">' + (urgent ? '<span class="chip chip-urgent">' + icon('alert', 12) + 'URGENT</span>' : '') + (notes ? '<span class="ec-notes">' + icon('note', 13) + notes + '</span>' : '') + esc(ago(e.t)) + '</span></span>' +
+      (e.status === 'BOOKED' ? '<span class="ec-booked">' + icon('check', 14) + 'Job ' + esc(e.job) + '</span>' : e.reason && ['DECLINED', 'CANCELLED'].includes(e.status) ? '<span class="ec-reason">' + esc(e.reason) + '</span>' : '') +
+    '</button>';
+  }
+  function renderEnquiries(first) {
+    const anim = first ? ' reveal' : '';
+    const tabs = isSales() ? ENQ_TABS_SALES : ENQ_TABS_CS;
+    if (!tabs.some((t) => t[0] === state.enqTab)) state.enqTab = tabs[0][0];
+    const q = (state.enqQ || '').trim().toUpperCase();
+    const list = state.enquiries.filter((e) => enqInTab(e, state.enqTab) && (!q || (e.id + ' ' + e.customer + ' ' + e.pol + ' ' + e.pod + ' ' + e.sales + ' ' + e.cs + ' ' + e.commodity).toUpperCase().includes(q)));
+    const keepQ = $('#enqSearch') ? $('#enqSearch').value : state.enqQ || '';
+    $('#view').innerHTML = '<div class="wrap enq-page">' +
+      '<header class="page-head' + anim + '"><div class="head-main"><div class="meta-line"><span>ENQUIRIES · ' + enqOpen().length + ' OPEN</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div><h1 class="greeting">' + (isSales() ? 'My enquiries' : 'Enquiries') + '</h1></div>' +
+        '<div class="head-actions"><label class="search">' + icon('search') + '<input id="enqSearch" type="search" placeholder="Customer, port, EQ no…" aria-label="Search enquiries" autocomplete="off" value="' + esc(keepQ) + '"></label>' +
+        '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' +
+        (canNote() ? '<button type="button" class="btn-brutal btn-icon" data-act="new-enq">' + icon('plus', 16) + '<span>NEW ENQUIRY</span></button>' : '') + '</div></header>' +
+      '<div class="chips-row enq-tabs' + anim + '" role="tablist" aria-label="Enquiry status" style="--d:40ms">' + tabs.map(([id, l]) => {
+        const n = state.enquiries.filter((e) => enqInTab(e, id)).length;
+        return '<button type="button" class="fchip" role="tab" data-enq-tab="' + id + '" aria-pressed="' + (state.enqTab === id) + '" aria-selected="' + (state.enqTab === id) + '">' + l + ' <span class="tab-n">' + n + '</span></button>';
+      }).join('') + '</div>' +
+      (list.length ? '<div class="enq-grid' + anim + '" style="--d:80ms">' + list.map(enqCard).join('') + '</div>'
+        : '<section class="tile' + anim + '" style="--d:80ms">' + empty('enq', state.enqTab === 'new' ? 'No new enquiries. New ones from sales land here and ring the bell.' : isSales() && state.enqTab === 'open' ? 'No open enquiries. Tap NEW ENQUIRY to send one to Customer Service.' : 'Nothing here.') + '</section>') +
+      '</div>';
+    if (keepQ && state.enqFocus) { const s = $('#enqSearch'); s.focus(); s.setSelectionRange(keepQ.length, keepQ.length); }
+  }
+  const DECLINE_REASONS = ['No space', 'Rate not competitive', 'Not our trade lane', 'Customer cancelled'];
+  function enqPanel(id) {
+    return () => {
+      const e = findEnq(id); if (!e) return '<div class="tile-empty">This enquiry is no longer in the list.</div>';
+      const open = ['NEW', 'IN PROGRESS'].includes(e.status);
+      const sub = state.enqSub && state.enqSub.id === id ? state.enqSub.kind : '';
+      const kv = (k, v) => v ? '<div class="kv"><span class="kv-k">' + esc(k) + '</span><span class="kv-v">' + esc(v) + '</span></div>' : '';
+      const ev = (x) => x.ev === 'CREATED' ? 'sent the enquiry' : x.ev === 'TAKEN' ? 'is working on it' : x.ev === 'BOOKED' ? 'booked it as job ' + (x.txt || '') : x.ev === 'DECLINED' ? 'declined it' : x.ev === 'CANCELLED' ? 'cancelled it' : x.ev === 'REOPENED' ? 'reopened it' : 'added a note';
+      const thread = e.thread.slice().sort((a, b) => b.t - a.t);
+      let actions = '';
+      if (canEdit() && open) {
+        actions = (e.cs !== state.user ? '<button type="button" class="btn-ghost" data-enq-act="take">' + icon('check', 16) + (e.cs ? 'Take over from ' + esc(e.cs) : 'Take it') + '</button>' : '') +
+          '<button type="button" class="btn-ghost" data-enq-sub="decline">Decline</button><button type="button" class="btn-brutal" data-enq-book>BOOK AS JOB</button>';
+      } else if (isSales() && open) actions = '<button type="button" class="btn-ghost is-danger" data-enq-sub="cancel">Cancel enquiry</button>';
+      else if (canNote() && ['DECLINED', 'CANCELLED'].includes(e.status)) actions = '<button type="button" class="btn-ghost" data-enq-act="reopen">Reopen</button>';
+      if (e.status === 'BOOKED' && e.job) actions = '<button type="button" class="btn-brutal" data-job="' + esc(e.job) + '">OPEN JOB ' + esc(e.job) + '</button>';
+      const subForm = sub === 'decline' ? '<form class="enq-sub" data-enq-form="decline"><div class="pop-label">Why decline?</div><div class="choice-row">' + DECLINE_REASONS.map((r) => '<button type="button" class="choice" data-enq-reason="' + esc(r) + '">' + esc(r) + '</button>').join('') + '</div><input type="text" id="enqReason" maxlength="200" placeholder="Reason (the sales person sees it)" autocomplete="off"><div class="form-actions is-inline"><button type="button" class="btn-ghost" data-enq-sub="">Back</button><button type="submit" class="btn-brutal">DECLINE</button></div></form>'
+        : sub === 'cancel' ? '<form class="enq-sub" data-enq-form="cancel"><div class="pop-label">Cancel this enquiry?</div><input type="text" id="enqReason" maxlength="200" placeholder="Reason (optional)" autocomplete="off"><div class="form-actions is-inline"><button type="button" class="btn-ghost" data-enq-sub="">Keep it</button><button type="submit" class="btn-brutal">CANCEL ENQUIRY</button></div></form>' : '';
+      return '<h2 class="peek-job form-title" id="drawerTitle">' + esc(e.id) + ' <span class="chip ' + (ENQ_CHIP[e.status] || 'chip-calm') + '">' + esc(e.status) + '</span>' + (e.priority === 'URGENT' && open ? '<span class="chip chip-urgent">' + icon('alert', 12) + 'URGENT</span>' : '') + '</h2>' +
+        '<div class="enq-cust">' + esc(e.customer) + '</div><div class="ec-route"><span class="badge">' + esc(e.type) + '</span>' + esc(TYPE_NAMES[e.type] || '') + ' · ' + esc(enqRoute(e)) + '</div>' +
+        '<div class="peek-card">' + kv('Cargo', e.cargo) + kv('Commodity', e.commodity) + kv('Cargo ready', e.ready ? fmt(parseDate(e.ready), true) : '') + kv('Sales', e.sales) + kv('Customer Service', e.cs || 'Not taken yet') + kv('Sent', ago(e.t)) + kv('Job', e.job) + (/^Cancelled by (.+)$/.test(e.reason || '') ? kv('Cancelled by', e.reason.slice(13)) : kv('Reason', ['DECLINED', 'CANCELLED'].includes(e.status) ? e.reason : '')) + '</div>' +
+        (e.details ? '<p class="enq-details">' + esc(e.details) + '</p>' : '') +
+        (actions ? '<div class="enq-actions">' + actions + '</div>' : '') + subForm +
+        '<section class="enq-thread"><h3 class="tile-title">CONVERSATION</h3>' +
+          (canNote() ? '<form class="note-box" data-enq-form="note"><input type="text" id="enqNote" maxlength="1000" placeholder="' + (isSales() ? 'Message Customer Service…' : 'Message ' + esc(nice(e.sales)) + '…') + '" aria-label="Add a message" autocomplete="off"><button type="submit" class="note-post">Post</button></form>' : '') +
+          '<ol class="story">' + thread.map((x) => '<li><div class="st-when">' + esc(ago(x.t)) + '</div><span class="avatar' + (x.by === state.user ? '' : ' is-other') + '">' + esc(initials(x.by)) + '</span><div class="st-body"><div><strong>' + esc(x.by) + '</strong> ' + esc(x.ev ? ev(x) : 'wrote') + '</div>' + (x.txt && x.ev !== 'BOOKED' ? '<div class="st-note">' + esc(x.txt) + '</div>' : '') + '</div></li>').join('') + '</ol></section>';
+    };
+  }
+  function openEnquiry(id, opener) {
+    if (!findEnq(id)) { toast('That enquiry is not in your list any more.'); return; }
+    closeOverlays(true);
+    state.enqSub = null;
+    $('#drawer').classList.add('is-wide');
+    $('#drawerKicker').textContent = 'ENQUIRY';
+    popRender = enqPanel(id);
+    state.enqOpenId = id;
+    $('#drawerBody').innerHTML = popRender();
+    showDrawer(opener);
+    state.overlay = 'enq';
+  }
+  async function enqAct(id, action, data) {
+    setSaving(1);
+    try {
+      const res = await api.call('ethixEnquiryAct', [id, action, data || {}]);
+      if (res && res.ok && res.enquiry) {
+        putEnq(res.enquiry); state.enqSub = null;
+        refreshOverlay(); rerender(); updateNav();
+        toast({ take: 'You’re on it — ' + nice(res.enquiry.sales) + ' was told', note: 'Message sent', decline: 'Declined — ' + nice(res.enquiry.sales) + ' was told', cancel: 'Enquiry cancelled', reopen: 'Reopened' }[action] || 'Saved');
+        return true;
+      }
+      if (res && res.enquiry) { putEnq(res.enquiry); refreshOverlay(); }
+      toast((res && res.error) || 'Not saved.', { error: true });
+    } catch (e) { if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'Enquiries need the Phase 4 Code.gs update.' : e.message, { error: true }); }
+    finally { setSaving(-1); }
+    return false;
+  }
+  function cargoCounts(text) { const t = String(text || ''); const a = t.match(/(\d+)\s*[×x]\s*20/i), b = t.match(/(\d+)\s*[×x]\s*40/i); return { c20: a ? a[1] : '', c40: b ? b[1] : '' }; }
+  function bookEnquiry(id) {
+    const e = findEnq(id); if (!e || !canEdit()) return;
+    const cc = cargoCounts(e.cargo);
+    openNewJob(e.type, { enq: e.id, prefill: { customer: e.customer, pol: e.pol, pod: e.pod, sales: e.sales, c20: cc.c20, c40: cc.c40, dg: /\bDG\b/.test(e.cargo) && !/NON DG/.test(e.cargo) ? 'DG' : 'NON DG', remarks: [e.commodity, e.details].filter(Boolean).join(' — ').slice(0, 480) } });
+  }
+  // New enquiry form (sales, and Customer Service on someone's behalf)
+  const FCL = ['SFEF', 'SFIF', 'CND', 'SFC'];
+  function openNewEnquiry() {
+    if (!canNote()) return;
+    if (canEdit()) loadLists();
+    closeOverlays(true);
+    state.newEnq = { type: '' };
+    $('#drawer').classList.add('is-wide');
+    $('#drawerKicker').textContent = 'NEW ENQUIRY';
+    renderNewEnquiry();
+    showDrawer(document.activeElement);
+    state.overlay = 'enqform';
+  }
+  function renderNewEnquiry() {
+    const t = state.newEnq.type;
+    if (!t) { $('#drawerBody').innerHTML = '<h2 class="peek-job form-title" id="drawerTitle">What does the customer need?</h2>' + typeTiles('', true); return; }
+    const crr = t === 'CRR';
+    const f = (id, label, ctl, wide) => '<div class="field' + (wide ? ' is-wide' : '') + '"><label for="' + id + '">' + label + '</label>' + ctl + '<div class="field-err" id="' + id + '_err"></div></div>';
+    const txt = (id, ph, list, upper) => '<input type="text" id="' + id + '"' + (list ? ' list="' + list + '"' : '') + (ph ? ' placeholder="' + esc(ph) + '"' : '') + (upper ? ' class="is-upper" autocapitalize="characters"' : '') + ' autocomplete="off" spellcheck="false">';
+    const pol0 = ['SFEF', 'SFEL'].includes(t) ? 'JEBEL ALI' : t === 'AFE' ? 'DUBAI' : '', pod0 = ['SFIF', 'SFIL', 'CND'].includes(t) ? 'JEBEL ALI' : t === 'AFI' ? 'DUBAI' : '';
+    $('#drawerBody').innerHTML = '<h2 class="peek-job form-title" id="drawerTitle"><span class="badge badge-lg">' + t + '</span> ' + esc(TYPE_NAMES[t]) + '</h2>' +
+      '<button type="button" class="link-btn quiet form-back" data-act="ne-type">' + icon('back', 14) + 'Change type</button>' +
+      '<form class="job-form" id="enqForm" novalidate>' +
+        '<fieldset><legend>CUSTOMER</legend><div class="fgrid">' + f('eqCustomer', 'Customer <b aria-hidden="true">*</b>', txt('eqCustomer', '', 'dlCustomers', true), true) +
+          (canEdit() ? f('eqSales', 'Sales person <b aria-hidden="true">*</b>', txt('eqSales', '', 'dlSales', true)) : '') + '</div></fieldset>' +
+        '<fieldset><legend>ROUTE & CARGO</legend><div class="fgrid">' +
+          f('eqPol', crr ? 'From' : 'POL — origin', txt('eqPol', '', 'dlPorts', true).replace('autocomplete', 'value="' + pol0 + '" autocomplete')) +
+          f('eqPod', crr ? 'To' : 'POD — destination', txt('eqPod', '', 'dlPorts', true).replace('autocomplete', 'value="' + pod0 + '" autocomplete')) +
+          (FCL.includes(t) ? f('eqC20', '20′ containers', '<input type="number" id="eqC20" min="0" max="999" inputmode="numeric">') + f('eqC40', '40′ containers', '<input type="number" id="eqC40" min="0" max="999" inputmode="numeric">')
+            : f('eqCargo', 'Cargo details', txt('eqCargo', 'e.g. 3 pallets · 850 kg · 2.4 CBM'), true)) +
+          f('eqCommodity', 'Commodity', txt('eqCommodity', 'e.g. steel coils')) +
+          f('eqDg', 'Cargo', '<select id="eqDg"><option>NON DG</option><option>DG</option></select>') +
+          f('eqReady', 'Cargo ready', '<input type="date" id="eqReady">') +
+          '<div class="field"><label>Priority</label><div class="choice-row" role="radiogroup" aria-label="Priority"><button type="button" class="choice is-on" role="radio" data-eq-pri="NORMAL" aria-checked="true">Normal</button><button type="button" class="choice" role="radio" data-eq-pri="URGENT" aria-checked="false">Urgent</button></div></div>' +
+        '</div></fieldset>' +
+        '<fieldset><legend>FOR CUSTOMER SERVICE</legend><div class="fgrid">' + f('eqDetails', 'Anything they should know', '<textarea id="eqDetails" rows="3" maxlength="1000" placeholder="Rates needed by, preferred line, incoterms…"></textarea>', true) + '</div></fieldset>' +
+        '<div class="form-error" id="formError" role="alert"></div>' +
+        '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit">SEND ENQUIRY</button></div>' +
+      '</form>' + formLists();
+    state.newEnq.priority = 'NORMAL';
+    setTimeout(() => { const c = $('#eqCustomer'), a = document.activeElement; if (c && !(a && a.closest && a.closest('#enqForm'))) c.focus(); }, 30);   // never steal focus from a field already in use
+  }
+  async function submitNewEnquiry(form) {
+    const t = state.newEnq.type;
+    const val = (id) => { const el = $('#' + id, form); return el ? el.value.trim() : ''; };
+    const up = (s) => s.toUpperCase().replace(/\s+/g, ' ');
+    $$('.field-err', form).forEach((x) => { x.textContent = ''; });
+    const customer = up(val('eqCustomer'));
+    if (!customer) { $('#eqCustomer_err').textContent = 'Customer is required.'; $('#eqCustomer').focus(); return; }
+    const sales = canEdit() ? up(val('eqSales')) : state.user;
+    if (!sales) { $('#eqSales_err').textContent = 'Which sales person?'; $('#eqSales').focus(); return; }
+    const c20 = +val('eqC20') || 0, c40 = +val('eqC40') || 0;
+    const dg = val('eqDg');
+    const cargo = (FCL.includes(t) ? [c20 ? c20 + '×20′' : '', c40 ? c40 + '×40′' : ''].filter(Boolean).join(' + ') : val('eqCargo')) + (dg === 'DG' ? ' · DG' : '');
+    const payload = { type: t, customer, sales, pol: up(val('eqPol')), pod: up(val('eqPod')), cargo, commodity: val('eqCommodity'), ready: val('eqReady'), priority: state.newEnq.priority, details: val('eqDetails') };
+    const btn = $('#formSubmit'); btn.disabled = true; btn.textContent = 'SENDING…';
+    try {
+      const res = await api.call('ethixEnquiryAdd', [payload]);
+      if (res && res.ok && res.enquiry) {
+        putEnq(res.enquiry);
+        closeOverlays();
+        state.enqTab = isSales() ? 'open' : 'new';
+        toast('Enquiry ' + res.enquiry.id + ' sent to Customer Service');
+        go('#/enquiries'); rerender(); updateNav();
+        return;
+      }
+      $('#formError').textContent = (res && res.error) || 'Not sent.';
+    } catch (e) { if (e.kind !== 'auth') $('#formError').textContent = /not available/i.test(e.message) ? 'Enquiries need the Phase 4 Code.gs update.' : e.message; }
+    btn.disabled = false; btn.textContent = 'SEND ENQUIRY';
+  }
+
+  // ---------- home: the round and enquiries at a glance ----------
+  function homeChips() {
+    const t0 = today0();
+    if (canEdit()) {
+      const R = roundRows(t0);
+      const total = R.due.length + R.done.length;
+      const n = enqNew().length;
+      return '<button type="button" class="meta-chip' + (R.due.length ? '' : ' is-done') + '" data-href="#/round">' + icon('check', 12) + 'ROUND <b>' + R.done.length + '/' + total + '</b></button>' +
+        (n ? '<button type="button" class="meta-chip is-teal" data-href="#/enquiries"><b>' + n + '</b> NEW ' + (n === 1 ? 'ENQUIRY' : 'ENQUIRIES') + '</button>' : '');
+    }
+    if (isSales()) {
+      const R = roundRows(t0, state.jobs.filter((j) => j.active));
+      const ok = R.all.length - R.due.length;
+      const n = enqOpen().length;
+      return '<button type="button" class="meta-chip' + (R.due.length ? '' : ' is-done') + '" data-list="behind">' + icon('check', 12) + 'FOLLOW-UPS <b>' + ok + '/' + R.all.length + '</b> UP TO DATE</button>' +
+        (n ? '<button type="button" class="meta-chip is-teal" data-href="#/enquiries"><b>' + n + '</b> OPEN ' + (n === 1 ? 'ENQUIRY' : 'ENQUIRIES') + '</button>' : '');
+    }
+    return '';
+  }
+  function behindList() { const R = roundRows(today0(), state.jobs.filter((j) => j.active)); return R.due.map((x) => x.j); }
+
+  // ---------- wiring ----------
+  function initPhase4() {
+    const view = $('#view');
+    view.addEventListener('click', (e) => {
+      const r = state.route ? state.route.name : '';
+      const b = e.target.closest('[data-check], [data-check-menu], [data-every], [data-cal], [data-enq], [data-enq-tab], [data-act="delay"], [data-act="delays"], [data-delay-rm]');
+      if (!b) return;
+      if (b.dataset.check && canEdit()) { followCheck(b.dataset.check); return; }
+      if (b.dataset.checkMenu && canEdit()) { openPop(b, 'MORNING ROUND', checkedMenu(b.dataset.checkMenu)); return; }
+      if (b.dataset.every && canEdit()) { openPop(b, 'FOLLOW-UP', everyMenu(b.dataset.every)); return; }
+      if (b.dataset.cal) { const K = String(b.dataset.calJob).toUpperCase(); state.calOffset[K] = Math.min(0, (state.calOffset[K] || 0) + +b.dataset.cal); rerender(); return; }
+      if (b.dataset.enq) { openEnquiry(b.dataset.enq, b); return; }
+      if (b.dataset.enqTab) { state.enqTab = b.dataset.enqTab; rerender(); return; }
+      if (b.dataset.act === 'delay' && r === 'job') { openDelay(state.route.jobNo); return; }
+      if (b.dataset.act === 'delays') { const k = findJob(state.route.jobNo); if (!$('#delayCard') && k) { state.voyageTab[k.jobNo] = 'overview'; rerender(); } const c = $('#delayCard'); if (c) { c.scrollIntoView({ block: 'center', behavior: 'smooth' }); c.classList.remove('is-flash'); void c.offsetWidth; c.classList.add('is-flash'); } return; }
+      if (b.dataset.delayRm && canEdit()) {
+        const id = b.dataset.delayRm;
+        confirmBox('Remove this delay?', 'If the delay moved ETD/ETA and nobody changed them since, they go back too.', 'Remove', () => removeDelay(id));
+      }
+    });
+    view.addEventListener('input', (e) => {
+      if (e.target.id === 'roundSearch') { state.roundQ = e.target.value; clearTimeout(state.roundTimer); state.roundTimer = setTimeout(() => { state.roundFocus = true; rerender(); state.roundFocus = false; }, 140); }
+      if (e.target.id === 'enqSearch') { state.enqQ = e.target.value; clearTimeout(state.enqTimer); state.enqTimer = setTimeout(() => { state.enqFocus = true; rerender(); state.enqFocus = false; }, 140); }
+    });
+    view.addEventListener('click', (e) => {          // Mine / Everyone on the round page
+      const s = e.target.closest('[data-scope]');
+      if (s && state.route && state.route.name === 'round' && canEdit()) { state.scope = s.dataset.scope; store.set('ethix.v2.scope.' + state.user, state.scope); rerender(); updateNav(); }
+    });
+    // popover / sheet: frequency, remark, undo
+    const onPop = (e) => {
+      const ev = e.target.closest('[data-set-every]'); if (ev) { followPlan(ev.dataset.no, ev.dataset.setEvery); return; }
+      const un = e.target.closest('[data-undo-check]'); if (un) { followUndo(un.dataset.undoCheck); }
+    };
+    const onPopSubmit = (e) => {
+      const f = e.target.closest('[data-remark]'); if (!f) return;
+      e.preventDefault();
+      const no = f.dataset.remark, text = $('#remarkInput').value.trim();
+      closeOverlays();
+      followCheck(no, text);
+    };
+    $('#pop').addEventListener('click', onPop);
+    $('#pop').addEventListener('submit', onPopSubmit);
+    const body = $('#drawerBody');
+    body.addEventListener('click', (e) => {
+      if (state.overlay === 'sheet') { onPop(e); return; }
+      if (state.overlay === 'drawer') {                              // a notification about an enquiry
+        const q = e.target.closest('[data-enq]');
+        if (q) { const id = q.dataset.enq; closeOverlays(true); go('#/enquiries'); setTimeout(() => openEnquiry(id), 40); }
+        return;
+      }
+      if (state.overlay === 'delay') {
+        const F = state.delayForm; if (!F) return;
+        const t = e.target.closest('[data-dl-step], [data-dl-days], [data-dl-where], [data-dl-reason], [data-dl-move], [data-act="form-cancel"]'); if (!t) return;
+        if (t.dataset.act === 'form-cancel') { closeOverlays(); return; }
+        const other = $('#dlOther'); if (other) F.other = other.value; F.note = $('#dlNote').value;
+        if (t.dataset.dlStep) F.days = Math.max(1, Math.min(90, F.days + +t.dataset.dlStep));
+        if (t.dataset.dlDays) F.days = +t.dataset.dlDays;
+        if (t.dataset.dlWhere) { F.where = t.dataset.dlWhere; F.move = movesDates(F.where); }
+        if (t.dataset.dlReason) F.reason = t.dataset.dlReason;
+        if (t.dataset.dlMove) F.move[t.dataset.dlMove] = !F.move[t.dataset.dlMove];
+        const y = body.scrollTop; body.innerHTML = delayForm(); body.scrollTop = y;
+        if (t.dataset.dlReason === 'Other') { const o = $('#dlOther'); if (o) o.focus(); }
+        return;
+      }
+      if (state.overlay === 'enq') {
+        const id = state.enqOpenId;
+        const t = e.target.closest('[data-enq-act], [data-enq-sub], [data-enq-book], [data-enq-reason]'); if (!t) return;
+        if (t.dataset.enqAct) { enqAct(id, t.dataset.enqAct, t.dataset.enqAct === 'take' ? { force: true } : {}); return; }
+        if (t.dataset.enqSub !== undefined) { state.enqSub = t.dataset.enqSub ? { id, kind: t.dataset.enqSub } : null; refreshOverlay(); const r = $('#enqReason'); if (r) r.focus(); return; }
+        if (t.dataset.enqBook !== undefined) { bookEnquiry(id); return; }
+        if (t.dataset.enqReason) { const r = $('#enqReason'); if (r) { r.value = t.dataset.enqReason; r.focus(); } }
+        return;
+      }
+      if (state.overlay === 'enqform') {
+        const tp = e.target.closest('[data-type]');
+        if (tp) { state.newEnq.type = tp.dataset.type; renderNewEnquiry(); return; }
+        if (e.target.closest('[data-act="ne-type"]')) { state.newEnq.type = ''; renderNewEnquiry(); return; }
+        const pr = e.target.closest('[data-eq-pri]');
+        if (pr) { state.newEnq.priority = pr.dataset.eqPri; $$('[data-eq-pri]').forEach((x) => { const on = x === pr; x.classList.toggle('is-on', on); x.setAttribute('aria-checked', String(on)); }); return; }
+        if (e.target.closest('[data-act="form-cancel"]')) closeOverlays();
+      }
+    });
+    body.addEventListener('input', (e) => {
+      if (state.overlay === 'form' && /^f_/.test(e.target.id || '')) {          // typing in a field clears its old error
+        const k = e.target.id.slice(2), er = $('#f_' + k + '_err');
+        if (er && er.textContent) fieldError(k, '');
+      }
+      if (state.overlay === 'delay' && state.delayForm) {
+        if (e.target.id === 'dlOther') { state.delayForm.other = e.target.value; const s = $('#formSubmit'); if (s) s.disabled = !e.target.value.trim(); }
+        if (e.target.id === 'dlNote') state.delayForm.note = e.target.value;
+      }
+    });
+    body.addEventListener('submit', (e) => {
+      if (state.overlay === 'sheet') { onPopSubmit(e); return; }
+      if (state.overlay === 'delay') { e.preventDefault(); submitDelay(); return; }
+      if (state.overlay === 'enqform') { e.preventDefault(); submitNewEnquiry(e.target); return; }
+      if (state.overlay === 'enq') {
+        const f = e.target.closest('[data-enq-form]'); if (!f) return;
+        e.preventDefault();
+        const id = state.enqOpenId, kind = f.dataset.enqForm;
+        if (kind === 'note') { const inp = $('#enqNote'); const txt = inp.value.trim(); if (!txt) return; inp.value = ''; enqAct(id, 'note', { text: txt }).then((ok) => { if (!ok) { const i2 = $('#enqNote'); if (i2 && !i2.value) i2.value = txt; } }); return; }
+        const reason = ($('#enqReason') || {}).value || '';
+        if (kind === 'decline' && !reason.trim()) { toast('Give a reason — the sales person sees it.', { error: true }); return; }
+        enqAct(id, kind, { reason: reason.trim() });
+      }
+    });
+  }
+
+  // Long port names (DAR ES SALAAM, PORT KLANG…) step down in size to fit the voyage header instead of being cut off.
+  function fitNames() {
+    $$('.vh-port .vh-name').forEach((el) => {
+      el.style.fontSize = '';
+      let fs = parseFloat(getComputedStyle(el).fontSize);
+      while (el.scrollWidth > el.clientWidth + 1 && fs > 15) { fs -= 1; el.style.fontSize = fs + 'px'; }
+      el.title = el.scrollWidth > el.clientWidth + 1 ? el.textContent : '';
+    });
+  }
   // ------------------------------------------------------------ lists & menus
   function openList(kind, opener) {
     const m = lastMetrics; if (!m) return;
     const map = {
       active: ['ACTIVE JOBS', m.active], costing: ['COSTING DUE', m.costing], sied: ['SI / ED DUE', m.sied],
       free: ['FREE TIME ENDING ≤ 2 DAYS', m.freeJobs], atsea: ['AT SEA NOW', m.atSea], arriving: ['ARRIVING THIS WEEK', m.arriving],
-      departing: ['DEPARTING THIS WEEK', m.departing], hold: ['ON HOLD', m.hold], watch: ['TODAY’S WATCH', m.watch.map((w) => w.j)]
+      departing: ['DEPARTING THIS WEEK', m.departing], hold: ['ON HOLD', m.hold], watch: ['TODAY’S WATCH', m.watch.map((w) => w.j)],
+      behind: ['NOT FOLLOWED UP YET', isSales() ? behindList() : []]
     };
     const entry = map[kind]; if (!entry) return;
     const list = Array.from(new Set(entry[1]));
@@ -2253,7 +2919,7 @@
       catch (e) { if (e.kind === 'server' && /not available/i.test(e.message)) boot = await legacyBoot(state.user, state.role); else throw e; }
       const before = notifUnread(), newest = state.notif && state.notif.items[0] ? state.notif.items[0].t : 0;
       applyBoot(boot);
-      if (state.overlay === 'form' || state.overlay === 'pop' || state.overlay === 'sheet' || state.overlay === 'admin') state.dirty = true;
+      if (['form', 'pop', 'sheet', 'admin', 'delay', 'enqform'].includes(state.overlay)) state.dirty = true;
       else { rerender(); refreshOverlay(); }
       updateNav();
       const fresh = state.notif ? state.notif.items.filter((x) => x.t > newest && x.t > (state.notif.seen || 0)) : [];
@@ -2332,7 +2998,8 @@
       if (scopeBtn && canEdit()) { state.scope = scopeBtn.dataset.scope; store.set('ethix.v2.scope.' + state.user, state.scope); rerender(); }
     });
     view.addEventListener('scroll', (e) => { if (e.target.classList && e.target.classList.contains('tile-body')) markOverflow(); }, true);
-    window.addEventListener('resize', () => { if (!$('#shell').hidden) markOverflow(); });
+    window.addEventListener('resize', () => { if (!$('#shell').hidden) { markOverflow(); fitNames(); } });
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitNames);
     view.addEventListener('input', (e) => { if (e.target.id === 'searchInput') runSearch(e.target.value); });
     view.addEventListener('keydown', (e) => {
       if (e.target.id !== 'searchInput') return;
@@ -2352,6 +3019,7 @@
       const nav = e.target.closest('[data-href]');
       if (nav && !nav.disabled) { e.preventDefault(); closeOverlays(true); go(nav.dataset.href); return; }
       if (e.target.closest('[data-act="new-job"]')) { openNewJob(); return; }
+      if (e.target.closest('[data-act="new-enq"]')) { openNewEnquiry(); return; }
       const nb = e.target.closest('[data-act="notif"]'); if (nb) { openNotifications(nb); return; }
       const ab = e.target.closest('[data-act="account"], [data-act="more"]'); if (ab) { openAccount(ab); return; }
       if (e.target.closest('[data-act="adm-add"]') && isAdmin()) openAddUser();
@@ -2366,7 +3034,7 @@
       if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) { const s = $('#searchInput') || $('#jobsSearch'); if (s) { e.preventDefault(); s.focus(); } }
     });
     $('#drawerBody').addEventListener('click', (e) => {
-      if (['form', 'sheet', 'quick', 'admin'].includes(state.overlay)) return;
+      if (['form', 'sheet', 'quick', 'admin', 'delay', 'enqform'].includes(state.overlay)) return;
       const jobBtn = e.target.closest('[data-job]'); if (jobBtn) { openJob(jobBtn.dataset.job); return; }
       if (e.target.closest('[data-act="logout"]')) { closeOverlays(true); confirmLogout(); }
     });
@@ -2384,6 +3052,7 @@
     initVoyage();
     initForms();
     initPeople();
+    initPhase4();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 
