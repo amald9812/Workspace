@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays)
+   enquiries, follow-ups, delays, close & archive — v2.5)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -61,6 +61,7 @@
     jobsUi: { cat: 'all', status: 'active', q: '', sort: 'urgent', limit: 120 }, newJob: { type: '' }, editing: null, lists: null,
     notif: null, lastNotes: {}, admin: null, activity: [], actQ: '',
     follow: { plan: {}, checks: {}, days: 35 }, followBusy: new Set(), followHist: {}, calOffset: {}, delays: {}, enquiries: [],
+    closedJobs: new Map(), closedTry: {}, archive: { jobs: null, total: 0, loading: false, seq: 0 }, closeForm: null,
     enqTab: '', enqQ: '', roundQ: '', delayForm: null, newEnq: { type: '' }, enqSub: null, enqOpenId: null
   };
 
@@ -750,7 +751,7 @@
     else state.jobs[i] = j;
     return j;
   }
-  function findJob(no) { const i = state.jobIndex.get(String(no || '').toUpperCase()); return i === undefined ? null : state.jobs[i]; }
+  function findJob(no) { const k = String(no || '').toUpperCase(), i = state.jobIndex.get(k); return i === undefined ? (state.closedJobs.get(k) || null) : state.jobs[i]; }
 
   function enterApp(boot, name, role) {
     state.user = (boot.me && boot.me.user) || name;
@@ -1007,7 +1008,7 @@
     : c === 'courier' ? j.type === 'CRR'
     : c === 'cnd' ? j.type === 'CND'
     : c === 'misc' ? j.type === 'MIS' : true;
-  const inStatus = (j, s) => s === 'all' ? true : s === 'active' ? j.active : s === 'hold' ? j.hold : s === 'completed' ? j.status === 'COMPLETED' : s === 'cancelled' ? j.status === 'CANCELLED' : true;
+  const inStatus = (j, s) => s === 'all' ? true : s === 'active' ? j.active : s === 'ready' ? isReady(j) : s === 'hold' ? j.hold : s === 'completed' ? j.status === 'COMPLETED' : s === 'cancelled' ? j.status === 'CANCELLED' : true;
   const VAN = (s = 22) => '<svg class="art" viewBox="0 0 24 24" width="' + s + '" height="' + s + '" aria-hidden="true"><path fill="#1C5179" d="M2 6h12v10H2zM14 10h4l4 3v3h-8z"/><circle cx="6" cy="18" r="2" fill="#0B1B2B"/><circle cx="17" cy="18" r="2" fill="#0B1B2B"/></svg>';
 
   function miniTrack(j, w) {
@@ -1023,6 +1024,8 @@
 
   function jobsFiltered() {
     const u = state.jobsUi;
+    if (u.status === 'closed') return closedList();
+    if (u.status === 'ready' && !canEdit()) u.status = 'active';
     const q = u.q.trim().toUpperCase();
     let list = scoped().filter((j) => inCat(j, u.cat) && inStatus(j, u.status));
     if (q) list = list.filter((j) => (j.jobNo + ' ' + j.customer + ' ' + j.vendor + ' ' + j.pol + ' ' + j.pod + ' ' + j.cs + ' ' + j.sales + ' ' + j.type + ' ' + j.remarks + ' ' + j.against).toUpperCase().includes(q));
@@ -1070,16 +1073,17 @@
         '<div class="chips-row" role="group" aria-label="Job category">' + CATS.map(([id, label]) => '<button type="button" class="fchip" data-cat="' + id + '" aria-pressed="' + (u.cat === id) + '">' + label + '</button>').join('') + '</div>' +
         '<div class="filter-tools">' +
           (canEdit() ? '<button type="button" class="toggle" data-act="mine" aria-pressed="' + (state.scope === 'mine') + '"><span class="toggle-track"><span class="toggle-thumb"></span></span>My jobs only</button>' : '') +
-          '<label class="select-pill"><span>Show</span><select id="jobsStatus">' + [['active', 'Active'], ['hold', 'On hold'], ['completed', 'Completed'], ['cancelled', 'Cancelled'], ['all', 'All']].map(([v, l]) => '<option value="' + v + '"' + (u.status === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></label>' +
+          '<label class="select-pill"><span>Show</span><select id="jobsStatus">' + [['active', 'Active']].concat(canEdit() ? [['ready', 'Ready to close']] : [], [['hold', 'On hold'], ['all', 'All in tracker'], ['closed', 'Closed jobs']]).map(([v, l]) => '<option value="' + v + '"' + (u.status === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></label>' +
           '<label class="select-pill"><span>Sort</span><select id="jobsSort">' + [['urgent', 'Most urgent'], ['newest', 'Newest'], ['etd', 'ETD'], ['eta', 'ETA']].map(([v, l]) => '<option value="' + v + '"' + (u.sort === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></label>' +
         '</div>' +
       '</div>' +
+      (u.status === 'closed' ? closedNote() : '') +
       '<section class="jobs-card' + anim + '" style="--d:80ms" aria-label="Job list">' +
         '<div class="jobs-scroll">' +
           '<div class="jobs-headrow" aria-hidden="true"><span>JOB NO</span><span>TYPE</span><span>CUSTOMER · ROUTE</span><span>VOYAGE</span><span>NEXT STEP</span><span>ETD</span><span>ETA</span><span>CS / SALES</span></div>' +
           (shown.length ? '<ul class="jobs-list">' + shown.map(jobRow).join('') + '</ul>' +
             (list.length > shown.length ? '<div class="jobs-more"><button type="button" class="btn-ghost" data-act="jobs-more">Show ' + Math.min(120, list.length - shown.length) + ' more · ' + list.length + ' in total</button></div>' : '<div class="jobs-end">' + list.length + (list.length === 1 ? ' job' : ' jobs') + '</div>')
-            : '<div class="tile-empty jobs-empty">' + icon('search', 22) + '<span>No jobs match these filters.</span><button type="button" class="btn-ghost" data-act="jobs-clear">Clear filters</button></div>') +
+            : '<div class="tile-empty jobs-empty">' + icon('search', 22) + '<span>' + (u.status === 'closed' && state.archive.loading ? 'Looking through closed jobs…' : u.status === 'ready' ? 'Nothing is ready to close yet.' : 'No jobs match these filters.') + '</span><button type="button" class="btn-ghost" data-act="jobs-clear">Clear filters</button></div>') +
         '</div>' +
       '</section>' +
       '</div>';
@@ -1277,6 +1281,10 @@
     let m = a.match(/^SET (.+?) TO (.+)$/);
     if (m) return 'set ' + m[1].toLowerCase().replace(/\bsi\b/g, 'SI').replace(/\bdo\b/g, 'DO').replace(/\bed\b/g, 'ED').replace(/\bbl\b/g, 'BL').replace(/\bawb\b/g, 'AWB').replace(/\betd\b/g, 'ETD').replace(/\beta\b/g, 'ETA').replace(/\bpol\b/g, 'POL').replace(/\bpod\b/g, 'POD').replace(/\bdg\b/g, 'DG').replace(/\bcs\b/g, 'CS') + ' to ' + m[2];
     if (a === 'CREATED NEW JOB') return 'opened the job';
+    if (a === 'CLOSED JOB') return 'closed the job';
+    m = a.match(/^CLOSED JOB — (.+)$/);
+    if (m) return 'closed the job (' + m[1].toLowerCase() + ')';
+    if (a === 'REOPENED JOB') return 'reopened the job';
     m = a.match(/^MARKED DELAY \+(\d+) DAYS? — (.+?) \((.+)\)$/);
     if (m) return 'marked a delay: +' + m[1] + (m[1] === '1' ? ' day' : ' days') + ' · ' + m[2].toLowerCase() + ' · ' + m[3].toLowerCase();
     m = a.match(/^REMOVED DELAY \+(\d+) DAYS? — (.+)$/);
@@ -1337,15 +1345,19 @@
     ];
     return '<div class="details-grid">' + groups.map((g) => '<section class="tile"><div class="tile-head"><h2 class="tile-title">' + g[0] + '</h2></div>' +
       g[1].map((r) => '<div class="kv"><span class="kv-k">' + esc(r[0]) + '</span><span class="kv-v">' + esc(r[1] || '—') + '</span></div>').join('') + '</section>').join('') +
-      '<section class="tile details-remarks"><div class="tile-head"><h2 class="tile-title">REMARKS</h2>' + (canEdit() ? '<button type="button" class="tile-link" data-act="edit">Edit details</button>' : '') + '</div><p>' + esc(j.remarks || 'No remarks.') + '</p></section></div>';
+      '<section class="tile details-remarks"><div class="tile-head"><h2 class="tile-title">REMARKS</h2>' + (canEditJob(j) ? '<button type="button" class="tile-link" data-act="edit">Edit details</button>' : '') + '</div><p>' + esc(j.remarks || 'No remarks.') + '</p></section></div>';
   }
 
   function renderVoyage(no, first) {
     const j = findJob(no);
     const view = $('#view');
+    if (!j && loadClosed(no)) {
+      view.innerHTML = '<div class="wrap voyage-page"><section class="tile notfound"><div class="story-loading"><span class="sk"></span><span class="sk"></span><span class="sk short"></span></div><p class="small">Looking in closed jobs…</p></section></div>';
+      return;
+    }
     if (!j) {
       view.innerHTML = '<div class="wrap voyage-page"><div class="crumbs"><button type="button" class="link-btn" data-href="#/jobs">' + icon('jobs', 14) + 'JOBS</button></div>' +
-        '<section class="tile notfound">' + empty('search', 'Job ' + no + ' is not in the tracker. It may have been renamed or removed.') + '<button type="button" class="btn-ghost" data-href="#/jobs">Back to jobs</button></section></div>';
+        '<section class="tile notfound">' + empty('search', 'Job ' + no + ' is not in the tracker or in closed jobs. It may have been renamed or removed.') + '<button type="button" class="btn-ghost" data-href="#/jobs">Back to jobs</button></section></div>';
       return;
     }
     const t0 = today0();
@@ -1356,16 +1368,16 @@
     const anim = first ? ' reveal' : '';
     const n = jr.next;
     const storyCount = (storyItems(j.jobNo) || []).length;
-    const nextBar = n && canEdit() ? '<div class="nextbar glass" role="region" aria-label="Next stop"><div class="nb-text"><div class="kicker">NEXT STOP</div><div class="nb-name">' + esc(n.name) + ' <span class="nb-sub">' + esc(n.sub) + '</span></div></div>' +
+    const nextBar = n && canEditJob(j) ? '<div class="nextbar glass" role="region" aria-label="Next stop"><div class="nb-text"><div class="kicker">NEXT STOP</div><div class="nb-name">' + esc(n.name) + ' <span class="nb-sub">' + esc(n.sub) + '</span></div></div>' +
       '<button type="button" class="btn-brutal" data-stop="' + n.id + '" data-quick="1">' + (n.kind === 'field' ? 'MARK DONE' : n.kind === 'date' ? 'SET DATE' : n.kind === 'status' ? 'CLOSE JOB' : 'UPDATE') + '</button></div>' : '';
     view.innerHTML =
-      '<div class="wrap voyage-page' + (jr.next && canEdit() ? ' has-nextbar' : '') + '">' +
+      '<div class="wrap voyage-page' + (jr.next && canEditJob(j) ? ' has-nextbar' : '') + '">' +
       '<div class="crumbs' + anim + '"><button type="button" class="back-btn" data-act="back" aria-label="Back">' + icon('back', 18) + '</button><button type="button" class="link-btn" data-href="#/jobs">JOBS</button><span>/ ' + esc(j.jobNo) + '</span>' +
-        (canEdit() ? '<button type="button" class="status-pill tone-' + tone + '" data-act="status" aria-label="Job status: ' + sw + '. Change">' + esc(sw) + icon('chevron', 14) + '</button>' : '<span class="status-pill tone-' + tone + '">' + esc(sw) + '</span>') + '</div>' +
+        (canEditJob(j) ? '<button type="button" class="status-pill tone-' + tone + '" data-act="status" aria-label="Job status: ' + sw + '. Change">' + esc(sw) + icon('chevron', 14) + '</button>' : '<span class="status-pill tone-' + tone + '">' + esc(sw) + '</span>') + '</div>' +
       '<header class="vhead' + anim + '" style="--d:30ms">' +
-        '<div class="vh-titles"><div class="vh-idrow"><h1 class="vh-job">' + esc(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + delayChip(j) + '</div>' +
-        '<div class="vh-cust">' + esc(j.customer || '—') + '</div></div>' +
-        (canEdit() ? '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="delay" title="Mark delay" aria-label="Mark delay">' + icon('clock', 16) + '<span>Mark delay</span></button><button type="button" class="btn-ghost" data-act="edit" title="Edit details" aria-label="Edit details">' + icon('edit', 16) + '<span>Edit details</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>'
+        '<div class="vh-titles"><div class="vh-idrow"><h1 class="vh-job">' + esc(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + delayChip(j) + readyChip(j) + '</div>' +
+        '<div class="vh-cust">' + esc(j.customer || '—') + '</div>' + (j.closed && j.closed.reason ? '<div class="vh-why">' + esc(j.closed.reason) + '</div>' : '') + '</div>' +
+        (j.closed ? closedActions(j) : canEdit() ? '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="delay" title="Mark delay" aria-label="Mark delay">' + icon('clock', 16) + '<span>Mark delay</span></button><button type="button" class="btn-ghost" data-act="edit" title="Edit details" aria-label="Edit details">' + icon('edit', 16) + '<span>Edit details</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>'
           : '<div class="vh-actions is-ro"><span class="ro-chip">' + icon('lock', 14) + '<span>UPDATED BY ' + esc(j.cs || 'CUSTOMER SERVICE') + '</span></span>' + (canNote() ? '<button type="button" class="btn-brutal btn-icon" data-act="focus-note">' + icon('note', 16) + '<span>ADD A NOTE</span></button>' : '') + '</div>') +
       '</header>' +
       '<div class="ft-top">' + freeCard(j, t0) + '</div>' +
@@ -1620,7 +1632,7 @@
       if (st) {
         const j = findJob(no); if (!j) return;
         const s = j.journey.all.find((x) => x.id === st.dataset.stop);
-        if (!canEdit()) { openPop(st, 'STOP', stopInfo(no, st.dataset.stop)); return; }
+        if (!canEditJob(j)) { openPop(st, 'STOP', stopInfo(no, st.dataset.stop)); return; }
         if (st.dataset.quick && s && s.kind === 'field' && s.state !== 'done') { onSet(no, s.def.field, s.def.primary); return; }
         openPop(st, s && s.kind === 'info' ? 'JOB' : 'UPDATE STOP', stopEditor(no, st.dataset.stop));
         return;
@@ -1631,7 +1643,7 @@
         const inp = $('#noteInput'); if (inp) { inp.scrollIntoView({ block: 'center', behavior: 'smooth' }); inp.focus({ preventScroll: true }); }
         return;
       }
-      if (!canEdit() && e.target.closest('[data-act="status"], [data-act="quick"], [data-act="edit"]')) return;
+      if (!canEditJob(findJob(no)) && e.target.closest('[data-act="status"], [data-act="quick"], [data-act="edit"], [data-act="delay"]')) return;
       if (e.target.closest('[data-act="status"]')) { openPop(e.target.closest('[data-act="status"]'), 'JOB STATUS', statusEditor(no)); return; }
       if (e.target.closest('[data-act="quick"]')) { openQuick(no, e.target.closest('[data-act="quick"]')); return; }
       if (e.target.closest('[data-act="edit"]')) { openEdit(no); return; }
@@ -2383,9 +2395,9 @@
       : '<span class="fu-muted">Next check in ' + f.nextIn + (f.nextIn === 1 ? ' day' : ' days') + ' · last ' + esc(lastCheckText(f, t0)) + '</span>';
     const remark = f.last && f.last[2] ? '<p class="fu-remark">“' + esc(f.last[2]) + '”</p>' : '';
     return '<section class="tile side-card fu-card" aria-labelledby="fuTitle"><div class="tile-head"><h2 class="tile-title" id="fuTitle">FOLLOW-UP</h2>' +
-      (canEdit() ? '<button type="button" class="every-pill" data-every="' + esc(j.jobNo) + '">' + EVERY_LABEL[f.every] + icon('chevron', 13) + '</button>' : '<span class="every-pill is-ro">' + EVERY_LABEL[f.every] + '</span>') + '</div>' +
+      (canEditJob(j) ? '<button type="button" class="every-pill" data-every="' + esc(j.jobNo) + '">' + EVERY_LABEL[f.every] + icon('chevron', 13) + '</button>' : '<span class="every-pill is-ro">' + EVERY_LABEL[f.every] + '</span>') + '</div>' +
       '<div class="fu-status">' + status + '</div>' + remark +
-      (canEdit() && j.active ? (f.mineToday ? '<button type="button" class="btn-ghost fu-btn" data-check-menu="' + esc(j.jobNo) + '">' + icon('edit', 15) + 'Remark or undo</button>'
+      (canEditJob(j) && j.active ? (f.mineToday ? '<button type="button" class="btn-ghost fu-btn" data-check-menu="' + esc(j.jobNo) + '">' + icon('edit', 15) + 'Remark or undo</button>'
         : '<button type="button" class="btn-brutal fu-btn" data-check="' + esc(j.jobNo) + '">' + icon('check', 16) + 'CHECKED TODAY</button>') : '') +
       followCalendar(j) + '</section>';
   }
@@ -2472,13 +2484,13 @@
   function delayCard(j) {
     const d = delayInfo(j); if (!d) return '';
     const sign = (n) => (n > 0 ? '+' : '') + n;
-    return '<section class="tile side-card delay-card" id="delayCard" aria-labelledby="dlTitle"><div class="tile-head"><h2 class="tile-title" id="dlTitle">DELAYS</h2>' + (canEdit() ? '<button type="button" class="tile-link" data-act="delay">+ Mark another</button>' : '') + '</div>' +
+    return '<section class="tile side-card delay-card" id="delayCard" aria-labelledby="dlTitle"><div class="tile-head"><h2 class="tile-title" id="dlTitle">DELAYS</h2>' + (canEditJob(j) ? '<button type="button" class="tile-link" data-act="delay">+ Mark another</button>' : '') + '</div>' +
       '<div class="dl-total"><b>+' + d.total + '</b><span>' + (d.total === 1 ? 'day' : 'days') + ' delayed in all · ' + d.list.length + (d.list.length === 1 ? ' delay' : ' delays') + '</span></div>' +
       (d.etd ? '<div class="kv"><span class="kv-k">' + (j.mode === 'air' ? 'Departure' : j.mode === 'courier' ? 'Pick-up' : 'Sailing') + '</span><span class="kv-v">' + fmt(d.etd.from) + ' → ' + fmt(d.etd.to) + ' · ' + sign(d.etd.d) + 'D</span></div>' : '') +
       (d.eta ? '<div class="kv"><span class="kv-k">Arrival</span><span class="kv-v">' + fmt(d.eta.from) + ' → ' + fmt(d.eta.to) + ' · ' + sign(d.eta.d) + 'D</span></div>' : '') +
       (d.plan !== null && d.now !== null && d.plan !== d.now ? '<div class="kv"><span class="kv-k">Transit</span><span class="kv-v">planned ' + d.plan + ' days · now ' + d.now + '</span></div>' : '') +
       '<ol class="dl-list">' + d.list.slice().reverse().map((x) => '<li><span class="dl-days">+' + x.days + 'D</span><span class="dl-body"><b>' + esc(nice(x.where)) + '</b> · ' + esc(x.reason) + (x.note ? '<span class="dl-note">' + esc(x.note) + '</span>' : '') +
-        '<span class="dl-meta">' + esc(x.by) + ' · ' + esc(ago(x.t)) + '</span></span>' + (canEdit() ? '<button type="button" class="icon-btn dl-rm" data-delay-rm="' + esc(x.id) + '" aria-label="Remove this delay">' + icon('close', 13) + '</button>' : '') + '</li>').join('') + '</ol></section>';
+        '<span class="dl-meta">' + esc(x.by) + ' · ' + esc(ago(x.t)) + '</span></span>' + (canEditJob(j) ? '<button type="button" class="icon-btn dl-rm" data-delay-rm="' + esc(x.id) + '" aria-label="Remove this delay">' + icon('close', 13) + '</button>' : '') + '</li>').join('') + '</ol></section>';
   }
   function openDelay(no) {
     const j = findJob(no); if (!j || !canEdit()) return;
@@ -2737,7 +2749,8 @@
       const total = R.due.length + R.done.length;
       const n = enqNew().length;
       return '<button type="button" class="meta-chip' + (R.due.length ? '' : ' is-done') + '" data-href="#/follow-ups">' + icon('check', 12) + 'FOLLOW-UPS <b>' + R.done.length + '/' + total + '</b></button>' +
-        (n ? '<button type="button" class="meta-chip is-teal" data-href="#/enquiries"><b>' + n + '</b> NEW ' + (n === 1 ? 'ENQUIRY' : 'ENQUIRIES') + '</button>' : '');
+        (n ? '<button type="button" class="meta-chip is-teal" data-href="#/enquiries"><b>' + n + '</b> NEW ' + (n === 1 ? 'ENQUIRY' : 'ENQUIRIES') + '</button>' : '') +
+        ((rc) => rc ? '<button type="button" class="meta-chip is-ready" data-act="ready-list"><b>' + rc + '</b> READY TO CLOSE</button>' : '')(scoped().filter(isReady).length);
     }
     if (isSales()) {
       const R = roundRows(t0, state.jobs.filter((j) => j.active));
@@ -2868,6 +2881,213 @@
       el.title = el.scrollWidth > el.clientWidth + 1 ? el.textContent : '';
     });
   }
+  // ================================================================ v2.5
+  // Close job → Closed jobs (archive). Ready-to-close rule, close dialog, reopen, closed job pages.
+  const CLOSE_AT = { SEA_EX: 'arrived', AFE: 'arrived', SFC: 'arrived', AFC: 'arrived', SEA_IM: 'delivered', AFI: 'delivered', CND: 'deliveredOpt', CRR: 'deliveredEta', MIS: '' };
+  const CLOSE_REASONS = ['Cancelled', 'Moved to another forwarder', 'Duplicate job', 'Other'];
+  // Ready to close = costing done + arrived (exports, cross-trade) / delivered (imports, clearance, courier). Misc: costing only.
+  function closeCheck(j) {
+    const all = (j.journey && j.journey.all) || [];
+    const st = (id) => all.find((x) => x.id === id);
+    const c = st('costing');
+    const need = [{ name: 'Costing done', ok: !!c && c.state === 'done', sub: c ? c.sub : '' }];
+    let id = CLOSE_AT[journeyKey(j.type)];
+    if (id === 'deliveredOpt') { const dv = st('deliveredOpt'), cu = st('customsOpt'); id = dv && dv.state !== 'skip' ? 'deliveredOpt' : cu && cu.state !== 'skip' ? 'customsOpt' : 'arrived'; }
+    const a = id ? st(id) : null;
+    if (a) need.push({ name: a.name, ok: a.state === 'done', sub: a.sub });
+    return { ready: need.every((x) => x.ok), need };
+  }
+  const isReady = (j) => j.active && !j.closed && closeCheck(j).ready;
+  const readyChip = (j) => canEdit() && isReady(j) ? '<button type="button" class="ready-chip" data-act="close-job">' + icon('check', 13) + 'READY TO CLOSE</button>' : '';
+  const canEditJob = (j) => canEdit() && !(j && j.closed);
+  function closedActions(j) {
+    const c = j.closed || {};
+    return '<div class="vh-actions is-ro is-closed"><span class="ro-chip closed-chip">' + icon('lock', 14) + '<span>CLOSED' + (c.at ? ' ' + esc(c.at) : '') + (c.by ? ' · ' + esc(c.by) : '') + '</span></span>' +
+      (canEdit() ? '<button type="button" class="btn-brutal" data-act="reopen">REOPEN JOB</button>' : '') + '</div>';
+  }
+  function buildClosed(ix, row, closed) {
+    const j = buildJob(row, ix, today0());
+    j.closed = closed || { at: '', by: '', reason: '' };
+    j.active = false;
+    return j;
+  }
+  function removeJob(K) {
+    state.order = state.order.filter((k) => k !== K);
+    state.rowMap.delete(K);
+    rebuildJobs();
+  }
+  const nowText = () => { const d = new Date(); return String(d.getDate()).padStart(2, '0') + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + d.getFullYear() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+
+  // a closed job opened by link, notification or search: fetch it once
+  function loadClosed(no) {
+    const K = String(no || '').toUpperCase();
+    const t = state.closedTry[K];
+    if (t === 'done') return false;
+    if (t === 'busy') return true;
+    state.closedTry[K] = 'busy';
+    api.call('ethixArchivedJob', [no]).then((res) => {
+      if (res && res.ok && Array.isArray(res.row)) state.closedJobs.set(K, buildClosed(mapHeaders(res.head), res.row, res.closed));
+    }).catch(() => {}).finally(() => { state.closedTry[K] = 'done'; if (state.route && state.route.name === 'job') rerender(); });
+    return true;
+  }
+
+  // ---------- close dialog ----------
+  function openClose(no, opts) {
+    const j = findJob(no); if (!j || !canEditJob(j)) return;
+    closeOverlays(true);
+    state.closeForm = { no: j.jobNo, reason: (opts && opts.reason) || '', other: '', note: '' };
+    $('#drawer').classList.add('is-wide');
+    $('#drawerKicker').textContent = 'CLOSE JOB';
+    popRender = closeForm;
+    $('#drawerBody').innerHTML = closeForm();
+    showDrawer(document.activeElement);
+    state.overlay = 'close';
+  }
+  function closeForm() {
+    const F = state.closeForm; const j = findJob(F.no); if (!j) return '';
+    const c = closeCheck(j);
+    const reasonOk = c.ready || (F.reason && (F.reason !== 'Other' || F.other.trim()));
+    return '<h2 class="peek-job form-title" id="drawerTitle">' + esc(j.jobNo) + ' <span class="small">' + esc(j.customer || '') + '</span></h2>' +
+      '<form class="job-form close-form" id="closeForm" novalidate>' +
+        '<ul class="close-checks">' + c.need.map((x) => '<li class="' + (x.ok ? 'is-ok' : 'is-no') + '"><span class="cc-ic">' + icon(x.ok ? 'check' : 'clock', 15) + '</span><span class="cc-name">' + esc(x.name) + '</span><span class="cc-sub">' + esc(x.ok ? (x.sub || 'DONE') : 'NOT YET') + '</span></li>').join('') + '</ul>' +
+        (c.ready ? '<p class="close-lead">Everything’s done. The job moves to <b>Closed jobs</b> and leaves Home, Jobs and Follow-ups. You can reopen it any time.</p>'
+          : '<fieldset><legend>NOT READY YET — WHY CLOSE IT NOW?</legend><div class="choice-row">' + CLOSE_REASONS.map((r) => '<button type="button" class="choice' + (F.reason === r ? ' is-on' : '') + '" data-cl-reason="' + esc(r) + '" aria-pressed="' + (F.reason === r) + '">' + esc(r) + '</button>').join('') + '</div>' +
+            (F.reason === 'Other' ? '<div class="field is-wide"><label for="clOther">Reason</label><input id="clOther" maxlength="80" value="' + esc(F.other) + '" autocomplete="off"></div>' : '') + '</fieldset>') +
+        '<div class="field is-wide"><label for="clNote">Note (optional — goes into the job’s story)</label><input id="clNote" maxlength="300" value="' + esc(F.note) + '" placeholder="e.g. final invoice sent" autocomplete="off"></div>' +
+        '<div class="form-error" id="formError" role="alert"></div>' +
+        '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit"' + (reasonOk ? '' : ' disabled') + '>CLOSE JOB</button></div>' +
+      '</form>';
+  }
+  async function submitClose() {
+    const F = state.closeForm; const j = findJob(F.no); if (!j) return;
+    const c = closeCheck(j);
+    const reason = c.ready ? '' : (F.reason === 'Other' ? F.other.trim() : F.reason);
+    const note = F.note.trim();
+    if (!c.ready && !reason) { $('#formError').textContent = 'Choose why you are closing it now.'; return; }
+    const btn = $('#formSubmit'); btn.disabled = true; btn.textContent = 'CLOSING…';
+    try {
+      const res = await api.call('ethixJobClose', [j.jobNo, { ready: c.ready, reason, note }]);
+      if (res && res.ok) {
+        const K = keyOf(j);
+        const row = (state.rowMap.get(K) || []).slice();
+        if (state.ix.status !== undefined && state.ix.status > -1) row[state.ix.status] = /^cancel/i.test(reason) ? 'CANCELLED' : 'COMPLETED';
+        state.closedJobs.set(K, buildClosed(state.ix, row, { at: nowText(), by: state.user, reason: [reason, note].filter(Boolean).join(' — ') }));
+        state.closedTry[K] = 'done';
+        removeJob(K);
+        state.archive.jobs = null;
+        closeOverlays();
+        go('#/jobs'); rerender(); updateNav();
+        toast('Job ' + j.jobNo + ' closed', { action: { label: 'Undo', fn: () => reopenJob(j.jobNo, true) } });
+        return;
+      }
+      $('#formError').textContent = (res && res.error) || 'The job was not closed.';
+    } catch (e) { if (e.kind !== 'auth') $('#formError').textContent = /not available/i.test(e.message) ? 'Close job needs the v2.5 Code.gs update.' : e.message; }
+    btn.disabled = false; btn.textContent = 'CLOSE JOB';
+  }
+  async function reopenJob(no, undo) {
+    setSaving(1);
+    try {
+      const res = await api.call('ethixJobReopen', [no]);
+      if (res && res.ok && Array.isArray(res.row)) {
+        const K = String(res.jobNo || no).toUpperCase();
+        state.rowMap.set(K, res.row); rebuildJob(K);
+        state.closedJobs.delete(K); delete state.closedTry[K];
+        if (state.archive.jobs) state.archive.jobs = state.archive.jobs.filter((x) => keyOf(x) !== K);
+        rerender(); updateNav();
+        toast(undo ? 'Close undone — ' + no + ' is open again' : 'Job ' + no + ' reopened');
+        return;
+      }
+      toast((res && res.error) || 'Not reopened.', { error: true });
+    } catch (e) { if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'Reopen needs the v2.5 Code.gs update.' : e.message, { error: true }); }
+    finally { setSaving(-1); }
+  }
+
+  // ---------- Jobs → Show: Closed jobs (loads only when asked) ----------
+  function closedList() {
+    const A = state.archive, u = state.jobsUi;
+    if (!A.jobs && !A.loading) setTimeout(loadArchive, 0);
+    const q = u.q.trim().toUpperCase();
+    return (A.jobs || []).filter((j) => inCat(j, u.cat) && (!canEdit() || state.scope !== 'mine' || j.cs === state.user) &&
+      (!q || (j.jobNo + ' ' + j.customer + ' ' + j.vendor + ' ' + j.pol + ' ' + j.pod + ' ' + j.cs + ' ' + j.sales + ' ' + j.type + ' ' + j.remarks + ' ' + j.against).toUpperCase().includes(q)));
+  }
+  function loadArchive() {
+    const A = state.archive, seq = ++A.seq, q = state.jobsUi.q.trim();
+    A.loading = true;
+    if (state.route && state.route.name === 'jobs') rerender();
+    api.call('ethixArchiveSearch', [q]).then((res) => {
+      if (seq !== A.seq) return;
+      const ix = mapHeaders(res.head || []);
+      A.jobs = (res.rows || []).map((row, i) => { const j = buildClosed(ix, row, res.closed[i]); const K = keyOf(j); state.closedJobs.set(K, j); state.closedTry[K] = 'done'; return j; });
+      A.total = res.total || 0; A.loading = false;
+      if (state.route && state.route.name === 'jobs') rerender();
+    }).catch((e) => {
+      if (seq !== A.seq) return;
+      A.loading = false; A.jobs = A.jobs || []; A.total = A.jobs.length;
+      if (state.route && state.route.name === 'jobs') rerender();
+      if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'Closed jobs need the v2.5 Code.gs update.' : e.message, { error: true });
+    });
+  }
+  function closedNote() {
+    const A = state.archive;
+    if (!A.jobs) return '<div class="closed-note">' + icon('lock', 14) + '<span>Looking through closed jobs…</span></div>';
+    return '<div class="closed-note">' + icon('lock', 14) + '<span><b>Closed jobs</b> · newest closed first · ' + A.total + (A.total === 1 ? ' found' : ' found') +
+      (A.total > A.jobs.length ? ' · showing the newest ' + A.jobs.length + ' — search to narrow it down' : '') + (A.loading ? ' · searching…' : '') + '</span></div>';
+  }
+
+  function initV25() {
+    const view = $('#view');
+    // before the voyage's own handlers: the "Completed" stop and its CLOSE JOB button open the close dialog
+    view.addEventListener('click', (e) => {
+      const r = state.route;
+      if (!r || r.name !== 'job' || !canEdit()) return;
+      const st = e.target.closest('[data-stop="completed"]');
+      const j = findJob(r.jobNo);
+      if (st && j && !j.closed && j.status !== 'COMPLETED' && j.status !== 'CANCELLED') { e.stopImmediatePropagation(); openClose(r.jobNo); }
+    }, true);
+    view.addEventListener('click', (e) => {
+      const r = state.route;
+      if (e.target.closest('[data-act="ready-list"]')) { state.jobsUi.status = 'ready'; state.jobsUi.limit = 120; go('#/jobs'); return; }
+      if (!r || r.name !== 'job') return;
+      if (e.target.closest('[data-act="close-job"]') && canEdit()) { openClose(r.jobNo); return; }
+      if (e.target.closest('[data-act="reopen"]') && canEdit()) { reopenJob(r.jobNo); }
+    });
+    // choosing Completed / Cancelled anywhere (status card, quick update) goes through Close job
+    const intercept = (e) => {
+      const b = e.target.closest('[data-set="status"]');
+      if (!b || !['COMPLETED', 'CANCELLED'].includes(b.dataset.val)) return;
+      const r = state.route; if (!r || r.name !== 'job' || !canEdit()) return;
+      const j = findJob(r.jobNo); if (!j || j.closed) return;
+      e.stopImmediatePropagation(); e.preventDefault();
+      openClose(r.jobNo, { reason: b.dataset.val === 'CANCELLED' ? 'Cancelled' : '' });
+    };
+    $('#pop').addEventListener('click', intercept, true);
+    $('#drawerBody').addEventListener('click', intercept, true);
+    // the close dialog
+    const body = $('#drawerBody');
+    body.addEventListener('click', (e) => {
+      if (state.overlay !== 'close' || !state.closeForm) return;
+      const F = state.closeForm;
+      if (e.target.closest('[data-act="form-cancel"]')) { closeOverlays(); return; }
+      const t = e.target.closest('[data-cl-reason]'); if (!t) return;
+      F.note = ($('#clNote') || {}).value || F.note; const o = $('#clOther'); if (o) F.other = o.value;
+      F.reason = t.dataset.clReason;
+      const y = body.scrollTop; body.innerHTML = closeForm(); body.scrollTop = y;
+      if (F.reason === 'Other') { const x = $('#clOther'); if (x) x.focus(); }
+    });
+    body.addEventListener('input', (e) => {
+      if (state.overlay !== 'close' || !state.closeForm) return;
+      if (e.target.id === 'clNote') state.closeForm.note = e.target.value;
+      if (e.target.id === 'clOther') { state.closeForm.other = e.target.value; const s = $('#formSubmit'); if (s) s.disabled = !e.target.value.trim(); }
+    });
+    body.addEventListener('submit', (e) => { if (state.overlay === 'close') { e.preventDefault(); submitClose(); } });
+    // Jobs → Closed jobs: load when chosen, search on the server as you type
+    view.addEventListener('change', (e) => { if (e.target.id === 'jobsStatus' && e.target.value === 'closed') loadArchive(); });
+    view.addEventListener('input', (e) => {
+      if (e.target.id !== 'jobsSearch' || state.jobsUi.status !== 'closed') return;
+      clearTimeout(state.archiveTimer); state.archiveTimer = setTimeout(loadArchive, 380);
+    });
+  }
+
   // ------------------------------------------------------------ lists & menus
   function openList(kind, opener) {
     const m = lastMetrics; if (!m) return;
@@ -2932,7 +3152,7 @@
       catch (e) { if (e.kind === 'server' && /not available/i.test(e.message)) boot = await legacyBoot(state.user, state.role); else throw e; }
       const before = notifUnread(), newest = state.notif && state.notif.items[0] ? state.notif.items[0].t : 0;
       applyBoot(boot);
-      if (['form', 'pop', 'sheet', 'admin', 'delay', 'enqform'].includes(state.overlay)) state.dirty = true;
+      if (['form', 'pop', 'sheet', 'admin', 'delay', 'enqform', 'close'].includes(state.overlay)) state.dirty = true;
       else { rerender(); refreshOverlay(); }
       updateNav();
       const fresh = state.notif ? state.notif.items.filter((x) => x.t > newest && x.t > (state.notif.seen || 0)) : [];
@@ -3047,7 +3267,7 @@
       if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) { const s = $('#searchInput') || $('#jobsSearch'); if (s) { e.preventDefault(); s.focus(); } }
     });
     $('#drawerBody').addEventListener('click', (e) => {
-      if (['form', 'sheet', 'quick', 'admin', 'delay', 'enqform'].includes(state.overlay)) return;
+      if (['form', 'sheet', 'quick', 'admin', 'delay', 'enqform', 'close'].includes(state.overlay)) return;
       const jobBtn = e.target.closest('[data-job]'); if (jobBtn) { openJob(jobBtn.dataset.job); return; }
       if (e.target.closest('[data-act="logout"]')) { closeOverlays(true); confirmLogout(); }
     });
@@ -3066,6 +3286,7 @@
     initForms();
     initPeople();
     initPhase4();
+    initV25();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 

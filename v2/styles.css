@@ -1268,3 +1268,26 @@ span.status-pill { cursor: default; padding: 7px 13px; }
 @media (max-width: 759px) {
   body:has(#drawer:not([hidden])) .toasts { bottom: auto; top: calc(14px + env(safe-area-inset-top)); }
 }
+
+/* ================================================================ v2.5 — close & archive */
+.ready-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 11px; border-radius: 999px; border: 1.5px solid var(--teal); background: var(--teal-tint); color: var(--teal-text); font-family: var(--f-mono); font-size: 11px; font-weight: 600; letter-spacing: 0.08em; transition: background-color 0.18s, box-shadow 0.18s; }
+.ready-chip:hover { background: var(--teal); color: var(--ink); box-shadow: 0 4px 12px rgba(72, 190, 191, 0.35); }
+.meta-chip.is-ready { border-color: var(--teal); color: var(--teal-text); background: var(--teal-tint); }
+.closed-chip { background: #EEF1F4; color: var(--ink-2); }
+.vh-actions.is-closed { align-items: center; }
+.vh-why { margin-top: 4px; font-size: 13px; font-style: italic; color: var(--ink-2); }
+.close-checks { list-style: none; margin: 4px 0 14px; padding: 0; display: grid; gap: 8px; }
+.close-checks li { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 14px; border: 1px solid var(--line); background: #FFFFFF; }
+.close-checks .cc-ic { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: #EEF1F4; color: var(--ink-2); }
+.close-checks .is-ok .cc-ic { background: var(--teal); color: var(--ink); }
+.close-checks .cc-name { font-weight: 800; font-size: 14px; }
+.close-checks .cc-sub { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.06em; color: var(--ink-2); }
+.close-checks .is-no .cc-sub { color: var(--red-text); }
+.close-lead { margin: 0 0 12px; padding: 12px 14px; border-radius: 14px; background: var(--teal-tint); color: var(--teal-text); font-size: 13.5px; line-height: 1.5; }
+.close-lead b { color: var(--ink); }
+.closed-note { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 10px 14px; border-radius: 14px; border: 1px dashed #C3CDD7; background: rgba(255, 255, 255, 0.6); font-size: 13px; color: var(--ink-2); }
+.closed-note b { color: var(--ink); }
+/* a short dialog still keeps its buttons at the bottom of the panel */
+#drawerBody:has(> .close-form) { flex: 1 1 auto; }
+#drawerBody > .close-form { flex: 1 0 auto; display: flex; flex-direction: column; }
+#drawerBody > .close-form > .form-actions { margin-top: auto; }
