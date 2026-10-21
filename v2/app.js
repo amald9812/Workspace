@@ -537,12 +537,147 @@
     $('#loginUser').addEventListener('input', () => { if ($('#loginMsg').classList.contains('is-error')) setLoginMsg($('#loginMsg'), ''); });
     if (!api.connected) { const n = $('#cardNote'); n.hidden = false; n.textContent = 'Not connected yet: paste your Apps Script /exec link into config.js.'; }
     setTimeout(() => { if (!isTouch()) ($('#userField').hidden ? $('#loginPass') : $('#loginUser')).focus(); }, 60);
+    startVoyage();
+    const wide = window.matchMedia('(min-width: 1024px)');
+    const onWide = () => { if (wide.matches) setTimeout(startVoyage, 50); else stopVoyage(); };
+    if (wide.addEventListener) wide.addEventListener('change', onWide); else if (wide.addListener) wide.addListener(onWide);
+    let fitTimer = 0;
+    window.addEventListener('resize', () => { clearTimeout(fitTimer); fitTimer = setTimeout(() => { if (!state.signedIn) fitMap(); }, 120); });
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (!state.signedIn) fitMap(); });   // the headline's size depends on its font
   }
 
   async function legacyBoot(name, role) {
     const [jobs, users] = await Promise.all([api.call('getSheetData'), api.call('getAllUsers')]);
     return { me: { user: name, role: String(role || '').toUpperCase() }, jobs, users, recent: [], serverTime: Date.now() };
   }
+
+  // ------------------------------------------------------------ sign-in map
+  // A ship works ETHIX's lanes on a faint map: loads, sails, discharges, moves on, loops.
+  // The map is zoomed so the route always sits in the free space under the headline; pins,
+  // labels and the ship keep the same size on screen at any zoom. Laptop/tablet only.
+  const voyage = { raf: 0, running: false, leg: 0, phase: '', k: 1, redraw: null };
+  function fitMap() {
+    const hero = $('.signin-hero'), svg = $('#heroMap svg');
+    if (!svg || !hero || !hero.offsetWidth) return;
+    const hb = hero.getBoundingClientRect(), copy = $('.hero-copy').getBoundingClientRect(), foot = $('.hero-foot').getBoundingClientRect();
+    const r = (svg.dataset.route || '58 589 622 847').split(' ').map(Number);
+    const padL = parseFloat(getComputedStyle(hero).paddingLeft) || 40;
+    // free space for the route, leaving room (in screen pixels) for the port names around it
+    const bx0 = Math.max(44, padL * 0.75 + 30), bx1 = hb.width * 0.9 - 34, by0 = copy.bottom - hb.top + 48, by1 = foot.top - hb.top - 40;
+    let s = Math.min((bx1 - bx0) / (r[2] - r[0]), (by1 - by0) / (r[3] - r[1]));
+    s = Math.max(0.5, Math.min(1.55, s));
+    const ox = bx0 + Math.max(0, (bx1 - bx0 - (r[2] - r[0]) * s) / 2);
+    const oy = by0 + Math.max(0, (by1 - by0 - (r[3] - r[1]) * s) / 2);
+    svg.setAttribute('viewBox', [r[0] - ox / s, r[1] - oy / s, hb.width / s, hb.height / s].map((v) => v.toFixed(1)).join(' '));
+    svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
+    const k = 1 / s;
+    voyage.k = k;
+    $$('.hm-port', svg).forEach((g) => g.setAttribute('transform', 'translate(' + g.dataset.x + ' ' + g.dataset.y + ') scale(' + k.toFixed(3) + ')'));
+    $$('.hm-done', svg).forEach((p) => { p.style.strokeWidth = (2.2 * k).toFixed(2); });
+    if (voyage.redraw) voyage.redraw();
+  }
+  function startVoyage() {
+    const map = $('#heroMap'); const hero = $('.signin-hero');
+    if (!map || voyage.running || state.signedIn || !hero || getComputedStyle(hero).display === 'none') return;
+    fitMap();
+    const svg = $('svg', map);
+    const legs = $$('.hm-done', svg).map((el) => ({ el, len: el.getTotalLength(), from: el.dataset.from, to: el.dataset.to, days: +el.dataset.days || 1 }));
+    if (!legs.length || !legs[0].len) return;
+    const ports = {};
+    $$('.hm-port', svg).forEach((g) => { ports[g.dataset.port] = { el: g, name: g.dataset.name, x: +g.dataset.x, y: +g.dataset.y, lx: +g.dataset.lx, ly: +g.dataset.ly }; });
+    const ship = $('.hm-ship', svg), wake = $('.hm-wake', ship), cargo = $$('.hm-cargo .k1, .hm-cargo .k2, .hm-cargo .k3', ship), boxes = $$('.hm-box', svg), dones = $('.hm-dones', svg);
+    const setOffsets = () => legs.forEach((l) => { l.el.style.strokeDasharray = l.len + ' ' + l.len; l.el.style.strokeDashoffset = l.len; });
+    setOffsets();
+    const cap = { s: $('#hmState'), l: $('#hmLeg'), u: $('#hmSub') };
+    let lastCap = '';
+    const caption = (a, b, c) => { const key = a + '|' + b + '|' + c; if (key === lastCap) return; lastCap = key; cap.s.textContent = a; cap.l.textContent = b; cap.u.textContent = c; };
+    const ease = (t) => 0.5 - Math.cos(Math.PI * Math.min(1, Math.max(0, t))) / 2;
+    const clamp01 = (v) => Math.min(1, Math.max(0, v));
+    const smooth = (v) => { v = clamp01(v); return v * v * (3 - 2 * v); };
+    const on = (code, cls, yes) => { if (ports[code]) ports[code].el.classList.toggle(cls, yes); };
+    const DOCK = 9;                                               // ships berth just off the pin, on the water side
+    const berth = (p) => [p.x - p.lx * DOCK * voyage.k, p.y - p.ly * DOCK * voyage.k];
+    const place = (x, y, a) => ship.setAttribute('transform', 'translate(' + x.toFixed(1) + ' ' + y.toFixed(1) + ') rotate(' + (a * 180 / Math.PI).toFixed(1) + ') scale(' + (voyage.k * 0.9).toFixed(3) + ')');
+    const p0 = legs[0].el.getPointAtLength(0), p1 = legs[0].el.getPointAtLength(5);
+    let angle = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+    const parkHome = () => { const [hx, hy] = berth(ports.JEA); place(hx, hy, angle); };
+    parkHome();
+    on('JEA', 'is-on', true);
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      caption('HOME PORT', 'JEBEL ALI', 'ETHIX LANES'); wake.style.opacity = 0;
+      voyage.redraw = parkHome;
+      return;
+    }
+    voyage.redraw = null;
+
+    // containers between the berthed ship and a stack on the quay; u = 0..1 through the port call
+    const PORT_T = 1.8;
+    const moveBoxes = (p, u, toQuay) => {
+      const k = voyage.k, px = -p.ly, py = p.lx;               // (px, py) runs along the quay
+      const [sx, sy] = berth(p);
+      boxes.forEach((b, i) => {
+        const v = clamp01((u - i * 0.2) / 0.5);
+        const qx = p.x + (p.lx * 15 + px * (i - 1) * 6.8) * k, qy = p.y + (p.ly * 15 + py * (i - 1) * 6.8) * k;
+        const e = ease(v), f = toQuay ? e : 1 - e;
+        const x = sx + (qx - sx) * f, y = sy + (qy - sy) * f - Math.sin(Math.PI * v) * 8 * k;
+        b.setAttribute('transform', 'translate(' + x.toFixed(1) + ' ' + y.toFixed(1) + ') scale(' + k.toFixed(3) + ')');
+        b.setAttribute('opacity', toQuay ? (v > 0 ? 1 : 0) : (v < 1 ? 1 : 0));
+        cargo[i].style.opacity = toQuay ? (v > 0.05 ? 0.16 : 1) : (v >= 0.98 ? 1 : 0.16);
+      });
+    };
+    let phase = 'load', leg = 0, t = 0, prev = 0, fresh = true;
+    const legTime = (l) => 3.4 + l.len / 60;
+    voyage.running = true;
+    const tick = (now) => {
+      if (!voyage.running) return;
+      const dt = Math.min(0.05, prev ? (now - prev) / 1000 : 0); prev = now;
+      t += dt;
+      const L = legs[leg];
+      if (phase === 'load') {
+        const p = ports[L.from];
+        on(L.from, 'is-on', true);
+        moveBoxes(p, t / PORT_T, false);
+        const [bx, by] = berth(p); place(bx, by, angle);
+        caption('IN PORT', p.name, 'LOADING');
+        wake.style.opacity = 0;
+        if (t >= PORT_T) {
+          if (fresh) { setOffsets(); dones.classList.remove('is-fading'); fresh = false; }
+          on(L.from, 'is-on', false); on(L.to, 'is-next', true);
+          phase = 'sail'; t = 0;
+        }
+      } else if (phase === 'sail') {
+        const u = t / legTime(L);
+        const d = ease(u) * L.len;
+        const pt = L.el.getPointAtLength(d);
+        const nx = L.el.getPointAtLength(Math.min(L.len, d + 3)), bk = L.el.getPointAtLength(Math.max(0, d - 3));
+        const target = Math.atan2(nx.y - bk.y, nx.x - bk.x);
+        let diff = target - angle; while (diff > Math.PI) diff -= 2 * Math.PI; while (diff < -Math.PI) diff += 2 * Math.PI;
+        angle += diff * Math.min(1, dt * 7);
+        const a0 = 1 - smooth(u / 0.14), a1 = smooth((u - 0.86) / 0.14);     // ease off / onto the berths
+        const pf = ports[L.from], pd = ports[L.to], k = voyage.k;
+        place(pt.x - (pf.lx * a0 + pd.lx * a1) * DOCK * k, pt.y - (pf.ly * a0 + pd.ly * a1) * DOCK * k, angle);
+        L.el.style.strokeDashoffset = L.len - d;
+        wake.style.opacity = (Math.sin(Math.PI * clamp01(u)) * 0.9).toFixed(2);
+        caption('AT SEA', pf.name + ' → ' + pd.name, 'DAY ' + Math.min(L.days, Math.floor(clamp01(u) * L.days) + 1) + ' OF ' + L.days);
+        if (u >= 1) { L.el.style.strokeDashoffset = 0; on(L.to, 'is-next', false); phase = 'discharge'; t = 0; }
+      } else {
+        const p = ports[L.to];
+        on(L.to, 'is-on', true);
+        moveBoxes(p, t / PORT_T, true);
+        const [bx, by] = berth(p); place(bx, by, angle);
+        caption('IN PORT', p.name, 'DISCHARGING');
+        if (t >= PORT_T) {
+          leg = (leg + 1) % legs.length;
+          if (leg === 0) { dones.classList.add('is-fading'); fresh = true; }        // back home: a new loop
+          phase = 'load'; t = 0;
+        }
+      }
+      voyage.leg = leg; voyage.phase = phase;
+      voyage.raf = requestAnimationFrame(tick);
+    };
+    voyage.raf = requestAnimationFrame(tick);
+  }
+  function stopVoyage() { voyage.running = false; cancelAnimationFrame(voyage.raf); }
 
   // ================================================================ APP
   // Roles: CS = Customer Service (works the jobs) · SALES = own jobs, read + notes · ADMIN = people only
@@ -617,6 +752,7 @@
     const savedScope = store.get('ethix.v2.scope.' + state.user, null);
     const hasMine = state.jobs.some((j) => j.active && j.cs === state.user);
     state.scope = canEdit() ? savedScope || (hasMine ? 'mine' : 'all') : 'all';
+    stopVoyage();
     document.body.classList.remove('is-signin');
     document.body.dataset.role = state.role.toLowerCase();
     $('#signin').hidden = true;
@@ -648,13 +784,12 @@
     state.route = r;
     const view = $('#view');
     const changed = !prev || prev.name !== r.name || prev.jobNo !== r.jobNo;
-    view.classList.toggle('is-fit', (r.name === 'home' && !isSales()) || r.name === 'jobs');
+    view.classList.toggle('is-fit', r.name === 'home' || r.name === 'jobs');
     document.body.classList.toggle('on-voyage', r.name === 'job' && canEdit());
     if (r.name === 'admin') renderAdmin(changed || first);
     else if (r.name === 'activity') renderActivity(changed || first);
     else if (r.name === 'jobs') renderJobs(changed || first);
     else if (r.name === 'job') renderVoyage(r.jobNo, changed || first);
-    else if (isSales()) renderSalesHome(changed || first);
     else renderHome(changed || first);
     if (changed) view.scrollTop = 0;
     updateNav();
@@ -669,6 +804,7 @@
     render(false);
     view.scrollTop = keep.y;
     $$('#view .tile-body, #view .jobs-scroll').forEach((e, i) => { if (keep.inner[i]) e.scrollTop = keep.inner[i]; });
+    if (state.overlay === 'pop') placePop();
     if (keep.focus) { const el = document.getElementById(keep.focus); if (el && el !== document.activeElement) { el.focus({ preventScroll: true }); if (keep.sel && el.setSelectionRange) try { el.setSelectionRange(keep.sel[0], keep.sel[1]); } catch (e) { /* ignore */ } } }
   }
 
@@ -831,10 +967,10 @@
     view.innerHTML =
       '<div class="wrap home">' +
       '<header class="page-head' + anim + '" style="--d:0ms">' +
-        '<div class="head-main"><div class="meta-line"><span>' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div>' +
+        '<div class="head-main"><div class="meta-line"><span>' + (isSales() ? 'SALES · ' : '') + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div>' +
         '<h1 class="greeting">' + greeting() + ', ' + esc(state.user === 'MASTER' ? 'Admin' : nice(state.user)) + '</h1></div>' +
         '<div class="head-actions">' +
-          '<div class="seg" role="group" aria-label="Whose jobs"><button type="button" data-scope="mine" aria-pressed="' + (state.scope === 'mine') + '"><span class="l-full">My jobs</span><span class="l-short">Mine</span></button><button type="button" data-scope="all" aria-pressed="' + (state.scope === 'all') + '"><span class="l-full">Everyone</span><span class="l-short">All</span></button></div>' +
+          (canEdit() ? '<div class="seg" role="group" aria-label="Whose jobs"><button type="button" data-scope="mine" aria-pressed="' + (state.scope === 'mine') + '"><span class="l-full">My jobs</span><span class="l-short">Mine</span></button><button type="button" data-scope="all" aria-pressed="' + (state.scope === 'all') + '"><span class="l-full">Everyone</span><span class="l-short">All</span></button></div>' : '') +
           '<div class="search-wrap"><label class="search">' + icon('search') + '<input id="searchInput" type="search" placeholder="Job no, customer, port…" aria-label="Search jobs" autocomplete="off" value="' + esc(searchVal) + '"><kbd>/</kbd></label><div class="search-results glass" id="searchResults" hidden></div></div>' +
           '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' +
         '</div>' +
@@ -1284,7 +1420,20 @@
   // ================================================================ POPOVER
   // Laptops: a glass card next to what you tapped. Phones: a bottom sheet.
   const usePop = () => window.innerWidth >= 760;
-  let popAnchor = null, popRender = null;
+  let popAnchor = null, popRender = null, popKey = null;
+  // What the popover is attached to, so the same button can be found again after the page redraws.
+  function anchorKey(el) {
+    const attrs = ['data-stop', 'data-act', 'data-adm', 'data-user', 'data-list'].filter((a) => el.hasAttribute(a)).map((a) => '[' + a + '="' + String(el.getAttribute(a)).replace(/"/g, '\\"') + '"]').join('');
+    const box = ['.vhero', '.vcard', '.miscard', '.nextbar', '.crumbs', '.vhead', '.users-list', '.page-head'].find((c) => el.closest(c));
+    return attrs ? (box ? box + ' ' : '') + attrs : null;
+  }
+  function findAnchor() {
+    if (popAnchor && document.body.contains(popAnchor)) return popAnchor;
+    if (!popKey) return null;
+    const found = $$(popKey).find((x) => x.offsetParent !== null);
+    if (found) popAnchor = found;
+    return found || null;
+  }
   function openPop(anchor, kicker, build) {
     closeOverlays(true);
     popRender = build;
@@ -1293,14 +1442,17 @@
     pop.innerHTML = '<div class="pop-head"><div class="kicker">' + esc(kicker) + '</div><button type="button" class="icon-btn" data-act="pop-close" aria-label="Close">' + icon('close', 14) + '</button></div><div class="pop-body">' + build() + '</div>';
     pop.hidden = false;
     popAnchor = anchor;
+    popKey = anchor ? anchorKey(anchor) : null;
     placePop();
     state.overlay = 'pop';
     focusFirst(pop);
   }
   function focusFirst(el) { const f = el.querySelector('[data-primary], .pop-body button, .drawer-body button, input, select'); if (f) f.focus({ preventScroll: true }); }
   function placePop() {
-    const pop = $('#pop'); if (pop.hidden || !popAnchor) return;
-    const r = popAnchor.getBoundingClientRect();
+    const pop = $('#pop'); if (pop.hidden) return;
+    const anchor = findAnchor(); if (!anchor) return;          // its button is gone: stay where it is
+    const r = anchor.getBoundingClientRect();
+    if (!r.width && !r.height) return;
     const pw = pop.offsetWidth, ph = pop.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
     let left = r.left + r.width / 2 - pw / 2;
     left = Math.max(12, Math.min(vw - pw - 12, left));
@@ -1319,7 +1471,7 @@
   }
   function closeOverlays(silent) {
     const had = !$('#pop').hidden || !$('#drawer').hidden;
-    $('#pop').hidden = true; popAnchor = null; popRender = null;
+    $('#pop').hidden = true; popAnchor = null; popKey = null; popRender = null;
     if (!$('#drawer').hidden) hideDrawer(silent);
     state.overlay = null;
     if (had && state.dirty) { state.dirty = false; rerender(); }
@@ -1843,62 +1995,6 @@
     btn.disabled = false; btn.textContent = 'CHANGE PASSWORD';
   }
 
-  // ================================================================ SALES HOME
-  function salesChip(j, t0) {
-    if (j.status === 'COMPLETED') return '<span class="chip chip-done">COMPLETED</span>';
-    if (j.hold) return '<span class="chip chip-hold">ON HOLD</span>';
-    if (j.cat === 'IMPORT' && j.arrived && !j.delivery && j.lineFreeEnd) {
-      const d = days(t0, j.lineFreeEnd);
-      if (d <= 2 && d >= -30) return '<span class="chip chip-urgent">' + icon('alert', 13) + (d < 0 ? 'FREE TIME OVER' : 'FREE TIME ' + d + (d === 1 ? ' DAY' : ' DAYS')) + '</span>';
-    }
-    if (j.atSea) return '<span class="chip chip-teal">' + (j.mode === 'air' ? 'IN THE AIR' : j.mode === 'courier' ? 'IN TRANSIT' : 'AT SEA') + ' · DAY ' + j.dayN + '/' + j.dayT + '</span>';
-    if (j.arrived) return '<span class="chip chip-done">ARRIVED</span>';
-    if (j.etd) return '<span class="chip chip-calm">' + (j.mode === 'courier' ? 'PICK-UP ' : j.mode === 'air' ? 'DEPARTS ' : 'SAILS ') + fmt(j.etd) + '</span>';
-    return '<span class="chip chip-calm">BOOKING</span>';
-  }
-  function followCard(j, t0) {
-    const note = state.lastNotes[j.jobNo.toUpperCase()];
-    const free = j.cat === 'IMPORT' && j.arrived && !j.delivery && j.lineFreeEnd ? days(t0, j.lineFreeEnd) : null;
-    return '<button type="button" class="follow-card" data-job="' + esc(j.jobNo) + '">' +
-      '<span class="fc-top"><span class="fc-job">' + esc(j.jobNo) + '</span>' + salesChip(j, t0) + '</span>' +
-      '<span class="fc-cust">' + esc(j.customer || '—') + '</span>' +
-      (j.mode === 'misc' ? '' : miniTrack(j, 26) + '<span class="fc-ports"><span>' + esc((j.pol || '—') + ' · ' + fmt(j.etd)) + '</span><span>' + esc((j.pod || '—') + ' · ' + fmt(j.eta)) + '</span></span>') +
-      '<span class="fc-next"><strong>Next:</strong> ' + esc(j.next.text) + (note ? ' · <span class="fc-note">' + esc(note.by) + ': ' + esc(note.txt) + '</span>' : '') + '</span>' +
-      (free !== null && free <= 2 && free >= -30 ? '<span class="fc-heads"><strong>Heads-up:</strong> ' + (free < 0 ? 'demurrage is running since ' + DOW[j.lineFreeEnd.getDay()] + ' ' + fmt(j.lineFreeEnd) + '.' : 'demurrage starts after ' + DOW[j.lineFreeEnd.getDay()] + ' ' + fmt(j.lineFreeEnd) + '. You may want to update the customer.') + '</span>' : '') +
-    '</button>';
-  }
-  function renderSalesHome(first) {
-    const t0 = today0();
-    const m = computeHome(state.jobs, t0);
-    m.attention = m.active.filter((j) => j.next.tone === 'urgent' || j.next.tone === 'soon');
-    lastMetrics = m;
-    const anim = first ? ' reveal' : '';
-    const list = m.active.slice().sort((a, b) => a.next.rank - b.next.rank || (a.etd ? a.etd.getTime() : 9e15) - (b.etd ? b.etd.getTime() : 9e15));
-    const searchVal = $('#searchInput') ? $('#searchInput').value : '';
-    const k = (id, label, n, sub, urgent, d) => '<button type="button" class="kpi' + (urgent ? ' is-urgent' : '') + anim + '" style="--d:' + d + 'ms" data-list="' + id + '"><span class="kpi-label">' + label + '</span><span class="kpi-num">' + n + '</span><span class="kpi-sub">' + esc(sub) + '</span></button>';
-    $('#view').innerHTML =
-      '<div class="wrap sales-home">' +
-      '<header class="page-head' + anim + '">' +
-        '<div class="head-main"><div class="meta-line"><span>SALES · ' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div>' +
-        '<h1 class="greeting">Hi ' + esc(nice(state.user)) + '</h1></div>' +
-        '<div class="head-actions">' +
-          '<div class="search-wrap"><label class="search">' + icon('search') + '<input id="searchInput" type="search" placeholder="Job no, customer, port…" aria-label="Search my jobs" autocomplete="off" value="' + esc(searchVal) + '"><kbd>/</kbd></label><div class="search-results glass" id="searchResults" hidden></div></div>' +
-          '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' +
-        '</div>' +
-      '</header>' +
-      '<div class="kpis sales-kpis">' +
-        k('active', 'JOBS I FOLLOW', m.active.length, m.hold.length + ' on hold', false, 60) +
-        k('atsea', 'AT SEA NOW', m.atSea.length, m.atSea.length ? 'next arrival ' + fmt(m.atSea[0].eta) : 'nothing moving', false, 90) +
-        k('arriving', 'ARRIVING', m.arriving.length, 'in the next 7 days', false, 120) +
-        k('attention', 'NEEDS ATTENTION', m.attention.length, m.attention.length ? 'cutoffs, free time' : 'all calm', m.attention.some((j) => j.next.tone === 'urgent'), 150) +
-      '</div>' +
-      '<div class="sales-grid"><section class="follow' + anim + '" style="--d:180ms" aria-labelledby="followTitle"><div class="tile-head"><h2 class="tile-title" id="followTitle">JOBS I’M FOLLOWING</h2><button type="button" class="tile-link" data-href="#/jobs">All my jobs</button></div>' +
-        (list.length ? '<div class="follow-grid">' + list.slice(0, 24).map((j) => followCard(j, t0)).join('') + '</div>' : '<div class="tile tile-empty">' + icon('jobs', 22) + '<span>No active jobs with your name as sales person yet.</span></div>') +
-      '</section>' +
-      activityTile(anim) + '</div>' +
-      '</div>';
-  }
-
   // ================================================================ ADMIN
   const ROLE_CHIP = { CS: ['Customer Service', 'chip-teal'], SALES: ['Sales', 'chip-sales'], ADMIN: ['Admin', 'chip-hold'], ACCOUNTS: ['Accounts', 'chip-calm'] };
   const PW_TEXT = { SET: 'Password set', TEMPORARY: 'Temporary — must change at sign-in', 'PIN ONLY': 'Old PIN — sets a password at next sign-in', NONE: 'No password' };
@@ -2100,8 +2196,7 @@
     const map = {
       active: ['ACTIVE JOBS', m.active], costing: ['COSTING DUE', m.costing], sied: ['SI / ED DUE', m.sied],
       free: ['FREE TIME ENDING ≤ 2 DAYS', m.freeJobs], atsea: ['AT SEA NOW', m.atSea], arriving: ['ARRIVING THIS WEEK', m.arriving],
-      departing: ['DEPARTING THIS WEEK', m.departing], hold: ['ON HOLD', m.hold], watch: ['TODAY’S WATCH', m.watch.map((w) => w.j)],
-      attention: ['NEEDS ATTENTION', m.attention || []]
+      departing: ['DEPARTING THIS WEEK', m.departing], hold: ['ON HOLD', m.hold], watch: ['TODAY’S WATCH', m.watch.map((w) => w.j)]
     };
     const entry = map[kind]; if (!entry) return;
     const list = Array.from(new Set(entry[1]));
@@ -2234,7 +2329,7 @@
       const weekBtn = e.target.closest('[data-week]');
       if (weekBtn) { state.week = weekBtn.dataset.week; rerender(); return; }
       const scopeBtn = e.target.closest('[data-scope]');
-      if (scopeBtn) { state.scope = scopeBtn.dataset.scope; store.set('ethix.v2.scope.' + state.user, state.scope); rerender(); }
+      if (scopeBtn && canEdit()) { state.scope = scopeBtn.dataset.scope; store.set('ethix.v2.scope.' + state.user, state.scope); rerender(); }
     });
     view.addEventListener('scroll', (e) => { if (e.target.classList && e.target.classList.contains('tile-body')) markOverflow(); }, true);
     window.addEventListener('resize', () => { if (!$('#shell').hidden) markOverflow(); });
@@ -2293,5 +2388,5 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 
   // exposed for automated tests only (no data, no token)
-  window.__ethix = { parseDate, mapHeaders, buildJob, computeHome, today0, journeyFor, nextStep };
+  window.__ethix = { parseDate, mapHeaders, buildJob, computeHome, today0, journeyFor, nextStep, voyage: () => ({ running: voyage.running, leg: voyage.leg, phase: voyage.phase }) };
 })();
