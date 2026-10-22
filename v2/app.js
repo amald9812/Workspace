@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive — v2.5)
+   enquiries, follow-ups, delays, close & archive, costing — v2.6)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -62,6 +62,7 @@
     notif: null, lastNotes: {}, admin: null, activity: [], actQ: '',
     follow: { plan: {}, checks: {}, days: 35 }, followBusy: new Set(), followHist: {}, calOffset: {}, delays: {}, enquiries: [],
     closedJobs: new Map(), closedTry: {}, archive: { jobs: null, total: 0, loading: false, seq: 0 }, closeForm: null,
+    costing: {}, rate: 3.685, cost: null, costUi: { tab: 'pending', q: '' }, resuming: false,
     enqTab: '', enqQ: '', roundQ: '', delayForm: null, newEnq: { type: '' }, enqSub: null, enqOpenId: null
   };
 
@@ -465,7 +466,7 @@
         api.token = res.token;
         state.pendingUser = user;
         if (res.mustChange) { showNewPassword(user); return; }
-        store.set(LAST_USER, user);
+        store.set(LAST_USER, user); keepSession(user, res && res.role);
         let boot = res.boot;
         if (!boot) boot = await api.call('ethixBootstrap');
         $('#signinCard').classList.add('leaving');
@@ -510,7 +511,7 @@
     try {
       const res = await api.call('ethixSetPassword', [pw], { timeout: 60000 });
       if (res && res.ok) {
-        store.set(LAST_USER, user);
+        store.set(LAST_USER, user); keepSession(user, res && res.role);
         $('#signinCard').classList.add('leaving');
         setTimeout(() => enterApp(res.boot, user), 280);
         return;
@@ -531,7 +532,7 @@
     });
     $('#forgotBtn').addEventListener('click', () => { $('#forgotNote').hidden = !$('#forgotNote').hidden; });
     $('#newPw').addEventListener('input', drawRules);
-    $('#newPwCancel').addEventListener('click', () => { api.logout(); $('#stepNewPw').hidden = true; $('#stepLogin').hidden = false; $('#loginPass').value = ''; $('#loginPass').focus(); });
+    $('#newPwCancel').addEventListener('click', () => { api.logout(); dropSession(); $('#stepNewPw').hidden = true; $('#stepLogin').hidden = false; $('#loginPass').value = ''; $('#loginPass').focus(); });
     document.addEventListener('click', (e) => {
       const eye = e.target.closest('[data-eye]'); if (!eye) return;
       const inp = document.getElementById(eye.dataset.eye); if (!inp) return;
@@ -721,6 +722,8 @@
     if (boot.follow) state.follow = { plan: boot.follow.plan || {}, checks: boot.follow.checks || {}, days: boot.follow.days || 35 };
     if (boot.delays) state.delays = boot.delays;
     if (Array.isArray(boot.enquiries)) state.enquiries = boot.enquiries;
+    state.costing = boot.costing || {};
+    if (boot.rate) state.rate = boot.rate;
     state.followHist = {};
     state.syncedAt = Date.now();
     rebuildJobs();
@@ -776,10 +779,11 @@
   function currentRoute() {
     const h = decodeURIComponent(location.hash || '');
     const m = h.match(/^#\/job\/(.+)$/);
-    let r = m ? { name: 'job', jobNo: m[1].trim() } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : { name: 'home' };
+    const mc = h.match(/^#\/costing\/(.+)$/);
+    let r = m ? { name: 'job', jobNo: m[1].trim() } : mc ? { name: 'costjob', jobNo: mc[1].trim() } : h === '#/costing' ? { name: 'costing' } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : { name: 'home' };
     if (isAdmin()) { if (r.name !== 'activity') r = { name: 'admin' }; }      // admin works with people, not jobs
-    else if (r.name === 'admin' || r.name === 'activity' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote())) r = { name: 'home' };
-    const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity|round|follow-ups|enquiries)$/.test(h) ? '#/home' : r.name === 'round' && h === '#/round' ? '#/follow-ups' : null;
+    else if (r.name === 'admin' || r.name === 'activity' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote()) || ((r.name === 'costing' || r.name === 'costjob') && !canNote())) r = { name: 'home' };
+    const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity|round|follow-ups|enquiries|costing)$/.test(h) ? '#/home' : r.name === 'round' && h === '#/round' ? '#/follow-ups' : null;
     if (want && h !== want) history.replaceState(null, '', want);
     return r;
   }
@@ -799,6 +803,8 @@
     else if (r.name === 'jobs') renderJobs(changed || first);
     else if (r.name === 'round') renderRound(changed || first);
     else if (r.name === 'enquiries') renderEnquiries(changed || first);
+    else if (r.name === 'costing') renderCostList(changed || first);
+    else if (r.name === 'costjob') renderCostJob(r.jobNo, changed || first);
     else if (r.name === 'job') { renderVoyage(r.jobNo, changed || first); fitNames(); }
     else renderHome(changed || first);
     if (changed) view.scrollTop = 0;
@@ -834,16 +840,17 @@
     else if (canEdit()) items.push(
       { id: 'round', label: 'Follow-ups', icon: 'check', href: '#/follow-ups', count: roundRows(today0()).due.length },
       { id: 'enquiries', label: 'Enquiries', icon: 'enq', href: '#/enquiries', count: enqNew().length },
-      { id: 'fleet', label: 'Fleet', icon: 'fleet', soon: true }, { id: 'costing', label: 'Costing', icon: 'costing', soon: true },
-      { id: 'analysis', label: 'Analysis', icon: 'analysis', soon: true });
-    else items.push({ id: 'fleet', label: 'Fleet', icon: 'fleet', soon: true }, { id: 'costing', label: 'Costing', icon: 'costing', soon: true });
+      { id: 'costing', label: 'Costing', icon: 'costing', href: '#/costing', count: costRows().open },
+      { id: 'fleet', label: 'Fleet', icon: 'fleet', soon: true }, { id: 'analysis', label: 'Analysis', icon: 'analysis', soon: true });
+    else items.push({ id: 'fleet', label: 'Fleet', icon: 'fleet', soon: true });
+    if (isSales()) items.splice(items.length - 1, 0, { id: 'costing', label: 'Costing', icon: 'costing', href: '#/costing', count: costRows().open });
     return items;
   }
   function renderChrome() {
     $('#navList').innerHTML = navItems().map((n) =>
       '<button type="button" class="nav-item" data-nav="' + n.id + '"' + (n.soon ? ' disabled title="Coming soon"' : n.act ? ' data-act="' + n.act + '"' : ' data-href="' + n.href + '"') + ' aria-label="' + esc(n.label) + '">' +
       '<span class="nav-ic">' + icon(n.icon) + (n.act === 'notif' ? '<span class="badge-dot" hidden></span>' : '') + '</span><span class="nav-label">' + esc(n.label) + '</span>' +
-      (n.soon ? '<span class="soon">SOON</span>' : n.count !== undefined ? '<span class="count' + (['round', 'enquiries'].includes(n.id) ? ' is-pill' : '') + '"' + (n.count ? '' : ' hidden') + '>' + n.count + '</span>' : '') + '</button>'
+      (n.soon ? '<span class="soon">SOON</span>' : n.count !== undefined ? '<span class="count' + (['round', 'enquiries', 'costing'].includes(n.id) ? ' is-pill' : '') + '"' + (n.count ? '' : ' hidden') + '>' + n.count + '</span>' : '') + '</button>'
     ).join('');
     $('#sideAvatar').textContent = initials(state.user);
     $('#sideName').textContent = state.user === 'MASTER' ? 'ADMIN' : state.user;
@@ -861,13 +868,14 @@
   }
   function updateNav() {
     const r = state.route ? state.route.name : 'home';
-    const cur = r === 'job' ? 'jobs' : r;
+    const cur = r === 'job' ? 'jobs' : r === 'costjob' ? 'costing' : r;
     $$('[data-nav]').forEach((b) => { if (b.dataset.nav === cur) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
     const c = $('#navList [data-nav="jobs"] .count'); if (c) c.textContent = state.jobs.filter((j) => j.active).length;
     const p = $('#navList [data-nav="admin"] .count'); if (p && state.admin) p.textContent = state.admin.users.length;
     const setCount = (id, n) => { const el = $('#navList [data-nav="' + id + '"] .count'); if (el) { el.textContent = n; el.hidden = !n; } };
     if (canEdit()) { setCount('round', roundRows(today0()).due.length); setCount('enquiries', enqNew().length); }
     if (isSales()) setCount('enquiries', enqOpen().length);
+    if (canNote()) setCount('costing', costRows().open);
     drawBadges();
   }
 
@@ -1369,7 +1377,7 @@
     const n = jr.next;
     const storyCount = (storyItems(j.jobNo) || []).length;
     const nextBar = n && canEditJob(j) ? '<div class="nextbar glass" role="region" aria-label="Next stop"><div class="nb-text"><div class="kicker">NEXT STOP</div><div class="nb-name">' + esc(n.name) + ' <span class="nb-sub">' + esc(n.sub) + '</span></div></div>' +
-      '<button type="button" class="btn-brutal" data-stop="' + n.id + '" data-quick="1">' + (n.kind === 'field' ? 'MARK DONE' : n.kind === 'date' ? 'SET DATE' : n.kind === 'status' ? 'CLOSE JOB' : 'UPDATE') + '</button></div>' : '';
+      '<button type="button" class="btn-brutal" data-stop="' + n.id + '" data-quick="1">' + (n.id === 'costing' ? 'OPEN COSTING' : n.kind === 'field' ? 'MARK DONE' : n.kind === 'date' ? 'SET DATE' : n.kind === 'status' ? 'CLOSE JOB' : 'UPDATE') + '</button></div>' : '';
     view.innerHTML =
       '<div class="wrap voyage-page' + (jr.next && canEditJob(j) ? ' has-nextbar' : '') + '">' +
       '<div class="crumbs' + anim + '"><button type="button" class="back-btn" data-act="back" aria-label="Back">' + icon('back', 18) + '</button><button type="button" class="link-btn" data-href="#/jobs">JOBS</button><span>/ ' + esc(j.jobNo) + '</span>' +
@@ -1377,7 +1385,7 @@
       '<header class="vhead' + anim + '" style="--d:30ms">' +
         '<div class="vh-titles"><div class="vh-idrow"><h1 class="vh-job">' + esc(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + delayChip(j) + readyChip(j) + '</div>' +
         '<div class="vh-cust">' + esc(j.customer || '—') + '</div>' + (j.closed && j.closed.reason ? '<div class="vh-why">' + esc(j.closed.reason) + '</div>' : '') + '</div>' +
-        (j.closed ? closedActions(j) : canEdit() ? '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="delay" title="Mark delay" aria-label="Mark delay">' + icon('clock', 16) + '<span>Mark delay</span></button><button type="button" class="btn-ghost" data-act="edit" title="Edit details" aria-label="Edit details">' + icon('edit', 16) + '<span>Edit details</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>'
+        (j.closed ? closedActions(j) : canEdit() ? '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="delay" title="Mark delay" aria-label="Mark delay">' + icon('clock', 16) + '<span>Mark delay</span></button><button type="button" class="btn-ghost" data-act="duplicate" title="Duplicate job" aria-label="Duplicate job">' + icon('copy', 16) + '<span>Duplicate</span></button><button type="button" class="btn-ghost" data-act="edit" title="Edit details" aria-label="Edit details">' + icon('edit', 16) + '<span>Edit details</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>'
           : '<div class="vh-actions is-ro"><span class="ro-chip">' + icon('lock', 14) + '<span>UPDATED BY ' + esc(j.cs || 'CUSTOMER SERVICE') + '</span></span>' + (canNote() ? '<button type="button" class="btn-brutal btn-icon" data-act="focus-note">' + icon('note', 16) + '<span>ADD A NOTE</span></button>' : '') + '</div>') +
       '</header>' +
       '<div class="ft-top">' + freeCard(j, t0) + '</div>' +
@@ -1389,7 +1397,7 @@
         : tab === 'story' ? '<section class="tile story-card">' + noteBox() + storyList(j.jobNo) + '</section>'
         : '<div class="voverview">' +
             '<section class="tile story-card" aria-labelledby="storyTitle"><div class="tile-head"><h2 class="tile-title" id="storyTitle">THE STORY SO FAR</h2>' + (isSales() ? (j.cs ? '<span class="small">Shared with ' + esc(j.cs) + ' (Customer Service)</span>' : '') : j.sales ? '<span class="small">Shared with ' + esc(j.sales) + ' (sales)</span>' : '') + '</div>' + noteBox() + storyList(j.jobNo, 6) + '</section>' +
-            '<div class="vside"><div class="ft-side">' + freeCard(j, t0) + '</div>' + delayCard(j) + followCard(j) + keyDates(j, t0) + cargoCard(j) + peopleCard(j) + '</div>' +
+            '<div class="vside"><div class="ft-side">' + freeCard(j, t0) + '</div>' + delayCard(j) + followCard(j) + costCard(j) + keyDates(j, t0) + cargoCard(j) + peopleCard(j) + '</div>' +
           '</div>') +
       '</div>' + nextBar;
   }
@@ -1587,13 +1595,13 @@
     return () => {
       const j = findJob(no); if (!j) return '';
       return '<div class="pop-title">Job status</div><div class="choice-row is-stack">' + OPTS.status.map((v) => '<button type="button" class="choice' + (j.status === v ? ' is-on' : '') + '" data-set="status" data-val="' + v + '" aria-pressed="' + (j.status === v) + '">' + ({ ONGOING: 'Ongoing', HOLD: 'On hold', COMPLETED: 'Completed', CANCELLED: 'Cancelled' }[v]) + '</button>').join('') + '</div>' +
-        '<label class="pop-label" for="holdNote">Reason (optional — posted as a note)</label><input type="text" id="holdNote" maxlength="300" placeholder="e.g. customer asked to roll over" autocomplete="off">' + SAVE_NOTE;
+        '<label class="pop-label" for="holdNote">Reason (optional — posted as a note)</label><input type="text" id="holdNote" maxlength="300" placeholder="Type the reason" autocomplete="off">' + SAVE_NOTE;
     };
   }
   function quickEditor(no) {
     return () => {
       const j = findJob(no); if (!j) return '';
-      const fields = FORM_STATUS[j.type] || ['sido', 'ed', 'bl', 'costing'];
+      const fields = FORM_STATUS[j.type] || ['sido', 'ed', 'bl'];
       return '<h2 class="peek-job" id="drawerTitle">' + esc(j.jobNo) + '</h2><p class="pop-text">Tap a value to save it straight away.</p>' +
         ['status'].concat(fields.filter((f) => f !== 'delivery')).map((f) => '<div class="quick-row"><div class="pop-label">' + esc(fieldLabel(j, f)) + '</div><div class="choice-row">' + OPTS[f].map((v) => '<button type="button" class="choice' + ((j[f] || '') === v ? ' is-on' : '') + '" data-set="' + f + '" data-val="' + esc(v) + '" aria-pressed="' + ((j[f] || '') === v) + '">' + esc(v === NA ? 'N/A' : v) + '</button>').join('') + '</div></div>').join('') + SAVE_NOTE;
     };
@@ -1709,10 +1717,10 @@
     MIS: ['against']
   };
   const FORM_STATUS = {
-    SFEF: ['loadlist', 'sido', 'ed', 'bl', 'costing'], SFEL: ['loadlist', 'sido', 'ed', 'bl', 'costing'], AFE: ['sido', 'ed', 'bl', 'costing'],
-    SFIF: ['loadlist', 'sido', 'ed', 'bl', 'docs', 'delivery', 'costing'], SFIL: ['loadlist', 'sido', 'ed', 'bl', 'docs', 'delivery', 'costing'],
-    AFI: ['sido', 'ed', 'bl', 'delivery', 'costing'], CND: ['loadlist', 'sido', 'ed', 'bl', 'docs', 'delivery', 'costing'],
-    SFC: ['sido', 'bl', 'costing'], AFC: ['sido', 'bl', 'costing'], CRR: ['sido', 'bl', 'costing'], MIS: ['costing']
+    SFEF: ['loadlist', 'sido', 'ed', 'bl'], SFEL: ['loadlist', 'sido', 'ed', 'bl'], AFE: ['sido', 'ed', 'bl'],
+    SFIF: ['loadlist', 'sido', 'ed', 'bl', 'docs', 'delivery'], SFIL: ['loadlist', 'sido', 'ed', 'bl', 'docs', 'delivery'],
+    AFI: ['sido', 'ed', 'bl', 'delivery'], CND: ['loadlist', 'sido', 'ed', 'bl', 'docs', 'delivery'],
+    SFC: ['sido', 'bl'], AFC: ['sido', 'bl'], CRR: ['sido', 'bl'], MIS: []
   };
   const TYPE_GROUPS = [
     ['Sea export', [['SFEF', 'FCL'], ['SFEL', 'LCL']], 'ship'],
@@ -1729,14 +1737,12 @@
     return '<datalist id="' + id + '">' + out.slice(0, 600).map((v) => '<option value="' + esc(v) + '"></option>').join('') + '</datalist>';
   }
   function loadLists() {
-    if (state.lists || state.listsLoading) return;
-    state.listsLoading = true;
-    api.call('getMasterLists').then((l) => { state.lists = l || { customers: [], vendors: [] }; }).catch(() => { state.lists = { customers: [], vendors: [] }; }).finally(() => { state.listsLoading = false; });
+    loadLists6();
   }
   function fieldMeta(key, type) {
     const air = ['AFE', 'AFI', 'AFC'].includes(type), crr = type === 'CRR', imp = ['SFIF', 'SFIL', 'AFI', 'CND'].includes(type);
     const M = {
-      jobNo: { label: 'Job no.', kind: 'text', req: true, upper: true, ph: 'e.g. 202600812' },
+      jobNo: { label: 'Job no.', kind: 'text', req: true, upper: true, ph: 'Enter job number' },
       customer: { label: 'Customer', kind: 'text', req: true, upper: true, list: 'dlCustomers' },
       vendor: { label: air ? 'Airline / vendor' : crr ? 'Courier company' : 'Line / vendor', kind: 'text', upper: true, list: 'dlVendors' },
       cs: { label: 'Customer Service (owns it)', kind: 'cs' },
@@ -1796,9 +1802,9 @@
   }
   function formLists() {
     const L = state.lists || { customers: [], vendors: [] };
-    return datalist('dlCustomers', L.customers.concat(state.jobs.map((j) => j.customer))) + datalist('dlVendors', L.vendors.concat(state.jobs.map((j) => j.vendor))) +
-      datalist('dlPorts', state.jobs.map((j) => j.pol).concat(state.jobs.map((j) => j.pod), ['JEBEL ALI', 'DUBAI', 'KHOR FAKKAN', 'SHARJAH', 'ABU DHABI'])) +
-      datalist('dlSales', SALES_NAMES.concat(state.users.filter((u) => String(u.role || '').toUpperCase().trim() === 'SALES').map((u) => String(u.name || '').toUpperCase()), state.jobs.map((j) => j.sales))) + datalist('dlJobs', state.jobs.slice(-400).map((j) => j.jobNo));
+    void L;
+    return datalist('dlCustomers', listSrc('dlCustomers')) + datalist('dlVendors', listSrc('dlVendors')) + datalist('dlPorts', listSrc('dlPorts')) +
+      datalist('dlSales', listSrc('dlSales')) + datalist('dlJobs', state.jobs.slice(-400).map((j) => j.jobNo));
   }
   function typeTiles(sel, noMis) {
     return '<div class="type-grid" role="radiogroup" aria-label="Job type">' + TYPE_GROUPS.filter((g) => !noMis || g[2] !== 'costing').map(([title, opts, ic]) =>
@@ -1813,7 +1819,7 @@
     closeOverlays(true);
     state.newJob = Object.assign({ type: type || '' }, opts || {});
     $('#drawer').classList.add('is-wide');
-    $('#drawerKicker').textContent = state.newJob.enq ? 'BOOK ENQUIRY AS JOB' : 'NEW JOB';
+    $('#drawerKicker').textContent = state.newJob.enq ? 'BOOK ENQUIRY AS JOB' : state.newJob.dup ? 'DUPLICATE JOB' : 'NEW JOB';
     renderNewJob();
     showDrawer(document.activeElement);
     state.overlay = 'form';
@@ -1828,8 +1834,9 @@
     if (t === 'AFI') d.pod = 'DUBAI';
     Object.keys(state.newJob.prefill || {}).forEach((k) => { if (state.newJob.prefill[k]) d[k] = state.newJob.prefill[k]; });
     const tf = TYPE_FIELDS[t];
-    $('#drawerBody').innerHTML = '<h2 class="peek-job form-title" id="drawerTitle"><span class="badge badge-lg">' + t + '</span> ' + esc(TYPE_NAMES[t]) + (state.newJob.enq ? ' <span class="chip chip-teal">FROM ' + esc(state.newJob.enq) + '</span>' : '') + '</h2>' +
+    $('#drawerBody').innerHTML = '<h2 class="peek-job form-title" id="drawerTitle"><span class="badge badge-lg">' + t + '</span> ' + esc(TYPE_NAMES[t]) + (state.newJob.enq ? ' <span class="chip chip-teal">FROM ' + esc(state.newJob.enq) + '</span>' : '') + (state.newJob.dup ? ' <span class="chip chip-teal">COPY OF ' + esc(state.newJob.dup) + '</span>' : '') + '</h2>' +
       '<button type="button" class="link-btn quiet form-back" data-act="nj-type">' + icon('back', 14) + 'Change type</button>' +
+      (state.newJob.dup ? '<p class="dup-note">' + icon('copy', 14) + '<span>Copied from ' + esc(state.newJob.dup) + ': customer, line, route, sales person, containers and cargo. Enter the new job number — dates, statuses, notes and costing start fresh.</span></p>' : '') +
       '<form class="job-form" id="jobForm" novalidate>' +
         '<fieldset><legend>JOB</legend><div class="fgrid">' + ['jobNo', 'customer', 'vendor', 'cs', 'sales', 'opened'].map((k) => input(k, t, d[k] || '')).join('') + '</div></fieldset>' +
         (tf.length ? '<fieldset><legend>' + (t === 'MIS' ? 'LINK' : 'CARGO & ROUTE') + '</legend><div class="fgrid' + (d.dg === 'DG' ? ' has-dg' : '') + '">' + tf.map((k) => input(k, t, d[k] || '')).join('') + '</div></fieldset>' : '') +
@@ -1871,6 +1878,7 @@
         state.rowMap.set(k, res.row);
         rebuildJob(k);
         if (res.enquiry) putEnq(res.enquiry);
+        learnLocal('customers', [v.customer]); learnLocal('vendors', [v.vendor]); learnLocal('ports', [v.pol, v.pod]);
         closeOverlays();
         toast(enqId ? 'Booked as job ' + v.jobNo + ' — ' + nice(res.enquiry ? res.enquiry.sales : 'sales') + ' was told' : 'Job ' + v.jobNo + ' created');
         openJob(v.jobNo);
@@ -1894,7 +1902,7 @@
     const t = j.type;
     const keys = ['customer', 'vendor', 'cs', 'sales', 'opened'];
     const route = TYPE_FIELDS[t] || [];
-    const docs = FORM_STATUS[t] || ['sido', 'ed', 'bl', 'costing'];
+    const docs = FORM_STATUS[t] || ['sido', 'ed', 'bl'];
     const val = (k) => asInput(k, j.raw[k]);
     state.editing = { no: j.jobNo, initial: {} };
     const norm = (k, v) => (fieldMeta(k, t) && fieldMeta(k, t).upper ? String(v).toUpperCase().replace(/\s+/g, ' ') : v);
@@ -1905,7 +1913,7 @@
       '<form class="job-form" id="editForm" novalidate>' +
         '<fieldset><legend>JOB</legend><div class="fgrid">' + input('type', t, val('type')) + input('status', t, val('status')) + keys.map((k) => input(k, t, val(k))).join('') + '</div><div class="type-warn" id="typeWarn" hidden>Changing the type changes the voyage stops for this job.</div></fieldset>' +
         (route.length ? '<fieldset><legend>' + (t === 'MIS' ? 'LINK' : 'CARGO & ROUTE') + '</legend><div class="fgrid">' + route.map((k) => input(k, t, val(k))).join('') + '</div></fieldset>' : '') +
-        '<fieldset><legend>DOCUMENTS</legend><div class="fgrid">' + docs.map((k) => input(k, t, val(k))).join('') + '</div></fieldset>' +
+        (docs.length ? '<fieldset><legend>DOCUMENTS</legend><div class="fgrid">' + docs.map((k) => input(k, t, val(k))).join('') + '</div></fieldset>' : '') +
         '<fieldset><legend>REMARKS</legend><div class="fgrid">' + input('remarks', t, val('remarks')) + '</div></fieldset>' +
         '<div class="form-error" id="formError" role="alert"></div>' +
         '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit">SAVE CHANGES</button></div>' +
@@ -1924,6 +1932,7 @@
     Object.keys(v).forEach((k) => { if (k in ed.initial && String(v[k]) !== String(ed.initial[k])) changes[k] = v[k]; });
     closeOverlays();
     if (!Object.keys(changes).length) { toast('No changes to save'); return; }
+    learnLocal('customers', [changes.customer]); learnLocal('vendors', [changes.vendor]); learnLocal('ports', [changes.pol, changes.pod]);
     saveJob(ed.no, changes, { toast: Object.keys(changes).length === 1 ? fieldMeta(Object.keys(changes)[0], findJob(ed.no).type).label + ' saved' : Object.keys(changes).length + ' changes saved' });
   }
 
@@ -1976,13 +1985,14 @@
     if (x.kind === 'enquiry') return '<strong>' + esc(x.from) + '</strong> sent an enquiry';
     if (x.kind === 'enq-update') return '<strong>' + esc(x.from) + '</strong> on enquiry';
     if (x.kind === 'delay') return '<strong>' + esc(x.from) + '</strong> marked a delay on';
+    if (x.kind === 'costing') return '<strong>' + esc(x.from) + '</strong> on the costing of';
     return '<strong>' + esc(x.from) + '</strong> updated';
   }
   function notifPanel() {
     const n = state.notif || { items: [] };
     const seen = state.notifSeenShown || 0;
     return '<h2 class="peek-job list-title" id="drawerTitle">Notifications</h2>' +
-      (n.items && n.items.length ? '<ol class="notif-list">' + n.items.map((x) => '<li><button type="button" class="notif' + (x.t > seen ? ' is-new' : '') + (x.kind === 'delay' ? ' is-delay' : '') + '" ' + (/^EQ-/.test(x.job) ? 'data-enq' : 'data-job') + '="' + esc(x.job) + '">' +
+      (n.items && n.items.length ? '<ol class="notif-list">' + n.items.map((x) => '<li><button type="button" class="notif' + (x.t > seen ? ' is-new' : '') + (x.kind === 'delay' ? ' is-delay' : '') + '" ' + (/^EQ-/.test(x.job) ? 'data-enq' : x.kind === 'costing' ? 'data-cost' : 'data-job') + '="' + esc(x.job) + '">' +
         '<span class="avatar' + (x.kind === 'note' ? ' is-other' : '') + '">' + esc(initials(x.from)) + '</span>' +
         '<span class="nt-body"><span class="nt-head">' + notifText(x) + ' <span class="nt-job">' + esc(x.job) + '</span></span>' +
         '<span class="nt-text">' + esc(x.text) + '</span><span class="nt-when">' + esc(ago(x.t)) + '</span></span></button></li>').join('') + '</ol>'
@@ -2006,8 +2016,8 @@
   // ---------- my account ----------
   function accountPanel() {
     const go2 = (href, ic, label, n) => '<button type="button" class="acct-go" data-href="' + href + '">' + icon(ic, 18) + '<span>' + label + '</span>' + (n ? '<b>' + n + '</b>' : '') + '</button>';
-    const shortcuts = canEdit() ? go2('#/follow-ups', 'check', 'Follow-ups', roundRows(today0()).due.length) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length)
-      : isSales() ? go2('#/enquiries', 'enq', 'My enquiries', enqOpen().length) : '';
+    const shortcuts = canEdit() ? go2('#/follow-ups', 'check', 'Follow-ups', roundRows(today0()).due.length) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length) + go2('#/costing', 'costing', 'Costing', costRows().open)
+      : isSales() ? go2('#/enquiries', 'enq', 'My enquiries', enqOpen().length) + go2('#/costing', 'costing', 'Costing', costRows().open) : '';
     return (shortcuts ? '<div class="acct-shortcuts">' + shortcuts + '</div>' : '') + '<div class="acct"><span class="avatar">' + esc(initials(state.user)) + '</span><div><div class="acct-name" id="drawerTitle">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(ROLE_NAMES[state.role] || state.role) + '</div></div></div>' +
       '<form class="tile pw-form" id="pwForm" novalidate><h3 class="tile-title">CHANGE PASSWORD</h3>' +
         '<input type="text" name="username" autocomplete="username" value="' + esc(state.user) + '" class="sr-only" tabindex="-1" aria-hidden="true" readonly>' +
@@ -2018,7 +2028,7 @@
         '<div class="pin-msg" id="pwMsg" role="alert"></div>' +
         '<button type="submit" class="btn-brutal" id="pwSave">CHANGE PASSWORD</button></form>' +
       '<button type="button" class="btn-ghost acct-logout" data-act="logout">' + icon('logout', 16) + 'Log out</button>' +
-      (canEdit() ? '<div class="peek-card"><h3>COMING SOON</h3>' + ['Fleet timeline', 'Costing and analysis'].map((t) => '<div class="kv"><span class="kv-k">' + esc(t) + '</span><span class="kv-v">SOON</span></div>').join('') + '</div>' : '');
+      (canEdit() ? '<div class="peek-card"><h3>COMING SOON</h3>' + ['Fleet timeline', 'Analysis'].map((t) => '<div class="kv"><span class="kv-k">' + esc(t) + '</span><span class="kv-v">SOON</span></div>').join('') + '</div>' : '');
   }
   function openAccount(opener) {
     closeOverlays(true);
@@ -2129,7 +2139,7 @@
     return '<div class="cred-card"><div class="kicker">' + (isNew ? 'ACCOUNT READY' : 'PASSWORD RESET') + '</div>' +
       '<div class="kv"><span class="kv-k">Username</span><span class="kv-v">' + esc(name) + '</span></div>' +
       '<div class="kv"><span class="kv-k">Temporary password</span><span class="kv-v" id="credPw">' + esc(pw) + '</span></div>' +
-      '<p class="pop-text">Send these to ' + esc(nice(name)) + ' privately (e.g. WhatsApp). At first sign-in they must choose their own password — you won’t know it.</p>' +
+      '<p class="pop-text">Send these to ' + esc(nice(name)) + ' privately. At first sign-in they must choose their own password — you won’t know it.</p>' +
       '<div class="form-actions is-inline"><button type="button" class="btn-ghost" data-adm="copy" data-text="' + esc('Username: ' + name + '\nTemporary password: ' + pw) + '">' + icon('copy', 16) + 'Copy</button><button type="button" class="btn-brutal" data-act="form-done">DONE</button></div></div>';
   }
   function openAddUser(name, role) {
@@ -2139,7 +2149,7 @@
     $('#drawerKicker').textContent = 'ADD USER';
     $('#drawerBody').innerHTML = '<h2 class="peek-job form-title" id="drawerTitle">New account</h2>' +
       '<form class="job-form" id="addUserForm" novalidate><div class="fgrid">' +
-        '<div class="field is-wide"><label for="auName">Name (this is their username)</label><input id="auName" class="is-upper" list="dlSugg" autocomplete="off" spellcheck="false" value="' + esc(name || '') + '" placeholder="e.g. VINEETH"><div class="field-err" id="auName_err"></div></div>' +
+        '<div class="field is-wide"><label for="auName">Name (this is their username)</label><input id="auName" class="is-upper" list="dlSugg" autocomplete="off" spellcheck="false" value="' + esc(name || '') + '" placeholder="Enter username"><div class="field-err" id="auName_err"></div></div>' +
         '<div class="field is-wide"><label>Role</label><div class="choice-row" role="radiogroup" aria-label="Role">' + [['CS', 'Customer Service'], ['SALES', 'Sales'], ['ADMIN', 'Admin']].map(([v, l]) => '<button type="button" class="choice' + ((role || 'CS') === v ? ' is-on' : '') + '" role="radio" data-pick-role="' + v + '" aria-checked="' + ((role || 'CS') === v) + '">' + l + '</button>').join('') + '</div><p class="pop-hint" id="auRoleHint"></p></div>' +
         '<div class="field is-wide"><label for="auPw">Temporary password</label><div class="date-row"><input id="auPw" value="' + esc(tempPassword()) + '" autocomplete="off" spellcheck="false"><button type="button" class="choice" data-adm="gen">New</button></div><div class="field-err" id="auPw_err"></div></div>' +
       '</div>' + datalist('dlSugg', A.suggestions.map((s) => s.name)) +
@@ -2345,7 +2355,7 @@
     const f = followState(j, today0());
     const mine = f.mineToday;
     return '<div class="pop-title">' + (mine ? 'Checked today ' + hm(mine[0]) : 'Check ' + esc(j.jobNo)) + '</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p>' +
-      '<form class="pop-form" data-remark="' + esc(j.jobNo) + '"><label class="pop-label" for="remarkInput">Remark (optional)</label><input type="text" id="remarkInput" maxlength="200" value="' + esc(mine ? mine[2] : '') + '" placeholder="e.g. called customer, docs tomorrow" autocomplete="off">' +
+      '<form class="pop-form" data-remark="' + esc(j.jobNo) + '"><label class="pop-label" for="remarkInput">Remark (optional)</label><input type="text" id="remarkInput" maxlength="200" value="' + esc(mine ? mine[2] : '') + '" placeholder="Type a remark" autocomplete="off">' +
       '<button type="submit" class="btn-brutal pop-main" data-primary>' + (mine ? 'SAVE REMARK' : 'CHECK WITH REMARK') + '</button></form>' +
       (mine ? '<button type="button" class="btn-ghost pop-wide" data-undo-check="' + esc(j.jobNo) + '">Undo today’s check</button>' : '');
   };
@@ -2517,7 +2527,7 @@
         '<fieldset><legend>WHERE?</legend><div class="choice-row">' + where.map((w) => '<button type="button" class="choice' + (F.where === w ? ' is-on' : '') + '" data-dl-where="' + w + '" aria-pressed="' + (F.where === w) + '">' + esc(nice(w)) + '</button>').join('') + '</div></fieldset>' +
         '<fieldset><legend>WHY?</legend><div class="choice-row">' + DELAY_REASONS.concat(['Other']).map((r) => '<button type="button" class="choice' + (F.reason === r ? ' is-on' : '') + '" data-dl-reason="' + esc(r) + '" aria-pressed="' + (F.reason === r) + '">' + esc(r) + '</button>').join('') + '</div>' +
           (F.reason === 'Other' ? '<div class="field is-wide"><label for="dlOther">Reason</label><input id="dlOther" maxlength="60" value="' + esc(F.other) + '" autocomplete="off"></div>' : '') +
-          '<div class="field is-wide"><label for="dlNote">Note (optional — the sales person sees it)</label><input id="dlNote" maxlength="300" value="' + esc(F.note) + '" placeholder="e.g. vessel omitted Jebel Ali, next call Friday" autocomplete="off"></div></fieldset>' +
+          '<div class="field is-wide"><label for="dlNote">Note (optional — the sales person sees it)</label><input id="dlNote" maxlength="300" value="' + esc(F.note) + '" placeholder="Type a note for the sales person" autocomplete="off"></div></fieldset>' +
         '<fieldset><legend>MOVE THE DATES TOO?</legend>' +
           (j.etd ? '<button type="button" class="toggle dl-move" data-dl-move="etd" aria-pressed="' + F.move.etd + '"><span class="toggle-track"><span class="toggle-thumb"></span></span>' + (j.mode === 'courier' ? 'Pick-up' : 'ETD') + ' ' + fmt(j.etd) + ' → <b>' + shift(j.etd) + '</b></button>' : '') +
           (j.eta ? '<button type="button" class="toggle dl-move" data-dl-move="eta" aria-pressed="' + F.move.eta + '"><span class="toggle-track"><span class="toggle-thumb"></span></span>' + (j.mode === 'courier' ? 'Delivery' : 'ETA') + ' ' + fmt(j.eta) + ' → <b>' + shift(j.eta) + '</b></button>' : '') +
@@ -2699,13 +2709,13 @@
           f('eqPol', crr ? 'From' : 'POL — origin', txt('eqPol', '', 'dlPorts', true).replace('autocomplete', 'value="' + pol0 + '" autocomplete')) +
           f('eqPod', crr ? 'To' : 'POD — destination', txt('eqPod', '', 'dlPorts', true).replace('autocomplete', 'value="' + pod0 + '" autocomplete')) +
           (FCL.includes(t) ? f('eqC20', '20′ containers', '<input type="number" id="eqC20" min="0" max="999" inputmode="numeric">') + f('eqC40', '40′ containers', '<input type="number" id="eqC40" min="0" max="999" inputmode="numeric">')
-            : f('eqCargo', 'Cargo details', txt('eqCargo', 'e.g. 3 pallets · 850 kg · 2.4 CBM'), true)) +
-          f('eqCommodity', 'Commodity', txt('eqCommodity', 'e.g. steel coils')) +
+            : f('eqCargo', 'Cargo details', txt('eqCargo', 'Enter packages, weight and volume'), true)) +
+          f('eqCommodity', 'Commodity', txt('eqCommodity', 'Enter the commodity')) +
           f('eqDg', 'Cargo', '<select id="eqDg"><option>NON DG</option><option>DG</option></select>') +
           f('eqReady', 'Cargo ready', '<input type="date" id="eqReady">') +
           '<div class="field"><label>Priority</label><div class="choice-row" role="radiogroup" aria-label="Priority"><button type="button" class="choice is-on" role="radio" data-eq-pri="NORMAL" aria-checked="true">Normal</button><button type="button" class="choice" role="radio" data-eq-pri="URGENT" aria-checked="false">Urgent</button></div></div>' +
         '</div></fieldset>' +
-        '<fieldset><legend>FOR CUSTOMER SERVICE</legend><div class="fgrid">' + f('eqDetails', 'Anything they should know', '<textarea id="eqDetails" rows="3" maxlength="1000" placeholder="Rates needed by, preferred line, incoterms…"></textarea>', true) + '</div></fieldset>' +
+        '<fieldset><legend>FOR CUSTOMER SERVICE</legend><div class="fgrid">' + f('eqDetails', 'Anything they should know', '<textarea id="eqDetails" rows="3" maxlength="1000" placeholder="Type anything Customer Service should know"></textarea>', true) + '</div></fieldset>' +
         '<div class="form-error" id="formError" role="alert"></div>' +
         '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit">SEND ENQUIRY</button></div>' +
       '</form>' + formLists();
@@ -2926,8 +2936,12 @@
     if (t === 'busy') return true;
     state.closedTry[K] = 'busy';
     api.call('ethixArchivedJob', [no]).then((res) => {
-      if (res && res.ok && Array.isArray(res.row)) state.closedJobs.set(K, buildClosed(mapHeaders(res.head), res.row, res.closed));
-    }).catch(() => {}).finally(() => { state.closedTry[K] = 'done'; if (state.route && state.route.name === 'job') rerender(); });
+      if (res && res.ok && Array.isArray(res.row)) {
+        state.closedJobs.set(K, buildClosed(mapHeaders(res.head), res.row, res.closed));
+        if (Array.isArray(res.delays) && res.delays.length) state.delays[K] = res.delays;
+        if (Array.isArray(res.costing)) state.costing[K] = res.costing;
+      }
+    }).catch(() => {}).finally(() => { state.closedTry[K] = 'done'; if (state.route && (state.route.name === 'job' || state.route.name === 'costjob')) rerender(); });
     return true;
   }
 
@@ -2953,7 +2967,7 @@
         (c.ready ? '<p class="close-lead">Everything’s done. The job moves to <b>Closed jobs</b> and leaves Home, Jobs and Follow-ups. You can reopen it any time.</p>'
           : '<fieldset><legend>NOT READY YET — WHY CLOSE IT NOW?</legend><div class="choice-row">' + CLOSE_REASONS.map((r) => '<button type="button" class="choice' + (F.reason === r ? ' is-on' : '') + '" data-cl-reason="' + esc(r) + '" aria-pressed="' + (F.reason === r) + '">' + esc(r) + '</button>').join('') + '</div>' +
             (F.reason === 'Other' ? '<div class="field is-wide"><label for="clOther">Reason</label><input id="clOther" maxlength="80" value="' + esc(F.other) + '" autocomplete="off"></div>' : '') + '</fieldset>') +
-        '<div class="field is-wide"><label for="clNote">Note (optional — goes into the job’s story)</label><input id="clNote" maxlength="300" value="' + esc(F.note) + '" placeholder="e.g. final invoice sent" autocomplete="off"></div>' +
+        '<div class="field is-wide"><label for="clNote">Note (optional — goes into the job’s story)</label><input id="clNote" maxlength="300" value="' + esc(F.note) + '" placeholder="Type a note" autocomplete="off"></div>' +
         '<div class="form-error" id="formError" role="alert"></div>' +
         '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit"' + (reasonOk ? '' : ' disabled') + '>CLOSE JOB</button></div>' +
       '</form>';
@@ -2974,6 +2988,9 @@
         state.closedJobs.set(K, buildClosed(state.ix, row, { at: nowText(), by: state.user, reason: [reason, note].filter(Boolean).join(' — ') }));
         state.closedTry[K] = 'done';
         removeJob(K);
+        state.recent = state.recent.filter((x) => String(x[3] || '').trim().toUpperCase() !== K);
+        state.stories.delete(K);
+        if (state.notif && state.notif.items) state.notif.items = state.notif.items.filter((x) => String(x.job || '').toUpperCase() !== K || /closed/i.test(x.text));
         state.archive.jobs = null;
         closeOverlays();
         go('#/jobs'); rerender(); updateNav();
@@ -2991,10 +3008,13 @@
       if (res && res.ok && Array.isArray(res.row)) {
         const K = String(res.jobNo || no).toUpperCase();
         state.rowMap.set(K, res.row); rebuildJob(K);
-        state.closedJobs.delete(K); delete state.closedTry[K];
+        state.closedJobs.delete(K); delete state.closedTry[K]; state.stories.delete(K);
         if (state.archive.jobs) state.archive.jobs = state.archive.jobs.filter((x) => keyOf(x) !== K);
         rerender(); updateNav();
+        if (Array.isArray(res.costing)) state.costing[K] = res.costing;
+        if (state.cost && state.cost.no === K) state.cost = null;
         toast(undo ? 'Close undone — ' + no + ' is open again' : 'Job ' + no + ' reopened');
+        setTimeout(() => refresh(false), 300);
         return;
       }
       toast((res && res.error) || 'Not reopened.', { error: true });
@@ -3088,6 +3108,929 @@
     });
   }
 
+  // ================================================================ v2.6
+  // Costing (a full page per job + the Costing menu), Excel made in the browser,
+  // remembered lists, duplicate job, stay signed in after a refresh.
+  const BASIS = [['SHIP', 'Per shipment'], ['BOX', 'Per box'], ['B20', 'Per 20′'], ['B40', 'Per 40′'], ['UNIT', 'Per unit']];
+  const BASIS_SHORT = { SHIP: 'Per shipment', BOX: 'Per box', B20: 'Per 20′', B40: 'Per 40′', UNIT: 'Per unit' };
+  const ABBR = new Set(['THC', 'OTHC', 'DPC', 'ISPS', 'VGM', 'BL', 'DG', 'DO', 'ED', 'TLUC', 'ITT', 'FOB', 'VAT', 'MECRC', 'IMCO', 'AWB', 'LCL', 'FCL']);
+  const chipName = (q) => String(q).split(' ').map((w) => (ABBR.has(w) ? w : nice(w))).join(' ');
+  const QUICK = {
+    sea: ['OCEAN FREIGHT', 'THC', 'BILL OF LADING', 'DPC', 'ISPS', 'TOKEN', 'TRANSPORTATION', 'DOCUMENTATION CHARGES'],
+    cnd: ['THC', 'DPC', 'CUSTOMS CHARGES', 'TOKEN', 'TRANSPORTATION', 'PORT STORAGE', 'DOCUMENTATION CHARGES'],
+    air: ['AIR FREIGHT', 'HANDLING CHARGES', 'CUSTOMS CHARGES', 'TRANSPORTATION', 'DOCUMENTATION CHARGES'],
+    courier: ['COURIER CHARGES', 'CUSTOMS CHARGES', 'HANDLING CHARGES', 'TRANSPORTATION'],
+    misc: ['HANDLING CHARGES', 'DOCUMENTATION CHARGES', 'OTHER CHARGES']
+  };
+  const CHARGES0 = ['OCEAN FREIGHT', 'DG SURCHARGE', 'IMCO SURCHARGE', 'ISPS', 'BILL OF LADING', 'ADDITIONAL BL', 'LATE BL CONFIRMATION', 'OTHC', 'THC', 'TLUC', 'DPC',
+    'ED / BILL OF ENTRY', 'EXIT SUBMISSION', 'SEAL CHARGES', 'TRANSPORTATION', 'TOKEN', 'TOKEN CANCELLATION', 'VGM', 'GATEPASS', 'WEIGHMENT CHARGES', 'FLEXI CHARGES / FITTING',
+    'SURRENDER CHARGES', 'PORT STORAGE', 'HOLD CHARGES', 'CUSTOMS CHARGES', 'MECRC', 'ITT CHARGES', 'HANDLING CHARGES', 'DOCUMENTATION CHARGES', 'DG DOC FEE', 'FOB CHARGES',
+    'REHANDLING CHARGES', 'BL AMENDMENT', 'CONTAINER REPAIR', 'WAITING CHARGES', 'VAT / INSPECTION', 'CHEMICAL PERMITS', 'REBATE', 'OTHER CHARGES'];
+  const PORTS0 = ['JEBEL ALI', 'DUBAI', 'KHOR FAKKAN', 'SHARJAH', 'ABU DHABI'];
+  I.download = '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>';
+  const num6 = (v) => { const s = String(v == null ? '' : v).replace(/,/g, '').trim(); if (!s) return 0; const n = Number(s); return isFinite(n) ? n : NaN; };
+  const money = (n) => { const v = Math.round((Number(n) || 0) * 100) / 100; const p = Math.abs(v).toFixed(2).split('.'); return (v < 0 ? '−' : '') + p[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',') + '.' + p[1]; };
+  const pctTxt = (v) => (isFinite(v) ? (Math.round(v * 1000) / 10).toFixed(1) + '%' : '—');
+  const numTxt = (n) => (n === 0 || n === '' || n == null ? '' : String(Math.round(Number(n) * 10000) / 10000));
+  const amtOf = (qty, rate, cur, fx) => { const q = num6(qty), r = num6(rate); return (isNaN(q) ? 0 : q) * (isNaN(r) ? 0 : r) * (cur === 'USD' ? fx : 1); };
+  const newLineId = () => (Math.random().toString(36).slice(2, 10) + 'k0x9').slice(0, 8);
+  const boxesOf = (j) => (j.c20 || 0) + (j.c40 || 0);
+  const canCostSee = (j) => !!j && (canEdit() || (isSales() && j.sales === state.user));
+  const onCostPage = (K) => !!state.route && state.route.name === 'costjob' && String(state.route.jobNo).toUpperCase() === K;
+
+  // ---------- what every list knows about a job's costing ----------
+  function costState(j) {   // pending · draft · done · none
+    const s = state.costing[keyOf(j)];
+    if (s) return s[0] === 'LOCKED' ? 'done' : 'draft';
+    if (['COSTING DONE', 'COMPLETED'].includes(j.costing)) return 'done';
+    if (j.costing === 'CANCELLED') return 'none';
+    return 'pending';
+  }
+  const costSum = (j) => state.costing[keyOf(j)] || null;
+  function costTotals(lines, fx) {
+    let sell = 0, buy = 0;
+    lines.forEach((l) => { buy += amtOf(l.qty, l.br, l.bc, fx); sell += amtOf(l.qty, l.sr, l.sc, fx); });
+    return { sell, buy, profit: sell - buy };
+  }
+
+  // ================================================================ STAY SIGNED IN
+  // The session pass is kept on this device, so a refresh (or Ctrl+F5) comes straight back.
+  // It still ends after 4 hours unused or 16 hours in all, on Log out, or when the password changes.
+  const SESSION = 'ethix.v2.session';
+  function keepSession(user, role) { if (api.token) store.set(SESSION, { t: api.token, u: user, r: role || '' }); }
+  function dropSession() { try { localStorage.removeItem(SESSION); } catch (e) { /* private mode */ } }
+  function savedSession() { const s = store.get(SESSION, null); return s && typeof s.t === 'string' && /^[a-f0-9]{64}$/.test(s.t) && s.u ? s : null; }
+  async function resumeSession() {
+    const s = savedSession();
+    if (!s || !api.connected) { document.body.classList.remove('is-resuming'); return false; }
+    state.resuming = true;
+    api.token = s.t;
+    try {
+      const boot = await api.call('ethixBootstrap', [], { timeout: 40000 });
+      state.resuming = false;
+      document.body.classList.remove('is-resuming');
+      enterApp(boot, s.u, s.r);
+      return true;
+    } catch (e) {
+      state.resuming = false;
+      api.token = null;
+      document.body.classList.remove('is-resuming');
+      if (e.kind === 'auth' || /new password/i.test(e.message)) dropSession();
+      else { const n = $('#cardNote'); if (n) { n.hidden = false; n.textContent = 'Could not reach ETHIX just now — reload to try again, or sign in.'; } }
+      return false;
+    }
+  }
+
+  // ================================================================ REMEMBERED LISTS
+  function loadLists6() {
+    if (state.lists || state.listsLoading) return;
+    state.listsLoading = true;
+    api.call('ethixLists')
+      .catch((e) => (/not available/i.test(e.message) ? api.call('getMasterLists') : Promise.reject(e)))
+      .then((l) => { state.lists = Object.assign({ customers: [], vendors: [], ports: [], charges: [] }, l || {}); })
+      .catch(() => { state.lists = state.lists || { customers: [], vendors: [], ports: [], charges: [] }; })
+      .finally(() => { state.listsLoading = false; });
+  }
+  function learnLocal(kind, values) {
+    if (!state.lists) state.lists = { customers: [], vendors: [], ports: [], charges: [] };
+    const L = state.lists[kind] = state.lists[kind] || [];
+    const have = new Set(L.map((v) => String(v).toUpperCase()));
+    values.forEach((v) => { v = String(v || '').toUpperCase().replace(/\s+/g, ' ').trim(); if (v.length >= 2 && !have.has(v)) { have.add(v); L.push(v); } });
+  }
+  function listSrc(id) {
+    const L = state.lists || {}, J = state.jobs;
+    if (id === 'dlCustomers') return (L.customers || []).concat(J.map((j) => j.customer));
+    if (id === 'dlVendors') return (L.vendors || []).concat(J.map((j) => j.vendor));
+    if (id === 'dlPorts') return (L.ports || []).concat(J.map((j) => j.pol), J.map((j) => j.pod), PORTS0);
+    if (id === 'dlCharges') return (L.charges || []).concat(CHARGES0);
+    if (id === 'dlSales') return SALES_NAMES.concat(state.users.filter((u) => String(u.role || '').toUpperCase().trim() === 'SALES').map((u) => String(u.name || '').toUpperCase()), J.map((j) => j.sales));
+    return null;
+  }
+  // The suggestions under a box follow what is typed: names that start with it first, then names that contain it.
+  function fillList(input) {
+    const id = input.getAttribute('list'), src = listSrc(id), dl = id && document.getElementById(id);
+    if (!src || !dl) return;
+    const q = input.value.trim().toUpperCase();
+    if (dl.dataset.q === q && dl.dataset.n === String(src.length)) return;
+    const seen = new Set(), starts = [], has = [];
+    for (let i = 0; i < src.length && starts.length < 60; i++) {
+      const v = String(src[i] || '').replace(/\s+/g, ' ').trim(), k = v.toUpperCase();
+      if (!v || seen.has(k)) continue;
+      seen.add(k);
+      const at = q ? k.indexOf(q) : 0;
+      if (at === 0) starts.push(v); else if (at > 0 && has.length < 60) has.push(v);
+    }
+    dl.innerHTML = starts.concat(has).slice(0, 60).map((v) => '<option value="' + esc(v) + '"></option>').join('');
+    dl.dataset.q = q; dl.dataset.n = String(src.length);
+  }
+
+  // ================================================================ DUPLICATE JOB
+  function duplicateJob(no) {
+    const j = findJob(no); if (!j || !canEditJob(j)) return;
+    const p = { customer: j.customer, vendor: j.vendor, pol: j.pol, pod: j.pod, sales: j.sales, dg: j.dg };
+    if (j.c20) p.c20 = String(j.c20);
+    if (j.c40) p.c40 = String(j.c40);
+    openNewJob(j.type, { prefill: p, dup: j.jobNo });
+    setTimeout(() => { const f = $('#f_jobNo'); if (f) f.focus(); }, 80);
+  }
+
+  // ================================================================ COSTING — the page of one job
+  function costFor(no) { const C = state.cost; return C && C.no === String(no).toUpperCase() ? C : null; }
+  function setCostData(C, data, keepNotes) {
+    C.data = data; C.err = '';
+    C.draft = {
+      rate: data.rate,
+      lines: (data.lines || []).map((l) => ({ id: l.id, charge: l.charge, vendor: l.vendor || '', basis: l.basis || 'SHIP', qty: l.qty === 0 ? '0' : numTxt(l.qty) || '1', bc: l.bc || 'AED', br: numTxt(l.br), sc: l.sc || 'AED', sr: numTxt(l.sr) })),
+      notes: keepNotes && C.draft ? C.draft.notes : []
+    };
+    C.dirty = false; C.err = '';
+    if (data.status !== 'NEW' && !data.legacy) state.costing[C.no] = [data.status, data.sell, data.buy, data.profit, data.version, data.at, data.by, data.lockedBy];
+  }
+  function loadCost(no, force) {
+    const K = String(no).toUpperCase();
+    let C = costFor(K);
+    if (C && (C.loading || (C.data && !force))) return C;
+    if (!C) C = state.cost = { no: K, data: null, draft: null, dirty: false, loading: false, err: '', busy: '', showLog: false };
+    C.loading = true;
+    api.call('ethixCosting', [no]).then((res) => {
+      if (state.cost !== C) return;
+      C.loading = false;
+      if (res && res.ok) { if (!C.dirty) setCostData(C, res.costing); else C.data = Object.assign({}, res.costing); }
+      else C.err = (res && res.error) || 'Could not open the costing.';
+      if (onCostPage(K)) rerender();
+    }).catch((e) => {
+      if (state.cost !== C) return;
+      C.loading = false;
+      C.err = e.kind === 'auth' ? 'Please sign in again.' : /not available/i.test(e.message) ? 'The costing needs the v2.6 Code.gs update.' : e.message;
+      if (onCostPage(K)) rerender();
+    });
+    return C;
+  }
+  const costCanEdit = (j, D) => !!D && !D.closed && D.status !== 'LOCKED' && (canEdit() || (isSales() && j.sales === state.user && D.sales === state.user));
+  const costCanUnlock = (D) => !!D && canEdit() && !D.closed && D.status === 'LOCKED';
+  function costQtyFor(j, basis, cur) {
+    if (basis === 'SHIP') return '1';
+    if (basis === 'BOX') return String(boxesOf(j) || 1);
+    if (basis === 'B20') return String(j.c20 || 0);
+    if (basis === 'B40') return String(j.c40 || 0);
+    return cur || '1';
+  }
+  function costStatusPill(D, dirty) {
+    if (!D) return '';
+    if (D.closed) return '<span class="status-pill tone-calm">CLOSED JOB · READ-ONLY</span>';
+    if (D.status === 'LOCKED') return '<span class="status-pill tone-ink">' + icon('lock', 13) + 'COSTING DONE</span>';
+    if (D.status === 'NEW') return '<span class="status-pill tone-calm">' + (dirty ? 'NEW · UNSAVED' : 'NOT STARTED') + '</span>';
+    return '<span class="status-pill tone-done">DRAFT · V' + D.version + (dirty ? ' · UNSAVED' : '') + '</span>';
+  }
+  function costHead(j, D, C) {
+    const edit = costCanEdit(j, D);
+    const saveBtn = edit ? '<button type="button" class="btn-ghost cost-save' + (C && C.dirty ? ' is-dirty' : '') + '" data-act="cost-save"' + (C && (C.busy || !C.dirty) ? ' disabled' : '') + '>' + icon('check', 16) + '<span id="costSaveLbl">' + (C && C.busy === 'save' ? 'Saving…' : C && C.dirty ? 'Save' : 'Saved') + '</span></button>' : '';
+    const doneBtn = edit && D.status !== 'NEW' || (edit && C && C.dirty) ? '<button type="button" class="btn-brutal" data-act="cost-done"' + (C && C.busy ? ' disabled' : '') + '>' + (C && C.busy === 'lock' ? 'LOCKING…' : 'COSTING DONE') + '</button>' : '';
+    const unlockBtn = costCanUnlock(D) ? '<button type="button" class="btn-ghost" data-act="cost-unlock">' + icon('lock', 16) + '<span>Unlock</span></button>' : '';
+    const xlsBtn = D && (D.lines.length || (C && C.draft && C.draft.lines.length)) ? '<button type="button" class="btn-ghost" data-act="cost-xlsx" title="Download Excel">' + icon('download', 16) + '<span>Excel</span></button>' : '';
+    return '<header class="cost-head">' +
+      '<div class="ch-main"><div class="vh-idrow"><h1 class="vh-job">' + esc(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + '</div>' +
+        '<div class="vh-cust">' + esc(j.customer || '—') + '</div>' +
+        '<div class="ch-meta"><span>' + esc(j.mode === 'misc' ? (j.against ? 'AGAINST ' + j.against : 'COSTING ONLY') : j.route) + '</span><span>CS · ' + esc(j.cs || '—') + '</span>' + (j.sales ? '<span>SALES · ' + esc(j.sales) + '</span>' : '') +
+        '<button type="button" class="link-btn" data-job="' + esc(j.jobNo) + '">Open job →</button></div></div>' +
+      '<div class="ch-actions">' + xlsBtn + unlockBtn + saveBtn + doneBtn + '</div>' +
+    '</header>';
+  }
+  function costBanner(j, D) {
+    if (!D) return '';
+    if (D.closed) return '<div class="cost-banner">' + icon('lock', 15) + '<span>This job is closed, so its costing is read-only. ' + (canEdit() ? 'Reopen the job to change it.' : '') + '</span></div>';
+    if (D.status === 'LOCKED') return '<div class="cost-banner is-locked">' + icon('lock', 15) + '<span><b>Costing done</b>' + (D.lockedBy ? ' · locked by ' + esc(nice(D.lockedBy)) : '') + (D.lockedAt ? ' · ' + esc(ago(D.lockedAt)) : '') + (D.legacy ? ' · marked done before costing sheets (no lines)' : '') + '. ' + (canEdit() ? 'Unlock it to make changes.' : 'Ask Customer Service if something needs to change.') + '</span></div>';
+    if (!costCanEdit(j, D)) return '<div class="cost-banner">' + icon('lock', 15) + '<span>Read-only.</span></div>';
+    return '';
+  }
+  function costBar(j, D, C) {
+    const fx = Number(C.draft.rate) || state.rate || 3.685;
+    const t = costTotals(C.draft.lines, fx), bx = boxesOf(j);
+    const rateEdit = costCanEdit(j, D) && canEdit();
+    const cell = (id, label, value, sub, cls) => '<div class="cb-cell' + (cls ? ' ' + cls : '') + '"><span class="cb-k">' + label + '</span><span class="cb-v" id="' + id + '">' + value + '</span>' + (sub !== undefined ? '<span class="cb-s" id="' + id + 'S">' + sub + '</span>' : '') + '</div>';
+    return '<section class="cost-bar glass' + (bx ? ' has-box' : '') + '" aria-label="Costing summary" id="costBar">' +
+      cell('cbSell', 'SELLING · AED', money(t.sell), 'USD ' + money(t.sell / fx)) +
+      cell('cbBuy', 'BUYING · AED', money(t.buy), 'USD ' + money(t.buy / fx)) +
+      cell('cbProfit', 'PROFIT · AED', money(t.profit), 'USD ' + money(t.profit / fx), 'is-profit' + (t.profit < 0 ? ' is-loss' : '')) +
+      cell('cbMargin', 'MARGIN', pctTxt(t.sell ? t.profit / t.sell : NaN), 'on selling') +
+      cell('cbMarkup', 'MARK-UP', pctTxt(t.buy ? t.profit / t.buy : NaN), 'on buying') +
+      (bx ? cell('cbBox', 'PER BOX · AED', money(t.profit / bx), 'USD ' + money(t.profit / bx / fx) + ' · ×' + bx) : '') +
+      '<div class="cb-rate">' + (rateEdit ? '<button type="button" class="rate-chip" data-act="cost-rate" title="Change the USD rate for this costing">' : '<span class="rate-chip">') + 'USD 1 = AED <b id="cbRate">' + esc(String(fx)) + '</b>' + (rateEdit ? icon('edit', 12) + '</button>' : '</span>') + '</div>' +
+    '</section>';
+  }
+  function basisSelect(j, l, dis) {
+    const bx = boxesOf(j);
+    return '<select class="ct-in" id="cl_' + l.id + '_basis" data-f="basis" aria-label="Basis"' + dis + '>' + BASIS.filter(([k]) => bx || !['BOX', 'B20', 'B40'].includes(k) || l.basis === k).map(([k, label]) => '<option value="' + k + '"' + (l.basis === k ? ' selected' : '') + '>' + label + '</option>').join('') + '</select>';
+  }
+  function costRow(j, l, fx, edit, i) {
+    const b = amtOf(l.qty, l.br, l.bc, fx), s = amtOf(l.qty, l.sr, l.sc, fx);
+    const outB = '<span class="ct-out" data-o="b">' + money(b) + '</span>', outS = '<span class="ct-out" data-o="s">' + money(s) + '</span>';
+    const outP = '<span class="ct-c ct-pf' + (s - b < 0 ? ' is-loss' : '') + '" data-o="p">' + money(s - b) + '</span>';
+    if (!edit) {
+      return '<div class="ct-row is-ro" data-line="' + esc(l.id) + '" role="row">' +
+        '<div class="ct-c ct-what"><span class="ct-name">' + esc(l.charge) + '</span><span class="ct-sub">' + esc(l.vendor || '—') + '</span></div>' +
+        '<div class="ct-c ct-basis"><span class="ct-name">' + esc(BASIS_SHORT[l.basis] || l.basis) + '</span><span class="ct-sub">× ' + esc(l.qty || '0') + '</span></div>' +
+        '<div class="ct-c ct-side ct-b"><span class="ct-ro-rate"><i>' + esc(l.bc) + '</i> ' + (l.br ? money(num6(l.br)) : '—') + '</span>' + outB + '</div>' +
+        '<div class="ct-c ct-side ct-s"><span class="ct-ro-rate"><i>' + esc(l.sc) + '</i> ' + (l.sr ? money(num6(l.sr)) : '—') + '</span>' + outS + '</div>' +
+        outP + '<span class="ct-c"></span></div>';
+    }
+    const id = (f) => 'cl_' + l.id + '_' + f;
+    const side = (k) => '<div class="ct-c ct-side ct-' + k + '"><div class="ct-money"><button type="button" class="cur' + (l[k + 'c'] === 'USD' ? ' is-usd' : '') + '" data-cur="' + k + 'c" aria-label="Currency: ' + l[k + 'c'] + '. Change">' + l[k + 'c'] + '</button>' +
+      '<input class="ct-in r" id="' + id(k + 'r') + '" data-f="' + k + 'r" inputmode="decimal" autocomplete="off" value="' + esc(l[k + 'r']) + '" placeholder="Rate" aria-label="' + (k === 'b' ? 'Buying' : 'Selling') + ' rate"></div>' + (k === 'b' ? outB : outS) + '</div>';
+    return '<div class="ct-row" data-line="' + esc(l.id) + '" role="row">' +
+      '<div class="ct-c ct-what"><input class="ct-in ct-charge" id="' + id('charge') + '" data-f="charge" list="dlCharges" autocomplete="off" spellcheck="false" value="' + esc(l.charge) + '" placeholder="Choose or type a charge" aria-label="Charge ' + (i + 1) + '">' +
+        '<input class="ct-in ct-vendor" id="' + id('vendor') + '" data-f="vendor" list="dlVendors" autocomplete="off" spellcheck="false" value="' + esc(l.vendor) + '" placeholder="Vendor" aria-label="Vendor"></div>' +
+      '<div class="ct-c ct-basis">' + basisSelect(j, l, '') + '<label class="ct-qty"><span>QTY</span><input class="ct-in r" id="' + id('qty') + '" data-f="qty" inputmode="decimal" autocomplete="off" value="' + esc(l.qty) + '" aria-label="Quantity"></label></div>' +
+      side('b') + side('s') + outP +
+      '<button type="button" class="icon-btn ct-del" data-del="' + esc(l.id) + '" aria-label="Remove this line">' + icon('close', 14) + '</button></div>';
+  }
+  function costTable(j, D, C) {
+    const fx = Number(C.draft.rate) || 3.685, edit = costCanEdit(j, D), lines = C.draft.lines;
+    const t = costTotals(lines, fx);
+    const quick = (QUICK[j.type === 'CND' ? 'cnd' : j.mode] || QUICK.sea);
+    return '<section class="cost-card" aria-label="Charges">' +
+      '<div class="ct' + (edit ? '' : ' is-ro') + '" role="table">' +
+        '<div class="ct-head" role="row"><span>CHARGE · VENDOR</span><span>BASIS · QTY</span><span class="r">BUYING <small>→ AED</small></span><span class="r">SELLING <small>→ AED</small></span><span class="r">PROFIT AED</span><span></span></div>' +
+        '<div id="ctBody">' + (lines.length ? lines.map((l, i) => costRow(j, l, fx, edit, i)).join('') : '<div class="ct-empty">' + icon('costing', 22) + '<span>' + (edit ? 'No charges yet. Add the first one below — buying and selling side by side on one line.' : 'No charges in this costing.') + '</span></div>') + '</div>' +
+        '<div class="ct-total" role="row"><span class="ct-tl">TOTAL · AED</span><span class="ct-c ct-side ct-b"><span class="ct-tk">BUYING</span><span class="ct-out" id="ctB">' + money(t.buy) + '</span></span><span class="ct-c ct-side ct-s"><span class="ct-tk">SELLING</span><span class="ct-out" id="ctS">' + money(t.sell) + '</span></span><span class="ct-c ct-pf' + (t.profit < 0 ? ' is-loss' : '') + '" id="ctP">' + money(t.profit) + '</span><span></span></div>' +
+      '</div>' +
+      (edit ? '<div class="ct-add"><button type="button" class="btn-ghost" data-act="cost-add">' + icon('plus', 16) + '<span>Add charge</span></button><div class="ct-quick" aria-label="Quick add">' +
+        quick.map((q) => '<button type="button" class="choice" data-quick-charge="' + esc(q) + '">' + esc(chipName(q)) + '</button>').join('') + '</div></div>' : '') +
+    '</section>';
+  }
+  function costNotes(j, D, C) {
+    const edit = costCanEdit(j, D);
+    const saved = (D.notes || []).slice().reverse(), pend = C.draft.notes;
+    return '<section class="tile cost-notes" aria-labelledby="cnTitle"><div class="tile-head"><h2 class="tile-title" id="cnTitle">COSTING NOTES</h2><span class="tile-count">' + (saved.length + pend.length) + '</span></div>' +
+      (edit ? '<form class="note-box" data-act="cost-note"><input type="text" id="costNote" maxlength="500" placeholder="Add a note to this costing" aria-label="Add a costing note" autocomplete="off"><button type="submit" class="note-post">Add</button></form>' : '') +
+      (pend.length || saved.length ? '<ol class="story">' +
+        pend.map((t, i) => '<li class="is-pending"><div class="st-when">NOT SAVED YET</div><span class="avatar">' + esc(initials(state.user)) + '</span><div class="st-body"><div><strong>' + esc(state.user) + '</strong> <button type="button" class="link-btn quiet" data-unnote="' + i + '">remove</button></div><div class="st-note">' + esc(t) + '</div></div></li>').join('') +
+        saved.map((n) => '<li><div class="st-when">' + esc(stampText(n.t ? new Date(n.t) : null)) + '</div><span class="avatar' + (n.by === state.user ? '' : ' is-other') + '">' + esc(initials(n.by)) + '</span><div class="st-body"><div><strong>' + esc(n.by) + '</strong></div><div class="st-note">' + esc(n.txt) + '</div></div></li>').join('') + '</ol>'
+        : '<div class="tile-empty">' + icon('note', 22) + '<span>' + (edit ? 'Notes are saved with the costing — quote numbers, why a rate changed.' : 'No notes.') + '</span></div>') +
+    '</section>';
+  }
+  const LOG_WORD = { SAVED: 'saved', LOCKED: 'marked costing done', UNLOCKED: 'unlocked' };
+  function costLog(D, C) {
+    const log = D.log || [];
+    const list = C.showLog ? log : log.slice(0, 6);
+    return '<section class="tile cost-log" aria-labelledby="clTitle"><div class="tile-head"><h2 class="tile-title" id="clTitle">VERSION HISTORY</h2><span class="tile-count">' + log.length + '</span></div>' +
+      (log.length ? '<ol class="vlog">' + list.map((x) => '<li class="is-' + esc(x.action.toLowerCase()) + '"><span class="vl-v">V' + x.ver + '</span><div class="vl-body"><div class="vl-head"><strong>' + esc(x.by) + '</strong> ' + esc(LOG_WORD[x.action] || x.action.toLowerCase()) + ' <span class="vl-when">' + esc(stampText(x.t ? new Date(x.t) : null)) + '</span></div>' +
+        (x.changes && x.action === 'SAVED' ? '<div class="vl-ch">' + esc(x.changes) + '</div>' : x.changes && x.action === 'UNLOCKED' ? '<div class="vl-ch">' + esc(x.changes) + '</div>' : '') +
+        '<div class="vl-tot">Sell ' + money(x.sell) + ' · Buy ' + money(x.buy) + ' · Profit ' + money(x.profit) + '</div></div></li>').join('') + '</ol>' +
+        (log.length > 6 ? '<button type="button" class="tile-link" data-act="cost-log">' + (C.showLog ? 'Show fewer' : 'Show all ' + log.length) + '</button>' : '')
+        : '<div class="tile-empty">' + icon('clock', 22) + '<span>Every save, lock and unlock shows here — who, when, and what changed.</span></div>') +
+    '</section>';
+  }
+  function renderCostJob(no, first) {
+    const view = $('#view');
+    const j = findJob(no);
+    const K = String(no).toUpperCase();
+    const crumbs = (pill) => '<div class="crumbs' + (first ? ' reveal' : '') + '"><button type="button" class="back-btn" data-act="back" aria-label="Back">' + icon('back', 18) + '</button><button type="button" class="link-btn" data-href="#/costing">COSTING</button><span>/ ' + esc(j ? j.jobNo : no) + '</span>' + (pill || '') + '</div>';
+    if (!j && loadClosed(no)) { view.innerHTML = '<div class="wrap cost-page">' + crumbs() + '<section class="tile"><div class="story-loading"><span class="sk"></span><span class="sk"></span><span class="sk short"></span></div></section></div>'; return; }
+    if (!j || !canCostSee(j)) {
+      view.innerHTML = '<div class="wrap cost-page">' + crumbs() + '<section class="tile notfound">' + empty('search', j ? 'Only Customer Service and the job’s own sales person can open this costing.' : 'Job ' + no + ' is not in the tracker or in closed jobs.') + '<button type="button" class="btn-ghost" data-href="#/costing">Back to costing</button></section></div>';
+      return;
+    }
+    const C = loadCost(j.jobNo);
+    if (!C.data) {
+      view.innerHTML = '<div class="wrap cost-page">' + crumbs() + costHead(j, null, null) + (C.err ? '<section class="tile notfound">' + empty('alert', C.err) + '<button type="button" class="btn-ghost" data-act="cost-retry">Try again</button></section>'
+        : '<section class="cost-bar glass is-loading"><span class="sk"></span><span class="sk"></span><span class="sk"></span></section><section class="cost-card"><div class="story-loading"><span class="sk"></span><span class="sk"></span><span class="sk short"></span></div></section>') + '</div>';
+      return;
+    }
+    const D = C.data;
+    view.innerHTML = '<div class="wrap cost-page' + (costCanEdit(j, D) ? ' is-edit' : '') + '">' + crumbs(costStatusPill(D, C.dirty)) + costHead(j, D, C) + costBanner(j, D) + costBar(j, D, C) + costTable(j, D, C) +
+      '<div class="cost-side">' + costNotes(j, D, C) + costLog(D, C) + '</div>' +
+      (costCanEdit(j, D) ? '<div class="cost-dock glass"><span class="cd-state"><b id="cdProfit"' + (costTotals(C.draft.lines, Number(C.draft.rate) || 3.685).profit < 0 ? ' class="is-loss"' : '') + '>' + ((t) => 'PROFIT AED ' + money(t.profit) + '</b><span id="costDockState">' + (t.sell ? pctTxt(t.profit / t.sell) + ' margin · ' : '') + (C.dirty ? 'unsaved' : 'all saved'))(costTotals(C.draft.lines, Number(C.draft.rate) || 3.685)) + '</span></span><button type="button" class="btn-ghost" data-act="cost-save"' + (C.busy || !C.dirty ? ' disabled' : '') + '>Save</button><button type="button" class="btn-brutal" data-act="cost-done"' + (C.busy ? ' disabled' : '') + '>DONE</button></div>' : '') +
+      datalist('dlCharges', listSrc('dlCharges')) + datalist('dlVendors', listSrc('dlVendors')) +
+    '</div>';
+  }
+  // Repaints only the numbers (no re-render while typing).
+  function costPaint(j) {
+    const C = state.cost; if (!C || !C.draft || !j) return;
+    const fx = Number(C.draft.rate) || 3.685, bx = boxesOf(j);
+    const t = costTotals(C.draft.lines, fx);
+    const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
+    set('cbSell', money(t.sell)); set('cbSellS', 'USD ' + money(t.sell / fx));
+    set('cbBuy', money(t.buy)); set('cbBuyS', 'USD ' + money(t.buy / fx));
+    set('cbProfit', money(t.profit)); set('cbProfitS', 'USD ' + money(t.profit / fx));
+    const pc = $('#cbProfit') && $('#cbProfit').closest('.cb-cell'); if (pc) pc.classList.toggle('is-loss', t.profit < 0);
+    set('cbMargin', pctTxt(t.sell ? t.profit / t.sell : NaN)); set('cbMarkup', pctTxt(t.buy ? t.profit / t.buy : NaN));
+    if (bx) { set('cbBox', money(t.profit / bx)); set('cbBoxS', 'USD ' + money(t.profit / bx / fx) + ' · ×' + bx); }
+    set('cdProfit', 'PROFIT AED ' + money(t.profit));
+    set('costDockState', (t.sell ? pctTxt(t.profit / t.sell) + ' margin · ' : '') + (C.dirty ? 'unsaved' : 'all saved'));
+    const dp = $('#cdProfit'); if (dp) dp.classList.toggle('is-loss', t.profit < 0);
+    set('cbRate', esc(String(fx)));
+    set('ctB', money(t.buy)); set('ctS', money(t.sell)); set('ctP', money(t.profit));
+    const tp = $('#ctP'); if (tp) tp.classList.toggle('is-loss', t.profit < 0);
+    C.draft.lines.forEach((l) => {
+      const row = document.querySelector('.ct-row[data-line="' + l.id + '"]'); if (!row) return;
+      const b = amtOf(l.qty, l.br, l.bc, fx), s = amtOf(l.qty, l.sr, l.sc, fx);
+      const o = (k) => row.querySelector('[data-o="' + k + '"]');
+      if (o('b')) o('b').textContent = money(b); if (o('s')) o('s').textContent = money(s);
+      if (o('p')) { o('p').textContent = money(s - b); o('p').classList.toggle('is-loss', s - b < 0); }
+    });
+    $$('[data-act="cost-save"]').forEach((b) => { b.disabled = !!C.busy || !C.dirty; b.classList.toggle('is-dirty', C.dirty); });
+    $$('[data-act="cost-done"]').forEach((b) => { b.disabled = !!C.busy; });
+    set('costSaveLbl', C.busy === 'save' ? 'Saving…' : C.dirty ? 'Save' : 'Saved');
+    const pill = $('.cost-page .crumbs .status-pill'); if (pill && C.data && C.data.status === 'DRAFT') pill.textContent = 'DRAFT · V' + C.data.version + (C.dirty ? ' · UNSAVED' : ''); if (pill && C.data && C.data.status === 'NEW') pill.textContent = C.dirty ? 'NEW · UNSAVED' : 'NOT STARTED';
+  }
+  function costDirty(j) { const C = state.cost; if (!C) return; C.dirty = true; costPaint(j); }
+  function applyRow6(row) {
+    if (!Array.isArray(row) || !state.ix || !(state.ix.jobNo > -1)) return;
+    const k = String(row[state.ix.jobNo] || '').toUpperCase(); if (!k || !state.rowMap.has(k)) return;
+    state.rowMap.set(k, row); rebuildJob(k);
+  }
+  // A small question box (the same glass card as Log out). Resolves true / false — or the typed text.
+  function ask(o) {
+    return new Promise((resolve) => {
+      closeOverlays(true);
+      const wrap = $('#confirmWrap'); if (!wrap) { resolve(false); return; }
+      $('#confirmTitle').textContent = o.title; $('#confirmText').textContent = o.text || ''; $('#confirmYes').textContent = o.yes || 'OK'; $('#confirmNo').textContent = o.no || 'Cancel';
+      const old = $('#askInput'); if (old) old.remove();
+      let inp = null;
+      if (o.input !== undefined) {
+        inp = document.createElement('input'); inp.id = 'askInput'; inp.className = 'ask-input'; inp.type = 'text'; inp.maxLength = o.max || 120; inp.value = o.value || ''; inp.placeholder = o.input; inp.autocomplete = 'off';
+        if (o.inputmode) inp.inputMode = o.inputmode;
+        $('#confirmText').after(inp);
+      }
+      wrap.hidden = false;
+      (inp || $('#confirmNo')).focus();
+      const done = (v) => { wrap.hidden = true; if (inp) inp.remove(); $('#confirmNo').textContent = 'Stay'; wrap.onclick = null; $('#confirmYes').onclick = null; $('#confirmNo').onclick = null; resolve(v); };
+      $('#confirmNo').onclick = () => done(false);
+      $('#confirmYes').onclick = () => done(inp ? inp.value.trim() : true);
+      if (inp) inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); done(inp.value.trim()); } };
+      wrap.onclick = (e) => { if (e.target === wrap) done(false); };
+    });
+  }
+  function readLines(C) {      // the lines as numbers, or the first problem
+    const out = [];
+    for (let i = 0; i < C.draft.lines.length; i++) {
+      const l = C.draft.lines[i];
+      const q = l.qty === '' ? 0 : num6(l.qty), br = num6(l.br), sr = num6(l.sr);
+      const charge = String(l.charge || '').toUpperCase().replace(/\s+/g, ' ').trim(), vendor = String(l.vendor || '').toUpperCase().replace(/\s+/g, ' ').trim();
+      if (!charge && !vendor && !br && !sr) continue;
+      if (!charge) return { bad: l.id, f: 'charge', msg: 'Line ' + (i + 1) + ': choose or type a charge.' };
+      if (isNaN(q) || q < 0) return { bad: l.id, f: 'qty', msg: charge + ': quantity should be a number.' };
+      if (isNaN(br)) return { bad: l.id, f: 'br', msg: charge + ': the buying rate should be a number.' };
+      if (isNaN(sr)) return { bad: l.id, f: 'sr', msg: charge + ': the selling rate should be a number.' };
+      out.push({ id: l.id, charge, vendor, basis: l.basis, qty: q, bc: l.bc, br, sc: l.sc, sr });
+    }
+    return { lines: out };
+  }
+  async function saveCost(j, opts = {}) {
+    const C = costFor(j.jobNo); if (!C || !C.data || C.busy) return false;
+    const read = readLines(C);
+    if (read.bad) {
+      toast(read.msg, { error: true });
+      const el = document.getElementById('cl_' + read.bad + '_' + read.f); if (el) { el.focus(); el.classList.add('is-bad'); setTimeout(() => el.classList.remove('is-bad'), 2400); }
+      return false;
+    }
+    const payload = { lines: read.lines, addNotes: C.draft.notes.slice() };
+    if (canEdit() && Number(C.draft.rate) !== Number(C.data.rate)) payload.rate = Number(C.draft.rate);
+    C.busy = 'save'; costPaint(j);
+    setSaving(1);
+    try {
+      const res = await api.call('ethixCostingSave', [j.jobNo, payload, opts.base !== undefined ? opts.base : C.data.version]);
+      C.busy = '';
+      if (res && res.ok) {
+        setCostData(C, res.costing);
+        applyRow6(res.row);
+        learnLocal('charges', read.lines.map((l) => l.charge)); learnLocal('vendors', read.lines.map((l) => l.vendor));
+        rerender(); updateNav();
+        if (!opts.quiet) toast(res.same ? 'No changes to save' : 'Costing saved · version ' + res.costing.version);
+        return true;
+      }
+      if (res && res.conflict && res.costing) return costConflict(j, C, res.costing);
+      if (res && res.locked && res.costing) { setCostData(C, res.costing); rerender(); }
+      toast((res && res.error) || 'The costing was not saved.', { error: true });
+      costPaint(j);
+      return false;
+    } catch (e) {
+      C.busy = ''; costPaint(j);
+      if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'Saving the costing needs the v2.6 Code.gs update.' : 'Not saved: ' + e.message, { error: true, action: /not available/i.test(e.message) ? null : { label: 'Retry', fn: () => saveCost(j, opts) } });
+      return false;
+    } finally { setSaving(-1); }
+  }
+  async function costConflict(j, C, theirs) {
+    const keep = await ask({ title: 'Someone saved first', text: nice(theirs.by || 'Someone') + ' saved version ' + theirs.version + ' while you were editing. Keep your changes and save over it, or load their version?', yes: 'Keep mine & save', no: 'Load theirs' });
+    if (keep) { C.data = Object.assign({}, C.data, { version: theirs.version, rate: C.data.rate }); return saveCost(j, { base: theirs.version }); }
+    setCostData(C, theirs); rerender();
+    toast('Loaded version ' + theirs.version + ' by ' + nice(theirs.by));
+    return false;
+  }
+  async function costDone(j) {
+    const C = costFor(j.jobNo); if (!C || !C.data || C.busy) return;
+    if (C.dirty || C.data.status === 'NEW') { const ok = await saveCost(j, { quiet: true }); if (!ok) return; }
+    const D = C.data;
+    if (!D.lines.length) { toast('Add the charges first.', { error: true }); return; }
+    const loss = D.profit < 0;
+    const yes = await ask({ title: 'Mark costing done?', text: 'Profit AED ' + money(D.profit) + (D.sell ? ' · margin ' + pctTxt(D.profit / D.sell) : '') + '. This locks the costing for everyone' + (canEdit() ? '; Customer Service can unlock it later.' : '; only Customer Service can unlock it.') + (loss ? ' ⚠ This job shows a loss.' : ''), yes: 'Costing done', no: 'Not yet' });
+    if (!yes) return;
+    C.busy = 'lock'; costPaint(j); setSaving(1);
+    try {
+      const res = await api.call('ethixCostingLock', [j.jobNo, D.version]);
+      C.busy = '';
+      if (res && res.ok) { setCostData(C, res.costing); applyRow6(res.row); rerender(); updateNav(); toast(res.already ? 'Already done' : 'Costing done — locked'); return; }
+      if (res && res.conflict && res.costing) { setCostData(C, res.costing); rerender(); }
+      toast((res && res.error) || 'Not locked.', { error: true }); costPaint(j);
+    } catch (e) { C.busy = ''; costPaint(j); if (e.kind !== 'auth') toast('Not locked: ' + e.message, { error: true }); }
+    finally { setSaving(-1); }
+  }
+  async function costUnlock(j) {
+    const C = costFor(j.jobNo); if (!C || !C.data) return;
+    const reason = await ask({ title: 'Unlock the costing?', text: (j.sales ? nice(j.sales) + ' (sales) is told. ' : '') + 'Say why — optional, it goes into the history.', yes: 'Unlock', no: 'Cancel', input: 'Reason (optional)' });
+    if (reason === false) return;
+    setSaving(1);
+    try {
+      const res = await api.call('ethixCostingUnlock', [j.jobNo, reason]);
+      if (res && res.ok) { setCostData(C, res.costing); applyRow6(res.row); rerender(); updateNav(); toast('Costing unlocked'); return; }
+      toast((res && res.error) || 'Not unlocked.', { error: true });
+    } catch (e) { if (e.kind !== 'auth') toast(e.message, { error: true }); }
+    finally { setSaving(-1); }
+  }
+  async function costRate(j) {
+    const C = costFor(j.jobNo); if (!C || !C.draft) return;
+    const v = await ask({ title: 'USD rate for this costing', text: 'Company rate ' + (state.rate || 3.685) + '. Every USD amount on this job converts at this rate.', yes: 'Use this rate', no: 'Cancel', input: 'AED for 1 USD', value: String(C.draft.rate), inputmode: 'decimal' });
+    if (v === false) return;
+    const n = Math.round(num6(v) * 10000) / 10000;
+    if (!(n >= 3.5 && n <= 3.9)) { toast('Enter a rate between 3.5 and 3.9.', { error: true }); return; }
+    if (n === Number(C.draft.rate)) return;
+    C.draft.rate = n; costDirty(j);
+  }
+  function addCostLine(j, charge) {
+    const C = state.cost; if (!C || !C.draft) return;
+    const l = { id: newLineId(), charge: charge || '', vendor: '', basis: 'SHIP', qty: '1', bc: 'AED', br: '', sc: 'AED', sr: '' };
+    if (charge) oceanDefaults(j, l);
+    C.draft.lines.push(l);
+    C.dirty = true;
+    rerender();
+    const f = document.getElementById('cl_' + l.id + '_' + (charge ? 'br' : 'charge'));
+    if (f) { f.focus(); if (f.scrollIntoView) f.scrollIntoView({ block: 'nearest' }); }
+  }
+  // Ocean / air freight is usually per container and in USD — set that up once, on a fresh line.
+  function oceanDefaults(j, l) {
+    if (l.br || l.sr) return false;
+    if (/OCEAN FREIGHT|SEA FREIGHT/.test(String(l.charge).toUpperCase()) && boxesOf(j)) { l.basis = 'BOX'; l.qty = String(boxesOf(j)); l.bc = 'USD'; l.sc = 'USD'; return true; }
+    if (/AIR FREIGHT/.test(String(l.charge).toUpperCase())) { l.bc = 'USD'; l.sc = 'USD'; return true; }
+    return false;
+  }
+
+  // ================================================================ COSTING — the menu page
+  function costRows() {
+    const t0 = today0();
+    const base = (isSales() ? state.jobs : scoped()).filter((j) => j.active);
+    const all = base.map((j) => ({ j, st: costState(j), s: costSum(j) })).filter((x) => x.st !== 'none');
+    const due = (j) => (j.etd && j.etd < t0) || j.arrived;
+    const pending = all.filter((x) => x.st === 'pending').sort((a, b) => (due(b.j) - due(a.j)) || ((a.j.etd ? +a.j.etd : 9e15) - (b.j.etd ? +b.j.etd : 9e15)) || (a.j.jobNo < b.j.jobNo ? -1 : 1));
+    const draft = all.filter((x) => x.st === 'draft').sort((a, b) => ((b.s && b.s[5]) || 0) - ((a.s && a.s[5]) || 0));
+    const done = all.filter((x) => x.st === 'done').sort((a, b) => ((b.s && b.s[5]) || 0) - ((a.s && a.s[5]) || 0));
+    return { all, pending, draft, done, dueN: pending.filter((x) => due(x.j)).length, open: pending.length + draft.length };
+  }
+  function costListRow(x, t0) {
+    const j = x.j, s = x.s;
+    const when = x.st === 'pending'
+      ? ((j.etd && j.etd < t0) || j.arrived ? '<span class="chip chip-soon">' + (j.arrived ? 'ARRIVED' : (j.mode === 'air' ? 'DEPARTED ' : j.mode === 'courier' ? 'PICKED UP ' : 'SAILED ') + fmt(j.etd)) + '</span>' : '<span class="chip chip-calm">' + (j.etd ? (j.mode === 'courier' ? 'PICK-UP ' : 'ETD ') + fmt(j.etd) : j.mode === 'misc' ? 'COSTING ONLY' : 'DATES TO CONFIRM') + '</span>')
+      : x.st === 'draft' ? '<span class="chip chip-done">DRAFT · V' + (s ? s[4] : 1) + '</span>' : '<span class="chip chip-hold">' + icon('lock', 12) + 'DONE</span>';
+    const who = s ? (x.st === 'done' && s[7] ? 'Locked by ' + nice(s[7]) : s[6] ? nice(s[6]) + ' · ' + ago(s[5]) : '') : '';
+    const nums = s ? '<span class="cl-profit' + (s[3] < 0 ? ' is-loss' : '') + '"><small>AED</small> ' + money(s[3]) + '</span><span class="cl-sub">' + (s[1] ? pctTxt(s[3] / s[1]) + ' margin' : 'no selling yet') + '</span>' : x.st === 'done' ? '<span class="cl-sub">Marked done (no sheet)</span>' : '<span class="cl-sub">Not started</span>';
+    return '<li class="cr-row"><button type="button" class="cr-open" data-cost="' + esc(j.jobNo) + '" aria-label="Open costing of ' + esc(j.jobNo) + '">' +
+      '<span class="rr-main"><span class="rr-job">' + esc(j.jobNo) + ' <span class="badge">' + esc(j.type) + '</span></span><span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span></span>' +
+      '<span class="cr-when">' + when + (who ? '<span class="cl-sub">' + esc(who) + '</span>' : '') + '</span>' +
+      '<span class="cr-people"><span>CS · ' + esc(j.cs || '—') + '</span>' + (j.sales ? '<span>SALES · ' + esc(j.sales) + '</span>' : '') + '</span>' +
+      '<span class="cr-nums">' + nums + '</span><span class="cr-go">' + icon('chevron', 16) + '</span></button></li>';
+  }
+  function renderCostList(first) {
+    const t0 = today0(), anim = first ? ' reveal' : '';
+    const U = state.costUi, R = costRows();
+    const q = (U.q || '').trim().toUpperCase();
+    const match = (x) => !q || (x.j.jobNo + ' ' + x.j.customer + ' ' + x.j.route + ' ' + x.j.cs + ' ' + x.j.sales + ' ' + x.j.type).toUpperCase().includes(q);
+    const sumP = (list) => list.reduce((a, x) => a + (x.s ? x.s[3] : 0), 0);
+    const tab = ['pending', 'draft', 'done'].includes(U.tab) ? U.tab : 'pending';
+    const rows = R[tab].filter(match);
+    const keepQ = $('#costSearch') ? $('#costSearch').value : U.q || '';
+    const big = (id, label, n, sub) => '<button type="button" class="cs-big' + (tab === id ? ' is-on' : '') + '" data-cost-tab="' + id + '" aria-pressed="' + (tab === id) + '"><span class="cs-k">' + label + '</span><span class="cs-n">' + n + '</span><span class="cs-s">' + sub + '</span></button>';
+    $('#view').innerHTML = '<div class="wrap round-page cost-list">' +
+      '<header class="page-head' + anim + '"><div class="head-main"><div class="meta-line"><span>COSTING · ' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div><h1 class="greeting">Costing</h1></div>' +
+        '<div class="head-actions">' +
+          (canEdit() ? '<div class="seg" role="group" aria-label="Whose jobs"><button type="button" data-scope="mine" aria-pressed="' + (state.scope === 'mine') + '"><span class="l-full">My jobs</span><span class="l-short">Mine</span></button><button type="button" data-scope="all" aria-pressed="' + (state.scope === 'all') + '"><span class="l-full">Everyone</span><span class="l-short">All</span></button></div>' : '') +
+          '<label class="search">' + icon('search') + '<input id="costSearch" type="search" placeholder="Job no, customer, port" aria-label="Search costings" autocomplete="off" value="' + esc(keepQ) + '"></label>' +
+          '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' +
+        '</div></header>' +
+      '<section class="cost-sum tile tile-ink' + anim + '" style="--d:40ms" aria-label="Costing at a glance">' +
+        big('pending', 'PENDING', R.pending.length, R.dueN ? R.dueN + ' sailed or arrived' : 'nothing overdue') +
+        big('draft', 'DRAFT', R.draft.length, R.draft.length ? 'AED ' + money(sumP(R.draft)) + ' profit' : 'none open') +
+        big('done', 'DONE', R.done.length, R.done.some((x) => x.s) ? 'AED ' + money(sumP(R.done)) + ' profit' : R.done.length ? 'marked done' : 'none yet') +
+      '</section>' +
+      '<section class="round-sec cost-sec' + anim + '" style="--d:80ms" aria-labelledby="cs-title"><div class="tile-head"><h2 class="tile-title" id="cs-title">' + { pending: 'COSTING PENDING', draft: 'DRAFTS', done: 'COSTING DONE' }[tab] + ' <span class="tile-count">' + rows.length + '</span></h2><span class="small">' + { pending: 'Sailed or arrived first', draft: 'Last changed first', done: 'Last changed first' }[tab] + '</span></div>' +
+        (rows.length ? '<ul class="round-list cost-rows">' + rows.slice(0, 300).map((x) => costListRow(x, t0)).join('') + '</ul>' : '<div class="tile-empty">' + icon('check', 22) + '<span>' + (q ? 'Nothing matches “' + esc(U.q) + '”.' : { pending: 'Every active job has a costing.', draft: 'No drafts open.', done: 'No costing marked done yet.' }[tab]) + '</span></div>') +
+      '</section></div>';
+    if (keepQ && state.costFocus) { const s = $('#costSearch'); s.focus(); s.setSelectionRange(keepQ.length, keepQ.length); }
+  }
+
+  // ---------- the costing card on the job page ----------
+  function costCard(j) {
+    if (!canCostSee(j)) return '';
+    const st = costState(j), s = costSum(j);
+    if (st === 'none') return '';
+    const chip = st === 'done' ? '<span class="chip chip-hold">' + icon('lock', 12) + 'DONE</span>' : st === 'draft' ? '<span class="chip chip-done">DRAFT</span>' : '<span class="chip chip-calm">NOT STARTED</span>';
+    const editable = !j.closed && st !== 'done' && (canEdit() || isSales());
+    return '<section class="tile side-card cost-mini" aria-labelledby="cmTitle"><div class="tile-head"><h2 class="tile-title" id="cmTitle">COSTING</h2>' + chip + '</div>' +
+      (s ? '<div class="kv"><span class="kv-k">Selling</span><span class="kv-v">AED ' + money(s[1]) + '</span></div><div class="kv"><span class="kv-k">Buying</span><span class="kv-v">AED ' + money(s[2]) + '</span></div>' +
+        '<div class="kv cm-profit' + (s[3] < 0 ? ' is-loss' : '') + '"><span class="kv-k">Profit</span><span class="kv-v">AED ' + money(s[3]) + (s[1] ? ' · ' + pctTxt(s[3] / s[1]) : '') + '</span></div>'
+        : '<p class="pop-text">' + (st === 'done' ? 'Marked done before costing sheets.' : 'No costing yet.') + '</p>') +
+      '<button type="button" class="btn-ghost pop-wide" data-cost="' + esc(j.jobNo) + '">' + icon('costing', 16) + '<span>' + (s ? 'Open costing' : editable ? 'Start costing' : 'Open costing') + '</span></button></section>';
+  }
+
+  // ================================================================ EXCEL (made here, no download needed)
+  // A real .xlsx: logo, header band, summary, one table with live formulas, A4 one page wide,
+  // header row repeated on every printed page; sheet 2 has the notes and version history.
+  const XL = (() => {
+    const T = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; T[n] = c >>> 0; }
+    const crc = (b) => { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = T[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+    const enc = new TextEncoder();
+    const X = (s) => String(s == null ? '' : s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]/g, '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const N = (v) => { const n = Math.round(Number(v) * 1e8) / 1e8; return isFinite(n) ? String(n) : '0'; };
+    function zip(files) {
+      const parts = [], central = []; let off = 0;
+      const d = new Date();
+      const dt = ((d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1)) & 0xFFFF, dd = (((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate()) & 0xFFFF;
+      files.forEach((f) => {
+        const nm = enc.encode(f.name), data = typeof f.data === 'string' ? enc.encode(f.data) : f.data, c = crc(data);
+        const h = new DataView(new ArrayBuffer(30));
+        h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(8, 0, true); h.setUint16(10, dt, true); h.setUint16(12, dd, true);
+        h.setUint32(14, c, true); h.setUint32(18, data.length, true); h.setUint32(22, data.length, true); h.setUint16(26, nm.length, true); h.setUint16(28, 0, true);
+        parts.push(new Uint8Array(h.buffer), nm, data);
+        const cd = new DataView(new ArrayBuffer(46));
+        cd.setUint32(0, 0x02014b50, true); cd.setUint16(4, 20, true); cd.setUint16(6, 20, true); cd.setUint16(8, 0x0800, true); cd.setUint16(10, 0, true); cd.setUint16(12, dt, true); cd.setUint16(14, dd, true);
+        cd.setUint32(16, c, true); cd.setUint32(20, data.length, true); cd.setUint32(24, data.length, true); cd.setUint16(28, nm.length, true); cd.setUint32(42, off, true);
+        central.push(new Uint8Array(cd.buffer), nm);
+        off += 30 + nm.length + data.length;
+      });
+      const size = central.reduce((a, b) => a + b.length, 0);
+      const e = new DataView(new ArrayBuffer(22));
+      e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true); e.setUint32(12, size, true); e.setUint32(16, off, true);
+      return new Blob(parts.concat(central, [new Uint8Array(e.buffer)]), { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    }
+    const col = (i) => { let s = ''; i++; while (i > 0) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; };
+    function Styles() {
+      const fonts = ['<font><sz val="10"/><name val="Arial"/><family val="2"/></font>'];
+      const fills = ['<fill><patternFill patternType="none"/></fill>', '<fill><patternFill patternType="gray125"/></fill>'];
+      const borders = ['<border><left/><right/><top/><bottom/><diagonal/></border>'];
+      const fmts = [], xfs = ['<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'], seen = new Map();
+      const idx = (arr, x) => { let i = arr.indexOf(x); if (i < 0) { arr.push(x); i = arr.length - 1; } return i; };
+      function s(o) {
+        o = o || {};
+        const key = JSON.stringify(o); if (seen.has(key)) return seen.get(key);
+        const f = o.font || {};
+        const fontId = idx(fonts, '<font>' + (f.b ? '<b/>' : '') + (f.i ? '<i/>' : '') + '<sz val="' + (f.sz || 10) + '"/>' + (f.color ? '<color rgb="FF' + f.color + '"/>' : '') + '<name val="Arial"/><family val="2"/></font>');
+        const fillId = o.fill ? idx(fills, '<fill><patternFill patternType="solid"><fgColor rgb="FF' + o.fill + '"/><bgColor indexed="64"/></patternFill></fill>') : 0;
+        const b = o.border || {};
+        const side = (k) => (b[k] ? '<' + k + ' style="' + b[k][0] + '"><color rgb="FF' + b[k][1] + '"/></' + k + '>' : '<' + k + '/>');
+        const borderId = o.border ? idx(borders, '<border>' + side('left') + side('right') + side('top') + side('bottom') + '<diagonal/></border>') : 0;
+        let numFmtId = 0;
+        if (o.fmt) { const builtin = { General: 0, '0': 1, '0.00': 2, '#,##0': 3, '#,##0.00': 4, '0%': 9, '0.00%': 10 }[o.fmt]; numFmtId = builtin !== undefined ? builtin : 164 + idx(fmts, o.fmt); }
+        const a = o.align || {};
+        const al = a.h || a.v || a.wrap || a.indent ? '<alignment' + (a.h ? ' horizontal="' + a.h + '"' : '') + (a.v ? ' vertical="' + a.v + '"' : '') + (a.wrap ? ' wrapText="1"' : '') + (a.indent ? ' indent="' + a.indent + '"' : '') + '/>' : '';
+        const xf = '<xf numFmtId="' + numFmtId + '" fontId="' + fontId + '" fillId="' + fillId + '" borderId="' + borderId + '" xfId="0"' + (numFmtId ? ' applyNumberFormat="1"' : '') + (fontId ? ' applyFont="1"' : '') + (fillId ? ' applyFill="1"' : '') + (borderId ? ' applyBorder="1"' : '') + (al ? ' applyAlignment="1">' + al + '</xf>' : '/>');
+        const id = idx(xfs, xf); seen.set(key, id); return id;
+      }
+      s.xml = () => '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+        (fmts.length ? '<numFmts count="' + fmts.length + '">' + fmts.map((f, i) => '<numFmt numFmtId="' + (164 + i) + '" formatCode="' + X(f) + '"/>').join('') + '</numFmts>' : '') +
+        '<fonts count="' + fonts.length + '">' + fonts.join('') + '</fonts><fills count="' + fills.length + '">' + fills.join('') + '</fills><borders count="' + borders.length + '">' + borders.join('') + '</borders>' +
+        '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="' + xfs.length + '">' + xfs.join('') + '</cellXfs>' +
+        '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles><dxfs count="0"/><tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/></styleSheet>';
+      return s;
+    }
+    // sheet: { cols: [width], rows: { n: { h, c: { colIndex: { v, f, s } } } }, merges: [], tab, landscape, titles, footer, drawing }
+    function sheetXml(o) {
+      const rn = Object.keys(o.rows).map(Number).sort((a, b) => a - b);
+      const last = rn.length ? rn[rn.length - 1] : 1;
+      const data = rn.map((r) => {
+        const R = o.rows[r];
+        const cells = Object.keys(R.c).map(Number).sort((a, b) => a - b).map((ci) => {
+          const x = R.c[ci], ref = col(ci) + r, st = x.s ? ' s="' + x.s + '"' : '';
+          if (x.f) { const str = typeof x.v === 'string'; return '<c r="' + ref + '"' + st + (str ? ' t="str"' : '') + '><f>' + X(x.f) + '</f>' + (x.v === undefined || x.v === null || o.noCache ? '' : '<v>' + (str ? X(x.v) : N(x.v)) + '</v>') + '</c>'; }
+          if (x.v === undefined || x.v === null || x.v === '') return '<c r="' + ref + '"' + st + '/>';
+          if (typeof x.v === 'number') return '<c r="' + ref + '"' + st + '><v>' + N(x.v) + '</v></c>';
+          return '<c r="' + ref + '"' + st + ' t="inlineStr"><is><t xml:space="preserve">' + X(x.v) + '</t></is></c>';
+        }).join('');
+        return '<row r="' + r + '"' + (R.h ? ' ht="' + R.h + '" customHeight="1"' : '') + '>' + cells + '</row>';
+      }).join('');
+      return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+        '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:' + col(o.cols.length - 1) + last + '"/>' +
+        '<sheetViews><sheetView showGridLines="0" ' + (o.tab ? 'tabSelected="1" ' : '') + 'workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15"/>' +
+        '<cols>' + o.cols.map((w, i) => '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + w + '" customWidth="1"/>').join('') + '</cols>' +
+        '<sheetData>' + data + '</sheetData>' +
+        (o.merges.length ? '<mergeCells count="' + o.merges.length + '">' + o.merges.map((m) => '<mergeCell ref="' + m + '"/>').join('') + '</mergeCells>' : '') +
+        '<printOptions horizontalCentered="1"/><pageMargins left="0.4" right="0.4" top="0.5" bottom="0.6" header="0.25" footer="0.3"/>' +
+        '<pageSetup paperSize="9" orientation="' + (o.landscape ? 'landscape' : 'portrait') + '" fitToWidth="1" fitToHeight="0"/>' +
+        (o.footer ? '<headerFooter><oddFooter>' + X(o.footer) + '</oddFooter></headerFooter>' : '') +
+        (o.drawing ? '<drawing r:id="rId1"/>' : '') + '</worksheet>';
+    }
+    function pngSize(b) { return b && b.length > 24 && b[1] === 0x50 ? [((b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19]) >>> 0, ((b[20] << 24) | (b[21] << 16) | (b[22] << 8) | b[23]) >>> 0] : null; }
+    function book(o) {          // o: { sheets: [{ name, xml }], titles: 'Costing!$12:$12', logo: Uint8Array, logoH, title, user }
+      const files = [];
+      const sz = o.logo ? pngSize(o.logo) : null;
+      const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+      files.push({ name: '[Content_Types].xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>' + (sz ? '<Default Extension="png" ContentType="image/png"/>' : '') +
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' + o.sheets.map((s, i) => '<Override PartName="/xl/worksheets/sheet' + (i + 1) + '.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>').join('') +
+        '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' + (sz ? '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>' : '') +
+        '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>' });
+      files.push({ name: '_rels/.rels', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>' });
+      files.push({ name: 'docProps/core.xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>' + X(o.title) + '</dc:title><dc:creator>' + X(o.user) + '</dc:creator><cp:lastModifiedBy>' + X(o.user) + '</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">' + now + '</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">' + now + '</dcterms:modified></cp:coreProperties>' });
+      files.push({ name: 'docProps/app.xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>ETHIX</Application></Properties>' });
+      files.push({ name: 'xl/workbook.xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><workbookPr/><bookViews><workbookView xWindow="0" yWindow="0" windowWidth="28800" windowHeight="16000" activeTab="0"/></bookViews><sheets>' +
+        o.sheets.map((s, i) => '<sheet name="' + X(s.name) + '" sheetId="' + (i + 1) + '" r:id="rId' + (i + 1) + '"/>').join('') + '</sheets>' +
+        (o.titles ? '<definedNames><definedName name="_xlnm.Print_Titles" localSheetId="0">' + X(o.titles) + '</definedName></definedNames>' : '') + '<calcPr calcId="191029" fullCalcOnLoad="1"/></workbook>' });
+      files.push({ name: 'xl/_rels/workbook.xml.rels', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + o.sheets.map((s, i) => '<Relationship Id="rId' + (i + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet' + (i + 1) + '.xml"/>').join('') +
+        '<Relationship Id="rId' + (o.sheets.length + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>' });
+      files.push({ name: 'xl/styles.xml', data: o.styles });
+      o.sheets.forEach((s, i) => files.push({ name: 'xl/worksheets/sheet' + (i + 1) + '.xml', data: s.xml(!!(sz && i === 0)) }));
+      if (sz) {
+        const h = o.logoH || 44, w = Math.round(h * sz[0] / sz[1]), E = 9525;
+        files.push({ name: 'xl/worksheets/_rels/sheet1.xml.rels', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>' });
+        files.push({ name: 'xl/drawings/drawing1.xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>' + (4 * E) + '</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>' + (6 * E) + '</xdr:rowOff></xdr:from><xdr:ext cx="' + w * E + '" cy="' + h * E + '"/>' +
+          '<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="2" name="ETHIX logo"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>' +
+          '<xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + w * E + '" cy="' + h * E + '"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>' });
+        files.push({ name: 'xl/drawings/_rels/drawing1.xml.rels', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/></Relationships>' });
+        files.push({ name: 'xl/media/image1.png', data: o.logo });
+      }
+      return zip(files);
+    }
+    return { Styles, sheetXml, book, col };
+  })();
+
+  // The costing workbook. info: { job, customer, route, type, cargo, boxes, sales, cs, status, statusLine, rate, lines, notes, log, user, unsaved, at }
+  function costWorkbook(info, logo, opts = {}) {
+    const S = XL.Styles(), C = XL.col;
+    const INK = '0B1B2B', NAVY = '1C5179', GREY = '5A6878', FOG = 'E9EEF3', LINE = 'DFE6ED', TEAL = '0E7C7B', TINT = 'E4F5F5', ZEBRA = 'F6F8FA';
+    const AED = '#,##0.00;[Red]-#,##0.00', RATE = '#,##0.00##', PCT = '0.0%;[Red]-0.0%';
+    const st = {
+      title: S({ font: { sz: 18, b: true, color: INK }, align: { h: 'right', v: 'center' } }),
+      job: S({ font: { sz: 11, b: true, color: NAVY }, align: { h: 'right', v: 'center' } }),
+      lab: S({ font: { sz: 7, b: true, color: GREY }, fill: FOG, align: { v: 'center', indent: 1 } }),
+      val: S({ font: { sz: 11, b: true, color: INK }, border: { bottom: ['thin', LINE] }, align: { v: 'center', indent: 1, wrap: true } }),
+      lock: S({ font: { sz: 11, b: true, color: 'FFFFFF' }, fill: INK, align: { v: 'center', indent: 1, wrap: true } }),
+      draft: S({ font: { sz: 11, b: true, color: NAVY }, border: { left: ['medium', NAVY], right: ['medium', NAVY], top: ['medium', NAVY], bottom: ['medium', NAVY] }, align: { v: 'center', indent: 1, wrap: true } }),
+      slab: S({ font: { sz: 7, b: true, color: GREY }, align: { h: 'left', v: 'bottom', indent: 1 } }),
+      sAed: S({ font: { sz: 13, b: true, color: INK }, fmt: AED, align: { h: 'left', v: 'center', indent: 1 } }),
+      sProfit: S({ font: { sz: 13, b: true, color: TEAL }, fmt: AED, fill: TINT, align: { h: 'left', v: 'center', indent: 1 } }),
+      sPct: S({ font: { sz: 13, b: true, color: INK }, fmt: PCT, align: { h: 'left', v: 'center', indent: 1 } }),
+      sRate: S({ font: { sz: 13, b: true, color: INK }, fmt: '0.000#', align: { h: 'left', v: 'center', indent: 1 } }),
+      sTxt: S({ font: { sz: 13, b: true, color: GREY }, align: { h: 'left', v: 'center', indent: 1 } }),
+      hint: S({ font: { sz: 8, i: true, color: GREY }, align: { indent: 1 } }),
+      th: S({ font: { sz: 8, b: true, color: 'FFFFFF' }, fill: INK, align: { v: 'center', indent: 1, wrap: true } }),
+      thR: S({ font: { sz: 8, b: true, color: 'FFFFFF' }, fill: INK, align: { h: 'right', v: 'center', wrap: true } }),
+      thC: S({ font: { sz: 8, b: true, color: 'FFFFFF' }, fill: INK, align: { h: 'center', v: 'center', wrap: true } })
+    };
+    const cellSt = (z, kind) => {
+      const base = { border: { bottom: ['hair', 'B8C4CF'] }, fill: z ? ZEBRA : undefined };
+      if (kind === 'txt') return S(Object.assign({}, base, { font: { sz: 9, color: INK }, align: { v: 'center', indent: 1, wrap: true } }));
+      if (kind === 'b') return S(Object.assign({}, base, { font: { sz: 9, b: true, color: INK }, align: { v: 'center', indent: 1, wrap: true } }));
+      if (kind === 'cur') return S(Object.assign({}, base, { font: { sz: 8, b: true, color: GREY }, align: { h: 'center', v: 'center' } }));
+      if (kind === 'qty') return S(Object.assign({}, base, { font: { sz: 9, color: INK }, fmt: 'General', align: { h: 'right', v: 'center' } }));
+      if (kind === 'rate') return S(Object.assign({}, base, { font: { sz: 9, color: INK }, fmt: RATE, align: { h: 'right', v: 'center' } }));
+      if (kind === 'aed') return S(Object.assign({}, base, { font: { sz: 9, color: INK }, fmt: AED, align: { h: 'right', v: 'center' } }));
+      return S(Object.assign({}, base, { font: { sz: 9, b: true, color: TEAL }, fmt: AED, align: { h: 'right', v: 'center' } }));
+    };
+    const tot = { l: S({ font: { sz: 10, b: true, color: INK }, fill: TINT, border: { top: ['medium', INK] }, align: { h: 'right', v: 'center', indent: 1 } }), n: S({ font: { sz: 10, b: true, color: INK }, fill: TINT, border: { top: ['medium', INK] }, fmt: AED, align: { h: 'right', v: 'center' } }) };
+    const rows = {}, merges = [];
+    const put = (r, c, v, s, f) => { (rows[r] = rows[r] || { c: {} }).c[c] = { v, s, f }; };
+    const height = (r, h) => { (rows[r] = rows[r] || { c: {} }).h = h; };
+    const merge = (r1, c1, r2, c2) => merges.push(C(c1) + r1 + ':' + C(c2) + r2);
+    const fx = Number(info.rate) || 3.685;
+    // ---- header
+    height(1, 30); height(2, 22); height(3, 8);
+    put(1, 7, 'COST SHEET', st.title); merge(1, 7, 1, 10);
+    put(2, 7, 'JOB ' + info.job, st.job); merge(2, 7, 2, 10);
+    const band = (r, items) => { items.forEach(([c1, c2, label, value, vs]) => { put(r, c1, label, st.lab); put(r + 1, c1, value, vs || st.val); for (let c = c1 + 1; c <= c2; c++) { put(r, c, '', st.lab); put(r + 1, c, '', vs || st.val); } if (c2 > c1) { merge(r, c1, r, c2); merge(r + 1, c1, r + 1, c2); } }); height(r, 14); };
+    const custLines = Math.max(1, Math.ceil(String(info.customer || '').length / 34));
+    band(4, [[0, 0, 'JOB NO.', info.job], [1, 2, 'CUSTOMER', info.customer || '—'], [3, 7, 'ROUTE', info.route], [8, 10, 'TYPE', info.type]]);
+    height(5, Math.max(20, 14 * custLines + 6));
+    band(6, [[0, 0, 'CONTAINERS', info.cargo || '—'], [1, 2, 'SALES', info.sales || '—'], [3, 7, 'CUSTOMER SERVICE', info.cs || '—'], [8, 10, 'STATUS', info.statusLine, info.status === 'LOCKED' ? st.lock : st.draft]]);
+    height(7, 20); height(8, 10);
+    // ---- table first (the summary refers to its totals)
+    const H = 12, first = 13, lines = info.lines, last = first + lines.length - 1, T = first + lines.length;
+    const heads = [['CHARGE', st.th], ['VENDOR', st.th], ['BASIS', st.th], ['QTY', st.thR], ['CUR', st.thC], ['BUY RATE', st.thR], ['CUR', st.thC], ['SELL RATE', st.thR], ['BUYING AED', st.thR], ['SELLING AED', st.thR], ['PROFIT AED', st.thR]];
+    heads.forEach(([t, s], c) => put(H, c, t, s)); height(H, 24);
+    let sb = 0, ss = 0;
+    lines.forEach((l, i) => {
+      const r = first + i, z = i % 2 === 1;
+      const b = (Number(l.qty) || 0) * (Number(l.br) || 0) * (l.bc === 'USD' ? fx : 1), s = (Number(l.qty) || 0) * (Number(l.sr) || 0) * (l.sc === 'USD' ? fx : 1);
+      sb += b; ss += s;
+      put(r, 0, l.charge, cellSt(z, 'b')); put(r, 1, l.vendor || '', cellSt(z, 'txt')); put(r, 2, BASIS_SHORT[l.basis] || l.basis, cellSt(z, 'txt'));
+      put(r, 3, Number(l.qty) || 0, cellSt(z, 'qty')); put(r, 4, l.bc, cellSt(z, 'cur')); put(r, 5, Number(l.br) || 0, cellSt(z, 'rate'));
+      put(r, 6, l.sc, cellSt(z, 'cur')); put(r, 7, Number(l.sr) || 0, cellSt(z, 'rate'));
+      put(r, 8, b, cellSt(z, 'aed'), 'D' + r + '*F' + r + '*IF(E' + r + '="USD",$K$10,1)');
+      put(r, 9, s, cellSt(z, 'aed'), 'D' + r + '*H' + r + '*IF(G' + r + '="USD",$K$10,1)');
+      put(r, 10, s - b, cellSt(z, 'pf'), 'J' + r + '-I' + r);
+      const long = Math.max(String(l.charge).length / 30, String(l.vendor || '').length / 22);
+      height(r, long > 1 ? Math.ceil(long) * 12 + 6 : 18);
+    });
+    for (let c = 0; c <= 7; c++) put(T, c, c === 0 ? 'TOTAL (AED)' : '', tot.l);
+    merge(T, 0, T, 7);
+    const sum = (L) => lines.length ? 'SUM(' + L + first + ':' + L + last + ')' : null;
+    put(T, 8, sb, tot.n, sum('I')); put(T, 9, ss, tot.n, sum('J')); put(T, 10, ss - sb, tot.n, lines.length ? 'J' + T + '-I' + T : null);
+    height(T, 22);
+    // ---- summary (rows 9–11)
+    const p = ss - sb;
+    height(9, 14); height(10, 26); height(11, 14);
+    const sl = [[0, 0, 'SELLING (AED)'], [1, 1, 'BUYING (AED)'], [2, 3, 'PROFIT (AED)'], [4, 5, 'MARGIN'], [6, 7, 'MARK-UP'], [8, 8, info.boxes ? 'PROFIT / BOX (AED)' : 'PROFIT / BOX'], [9, 9, 'PROFIT (USD)'], [10, 10, 'USD → AED RATE']];
+    sl.forEach(([c1, c2, t]) => { put(9, c1, t, st.slab); if (c2 > c1) { put(9, c2, '', st.slab); merge(9, c1, 9, c2); } });
+    put(10, 0, ss, st.sAed, 'J' + T); put(10, 1, sb, st.sAed, 'I' + T);
+    put(10, 2, p, st.sProfit, 'K' + T); put(10, 3, '', st.sProfit); merge(10, 2, 10, 3);
+    put(10, 4, ss ? p / ss : 0, st.sPct, 'IF(J' + T + '=0,0,K' + T + '/J' + T + ')'); put(10, 5, '', st.sPct); merge(10, 4, 10, 5);
+    put(10, 6, sb ? p / sb : 0, st.sPct, 'IF(I' + T + '=0,0,K' + T + '/I' + T + ')'); put(10, 7, '', st.sPct); merge(10, 6, 10, 7);
+    if (info.boxes) put(10, 8, p / info.boxes, st.sAed, 'K' + T + '/' + info.boxes); else put(10, 8, '—', st.sTxt);
+    put(10, 9, p / fx, st.sAed, 'K' + T + '/K10'); put(10, 10, fx, st.sRate);
+    put(11, 0, 'Margin = profit ÷ selling · Mark-up = profit ÷ buying · USD amounts convert at the rate in K10 (change it and every total follows).', st.hint); merge(11, 0, 11, 10);
+    // ---- under the table
+    const foot = S({ font: { sz: 8, color: GREY }, align: { indent: 1 } });
+    put(T + 2, 0, 'Amounts in AED. 1 USD = AED ' + fx + '. Generated ' + info.at + ' by ' + info.user + ' from ETHIX.', foot); merge(T + 2, 0, T + 2, 10);
+    if (info.unsaved) { put(T + 3, 0, 'DRAFT — this export includes changes that were not saved yet.', S({ font: { sz: 9, b: true, color: 'B42318' }, align: { indent: 1 } })); merge(T + 3, 0, T + 3, 10); }
+    const sheet1 = { cols: [30, 22, 13, 8, 7, 12, 7, 12, 14, 14, 14], rows, merges, tab: true, landscape: true, footer: '&L&8ETHIX · Costing · Job ' + info.job + '&R&8Page &P of &N', noCache: !!opts.noCache };
+    // ---- sheet 2: notes + version history
+    const rows2 = {}, merges2 = [];
+    const put2 = (r, c, v, s) => { (rows2[r] = rows2[r] || { c: {} }).c[c] = { v, s }; };
+    const h2 = (r, h) => { (rows2[r] = rows2[r] || { c: {} }).h = h; };
+    const t2 = S({ font: { sz: 13, b: true, color: INK } }), sec = S({ font: { sz: 9, b: true, color: NAVY }, fill: FOG, align: { v: 'center', indent: 1 } });
+    const c2 = S({ font: { sz: 9, color: INK }, border: { bottom: ['hair', 'B8C4CF'] }, align: { v: 'top', indent: 1, wrap: true } });
+    const c2n = S({ font: { sz: 9, color: INK }, border: { bottom: ['hair', 'B8C4CF'] }, fmt: AED, align: { h: 'right', v: 'top' } });
+    put2(1, 0, 'NOTES & VERSION HISTORY · JOB ' + info.job, t2); merges2.push('A1:G1'); h2(1, 22);
+    let r2 = 3;
+    put2(r2, 0, 'COSTING NOTES', sec); for (let c = 1; c <= 6; c++) put2(r2, c, '', sec); merges2.push('A' + r2 + ':G' + r2); h2(r2, 18); r2++;
+    ['WHEN', 'WHO', '', 'NOTE'].forEach((t, c) => put2(r2, c, t, c === 3 ? st.th : st.th)); [4, 5, 6].forEach((c) => put2(r2, c, '', st.th)); merges2.push('D' + r2 + ':G' + r2); r2++;
+    if (!info.notes.length) { put2(r2, 0, 'No notes.', c2); r2++; }
+    info.notes.forEach((n) => { put2(r2, 0, n.when, c2); put2(r2, 1, n.by, c2); put2(r2, 2, '', c2); put2(r2, 3, n.txt, c2); [4, 5, 6].forEach((c) => put2(r2, c, '', c2)); merges2.push('D' + r2 + ':G' + r2); h2(r2, Math.max(16, Math.ceil(String(n.txt).length / 95) * 12 + 6)); r2++; });
+    r2++;
+    put2(r2, 0, 'VERSION HISTORY (NEWEST FIRST)', sec); for (let c = 1; c <= 6; c++) put2(r2, c, '', sec); merges2.push('A' + r2 + ':G' + r2); h2(r2, 18); r2++;
+    ['WHEN', 'WHO', 'VERSION', 'WHAT HAPPENED', 'SELL AED', 'BUY AED', 'PROFIT AED'].forEach((t, c) => put2(r2, c, t, c >= 4 ? st.thR : st.th)); r2++;
+    if (!info.log.length) { put2(r2, 0, 'Not saved yet.', c2); r2++; }
+    info.log.forEach((x) => {
+      put2(r2, 0, x.when, c2); put2(r2, 1, x.by, c2); put2(r2, 2, 'V' + x.ver, c2); put2(r2, 3, x.what, c2);
+      put2(r2, 4, x.sell, c2n); put2(r2, 5, x.buy, c2n); put2(r2, 6, x.profit, c2n);
+      h2(r2, Math.max(16, Math.ceil(String(x.what).length / 62) * 12 + 6)); r2++;
+    });
+    const sheet2 = { cols: [17, 13, 9, 62, 13, 13, 13], rows: rows2, merges: merges2, landscape: true, footer: '&L&8ETHIX · Costing · Job ' + info.job + '&R&8Page &P of &N' };
+    return XL.book({
+      title: 'ETHIX costing ' + info.job, user: info.user, logo, logoH: 40, titles: "Costing!$12:$12",
+      sheets: [{ name: 'Costing', xml: (d) => XL.sheetXml(Object.assign({}, sheet1, { drawing: d })) }, { name: 'Notes & history', xml: () => XL.sheetXml(sheet2) }],
+      styles: S.xml()
+    });
+  }
+  let logoBytes = null;
+  // The logo built into the page (always there, no download); the assets file is only a fallback.
+  async function costLogo() {
+    if (logoBytes) return logoBytes;
+    try {
+      const el = document.createElement('span'); el.className = 'brand-logo'; el.style.position = 'absolute'; el.style.visibility = 'hidden'; document.body.appendChild(el);
+      const m = String(getComputedStyle(el).backgroundImage || '').match(/data:image\/png;base64,([A-Za-z0-9+\/=]+)/); el.remove();
+      if (m) { const bin = atob(m[1]); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); logoBytes = u; return logoBytes; }
+    } catch (e) { /* try the file */ }
+    try { const r = await fetch('assets/ethix-logo-color.png', { cache: 'force-cache' }); if (r.ok) logoBytes = new Uint8Array(await r.arrayBuffer()); } catch (e) { /* no logo then */ }
+    return logoBytes;
+  }
+  function costInfo(j, C) {
+    const D = C.data, fx = Number(C.draft.rate) || D.rate || 3.685;
+    const read = readLines(C);
+    const lines = read.lines || D.lines;
+    const stamp = (t) => (t ? stampText(new Date(t)) : '');
+    const statusLine = D.status === 'LOCKED' ? 'LOCKED · COSTING DONE' + (D.lockedBy ? ' · ' + D.lockedBy : '') + (D.lockedAt ? ' · ' + stamp(D.lockedAt) : '') : C.dirty ? 'DRAFT · NOT SAVED' : D.status === 'NEW' ? 'DRAFT · NOT SAVED' : 'DRAFT · V' + D.version + (D.by ? ' · ' + D.by : '');
+    return {
+      job: j.jobNo, customer: j.customer, route: j.mode === 'misc' ? (j.against ? 'AGAINST ' + j.against : 'COSTING ONLY') : (j.pol || '—') + ' → ' + (j.pod || '—'), type: j.type + ' · ' + j.typeName, cargo: j.cargo || (j.mode === 'air' ? 'AIR' : j.mode === 'courier' ? 'COURIER' : ''), boxes: boxesOf(j),
+      sales: j.sales, cs: j.cs, status: D.status === 'LOCKED' ? 'LOCKED' : 'DRAFT', statusLine, rate: fx, lines, unsaved: C.dirty || D.status === 'NEW', user: state.user, at: fmt(new Date(), true) + ' ' + stampText(new Date()).slice(-5),
+      notes: C.draft.notes.map((t) => ({ when: 'not saved yet', by: state.user, txt: t })).concat((D.notes || []).slice().reverse().map((n) => ({ when: stamp(n.t), by: n.by, txt: n.txt }))),
+      log: (D.log || []).map((x) => ({ when: stamp(x.t), by: x.by, ver: x.ver, what: x.action === 'SAVED' ? (x.changes || 'Saved') : x.action === 'LOCKED' ? 'Costing done — locked' : (x.changes || 'Unlocked'), sell: x.sell, buy: x.buy, profit: x.profit }))
+    };
+  }
+  async function exportCost(j) {
+    const C = costFor(j.jobNo); if (!C || !C.data) return;
+    const read = readLines(C);
+    if (read.bad) { toast(read.msg, { error: true }); return; }
+    try {
+      const blob = costWorkbook(costInfo(j, C), await costLogo());
+      const name = 'ETHIX_Costing_' + String(j.jobNo).replace(/[^A-Za-z0-9\-]+/g, '_') + '.xlsx';
+      const url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = url; a.download = name; document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 4000);
+      toast('Excel ready · ' + name);
+    } catch (e) { toast('The Excel file could not be made: ' + e.message, { error: true }); }
+  }
+
+  // ================================================================ wiring
+  // Leaving a costing with unsaved changes asks first.
+  function leaveGuard() {
+    const C = state.cost, r = state.route;
+    if (!C || !C.dirty || !r || r.name !== 'costjob' || String(r.jobNo).toUpperCase() !== C.no) return false;
+    const target = location.hash, here = '#/costing/' + encodeURIComponent(r.jobNo);
+    if (decodeURIComponent(target) === decodeURIComponent(here)) return false;
+    history.replaceState(null, '', here);
+    ask({ title: 'Leave without saving?', text: 'Your changes to this costing are not saved yet.', yes: 'Leave', no: 'Stay' }).then((leave) => {
+      if (!leave) return;
+      state.cost = null;
+      location.hash = target;
+    });
+    return true;
+  }
+  function initV26() {
+    const view = $('#view');
+    // costing stop, its MARK DONE, the Home "COSTING DUE" tile → the costing page
+    view.addEventListener('click', (e) => {
+      const r = state.route;
+      const kpi = e.target.closest('[data-list="costing"]');
+      if (kpi && r && r.name === 'home') { e.stopImmediatePropagation(); go('#/costing'); return; }
+      const st = e.target.closest('[data-stop="costing"]');
+      if (st && r && r.name === 'job') { const j = findJob(r.jobNo); if (j && canCostSee(j)) { e.stopImmediatePropagation(); go('#/costing/' + encodeURIComponent(j.jobNo)); } }
+    }, true);
+    document.addEventListener('click', (e) => {
+      const c = e.target.closest('[data-cost]');
+      if (c && state.signedIn) { e.preventDefault(); closeOverlays(true); go('#/costing/' + encodeURIComponent(c.dataset.cost)); }
+    });
+    view.addEventListener('click', (e) => {
+      const r = state.route; if (!r) return;
+      if (r.name === 'job' && e.target.closest('[data-act="duplicate"]')) { duplicateJob(r.jobNo); return; }
+      if (r.name === 'costing') {
+        const tb = e.target.closest('[data-cost-tab]'); if (tb) { state.costUi.tab = tb.dataset.costTab; rerender(); return; }
+        const sc = e.target.closest('[data-scope]'); if (sc && canEdit()) { state.scope = sc.dataset.scope; store.set('ethix.v2.scope.' + state.user, state.scope); rerender(); }
+        return;
+      }
+      if (r.name !== 'costjob') return;
+      const j = findJob(r.jobNo); const C = j && costFor(j.jobNo);
+      if (e.target.closest('[data-act="back"]')) { if (state.navDepth > 0) history.back(); else go('#/costing'); return; }
+      if (!j) return;
+      if (e.target.closest('[data-act="cost-retry"]')) { state.cost = null; rerender(); return; }
+      if (!C || !C.draft) return;
+      if (e.target.closest('[data-act="cost-save"]')) { saveCost(j); return; }
+      if (e.target.closest('[data-act="cost-done"]')) { costDone(j); return; }
+      if (e.target.closest('[data-act="cost-unlock"]')) { costUnlock(j); return; }
+      if (e.target.closest('[data-act="cost-xlsx"]')) { exportCost(j); return; }
+      if (e.target.closest('[data-act="cost-rate"]')) { costRate(j); return; }
+      if (e.target.closest('[data-act="cost-log"]')) { C.showLog = !C.showLog; rerender(); return; }
+      if (e.target.closest('[data-act="cost-add"]')) { addCostLine(j, ''); return; }
+      const qc = e.target.closest('[data-quick-charge]'); if (qc) { addCostLine(j, qc.dataset.quickCharge); return; }
+      const un = e.target.closest('[data-unnote]'); if (un) { C.draft.notes.splice(+un.dataset.unnote, 1); C.dirty = C.dirty || true; rerender(); return; }
+      if (!costCanEdit(j, C.data)) return;
+      const cur = e.target.closest('[data-cur]');
+      if (cur) { const row = cur.closest('[data-line]'); const l = C.draft.lines.find((x) => x.id === row.dataset.line); if (!l) return; const k = cur.dataset.cur; l[k] = l[k] === 'USD' ? 'AED' : 'USD'; cur.textContent = l[k]; cur.classList.toggle('is-usd', l[k] === 'USD'); cur.setAttribute('aria-label', 'Currency: ' + l[k] + '. Change'); costDirty(j); return; }
+      const del = e.target.closest('[data-del]');
+      if (del) {
+        const i = C.draft.lines.findIndex((x) => x.id === del.dataset.del); if (i < 0) return;
+        const gone = C.draft.lines.splice(i, 1)[0]; C.dirty = true; rerender();
+        if (gone.charge || gone.br || gone.sr) toast('Removed ' + (gone.charge || 'the line'), { action: { label: 'Undo', fn: () => { const C2 = costFor(j.jobNo); if (!C2) return; C2.draft.lines.splice(Math.min(i, C2.draft.lines.length), 0, gone); C2.dirty = true; rerender(); } } });
+      }
+    });
+    view.addEventListener('input', (e) => {
+      const r = state.route; if (!r) return;
+      if (r.name === 'costing' && e.target.id === 'costSearch') { state.costUi.q = e.target.value; state.costFocus = true; rerender(); state.costFocus = false; return; }
+      if (r.name !== 'costjob') return;
+      const f = e.target.dataset && e.target.dataset.f; if (!f) return;
+      const row = e.target.closest('[data-line]'); const j = findJob(r.jobNo); const C = j && costFor(j.jobNo); if (!row || !C || !C.draft) return;
+      const l = C.draft.lines.find((x) => x.id === row.dataset.line); if (!l) return;
+      if (f === 'basis') return;
+      l[f] = e.target.value;
+      if (['qty', 'br', 'sr'].includes(f)) e.target.classList.toggle('is-bad', isNaN(num6(e.target.value)));
+      costDirty(j);
+    });
+    view.addEventListener('change', (e) => {
+      const r = state.route; if (!r || r.name !== 'costjob') return;
+      const f = e.target.dataset && e.target.dataset.f; if (!f) return;
+      const row = e.target.closest('[data-line]'); const j = findJob(r.jobNo); const C = j && costFor(j.jobNo); if (!row || !C || !C.draft) return;
+      const l = C.draft.lines.find((x) => x.id === row.dataset.line); if (!l) return;
+      if (f === 'basis') { l.basis = e.target.value; l.qty = costQtyFor(j, l.basis, l.qty); const q = document.getElementById('cl_' + l.id + '_qty'); if (q) q.value = l.qty; costDirty(j); return; }
+      if (f === 'charge') { l.charge = e.target.value.toUpperCase().replace(/\s+/g, ' ').trim(); e.target.value = l.charge; if (oceanDefaults(j, l)) { C.dirty = true; rerender(); } }
+      if (f === 'vendor') { l.vendor = e.target.value.toUpperCase().replace(/\s+/g, ' ').trim(); e.target.value = l.vendor; }
+    });
+    view.addEventListener('submit', (e) => {
+      const fm = e.target.closest('[data-act="cost-note"]'); if (!fm) return;
+      e.preventDefault();
+      const r = state.route; const j = r && findJob(r.jobNo); const C = j && costFor(j.jobNo); if (!C || !C.draft) return;
+      const inp = $('#costNote'); const t = inp.value.trim(); if (!t) return;
+      C.draft.notes.unshift(t.slice(0, 500)); C.dirty = true; inp.value = ''; rerender();
+      toast('Note added — it is saved with the costing');
+    });
+    view.addEventListener('keydown', (e) => {
+      const r = state.route; if (!r || r.name !== 'costjob') return;
+      if (e.key === 'Enter' && e.target.dataset && e.target.dataset.f === 'sr') {
+        const j = findJob(r.jobNo), C = j && costFor(j.jobNo); if (!C) return;
+        const row = e.target.closest('[data-line]'); const lines = C.draft.lines;
+        if (row && lines.length && lines[lines.length - 1].id === row.dataset.line) { e.preventDefault(); addCostLine(j, ''); }
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (!state.signedIn || !(e.ctrlKey || e.metaKey) || String(e.key).toLowerCase() !== 's') return;
+      const r = state.route; if (!r || r.name !== 'costjob') return;
+      e.preventDefault();
+      const j = findJob(r.jobNo); if (j) saveCost(j);
+    });
+    // the suggestions under list boxes follow what is typed
+    const LISTS = ['dlCustomers', 'dlVendors', 'dlPorts', 'dlCharges', 'dlSales'];
+    const onList = (e) => { const t = e.target; if (t && t.tagName === 'INPUT' && LISTS.includes(t.getAttribute('list'))) fillList(t); };
+    document.addEventListener('input', onList, true);
+    document.addEventListener('focusin', onList, true);
+    window.addEventListener('beforeunload', (e) => { if (state.cost && state.cost.dirty) { e.preventDefault(); e.returnValue = ''; } });
+  }
+
   // ------------------------------------------------------------ lists & menus
   function openList(kind, opener) {
     const m = lastMetrics; if (!m) return;
@@ -3172,7 +4115,8 @@
   // ------------------------------------------------------------ session & timers
   let ending = false;
   function sessionLost(msg) {
-    if (ending) return; ending = true; api.token = null;
+    if (state.resuming) return;
+    if (ending) return; ending = true; api.token = null; dropSession();
     toast(msg || 'Your session has ended. Please sign in again.', { error: true });
     setTimeout(() => window.location.reload(), 1800);
   }
@@ -3195,7 +4139,7 @@
     const wrap = $('#confirmWrap'); wrap.hidden = false; $('#confirmNo').focus();
     const close = () => { wrap.hidden = true; };
     $('#confirmNo').onclick = close;
-    $('#confirmYes').onclick = () => { api.logout(); document.body.style.opacity = '0.6'; history.replaceState(null, '', location.pathname + location.search); setTimeout(() => window.location.reload(), 250); };
+    $('#confirmYes').onclick = () => { api.logout(); dropSession(); document.body.style.opacity = '0.6'; history.replaceState(null, '', location.pathname + location.search); setTimeout(() => window.location.reload(), 250); };
     wrap.onclick = (e) => { if (e.target === wrap) close(); };
   }
 
@@ -3274,11 +4218,12 @@
     $('#drawerClose').addEventListener('click', () => closeOverlays());
     $('#scrim').addEventListener('click', () => closeOverlays());
     $('#logoutBtn').addEventListener('click', confirmLogout);
-    window.addEventListener('hashchange', () => { if (!state.signedIn) return; state.navDepth++; closeOverlays(true); render(false); });
+    window.addEventListener('hashchange', () => { if (!state.signedIn) return; if (leaveGuard()) return; state.navDepth++; closeOverlays(true); render(false); });
   }
 
   // -------------------------------------------------------------------- start
   function start() {
+    if (savedSession()) document.body.classList.add('is-resuming');
     initSignin();
     initApp();
     initJobs();
@@ -3287,9 +4232,11 @@
     initPeople();
     initPhase4();
     initV25();
+    initV26();
+    if (savedSession()) resumeSession();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 
   // exposed for automated tests only (no data, no token)
-  window.__ethix = { parseDate, mapHeaders, buildJob, computeHome, today0, journeyFor, nextStep, voyage: () => ({ running: voyage.running, leg: voyage.leg, phase: voyage.phase }) };
+  window.__ethix = { parseDate, mapHeaders, buildJob, computeHome, today0, journeyFor, nextStep, costWorkbook, voyage: () => ({ running: voyage.running, leg: voyage.leg, phase: voyage.phase }) };
 })();
