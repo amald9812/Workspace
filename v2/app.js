@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing — v2.6)
+   enquiries, follow-ups, delays, close & archive, costing — v2.7)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -301,6 +301,7 @@
     let next = all.find((s) => doable(s) && !s.optional && s.kind !== 'status' && !(s.kind === 'field' && s.def.field === 'costing' && j.cat === 'EXPORT' && !sailed));
     if (!next && closeStop && closeStop.state === 'current') next = closeStop;
     if (next && next.state === 'todo') next.state = 'current';
+    polishStops(all);
     return { key, w: J.w, origin, transit, dest, all, next, ready };
   }
 
@@ -352,7 +353,7 @@
         const add = (date, what, pendingFlag) => {
           if (!date || !pendingFlag) return;
           const d = days(t0, date);
-          if (d <= 1 && d >= -7) watch.push({ j, what, d, level: d <= 0 ? 'urgent' : 'soon', when: whenText(d) });
+          if (d <= 3 && d >= -7) watch.push({ j, what, d, level: d <= 1 ? 'urgent' : 'soon', when: whenText(d) });
         };
         add(j.siCut, 'SI CUTOFF', j.sido === '' || PENDING(j.sido));
         add(j.edCut, 'ED CUTOFF', j.ed === '' || PENDING(j.ed));
@@ -360,7 +361,7 @@
       }
       if ((j.cat === 'EXPORT' || j.cat === 'CROSS') && j.etd) {
         const d = days(t0, j.etd);
-        if (d >= 0 && d <= 2) watch.push({ j, what: j.mode === 'air' ? 'FLIGHT DEPARTS' : 'VESSEL SAILS', d, level: 'calm', when: d === 0 ? 'Today' : d === 1 ? 'Tomorrow' : DOW_UP[j.etd.getDay()] + ' ' + fmt(j.etd) });
+        if (d >= 0 && d <= 3) watch.push({ j, what: j.mode === 'air' ? 'FLIGHT DEPARTS' : 'VESSEL SAILS', d, level: 'calm', when: d === 0 ? 'Today' : d === 1 ? 'Tomorrow' : DOW_UP[j.etd.getDay()] + ' ' + fmt(j.etd) });
       }
       if (j.cat === 'IMPORT' && j.arrived && !j.delivery && j.lineFreeEnd) {
         const d = days(t0, j.lineFreeEnd);
@@ -760,7 +761,7 @@
     state.user = (boot.me && boot.me.user) || name;
     state.role = normRole((boot.me && boot.me.role) || role, state.user);
     applyBoot(boot);
-    const savedScope = store.get('ethix.v2.scope.' + state.user, null);
+    const savedScope = state.resumedNow ? store.get('ethix.v2.scope.' + state.user, null) : null;   // v2.7: a new sign-in starts on My jobs
     const hasMine = state.jobs.some((j) => j.active && j.cs === state.user);
     state.scope = canEdit() ? savedScope || (hasMine ? 'mine' : 'all') : 'all';
     stopVoyage();
@@ -780,7 +781,7 @@
     const h = decodeURIComponent(location.hash || '');
     const m = h.match(/^#\/job\/(.+)$/);
     const mc = h.match(/^#\/costing\/(.+)$/);
-    let r = m ? { name: 'job', jobNo: m[1].trim() } : mc ? { name: 'costjob', jobNo: mc[1].trim() } : h === '#/costing' ? { name: 'costing' } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : { name: 'home' };
+    let r = m ? { name: 'job', jobNo: m[1].trim() } : mc ? { name: 'costjob', jobNo: mc[1].trim() } : h === '#/costing' ? { name: 'costing' } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : h === '#/notifications' ? { name: 'notif' } : { name: 'home' };
     if (isAdmin()) { if (r.name !== 'activity') r = { name: 'admin' }; }      // admin works with people, not jobs
     else if (r.name === 'admin' || r.name === 'activity' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote()) || ((r.name === 'costing' || r.name === 'costjob') && !canNote())) r = { name: 'home' };
     const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity|round|follow-ups|enquiries|costing)$/.test(h) ? '#/home' : r.name === 'round' && h === '#/round' ? '#/follow-ups' : null;
@@ -805,6 +806,7 @@
     else if (r.name === 'enquiries') renderEnquiries(changed || first);
     else if (r.name === 'costing') renderCostList(changed || first);
     else if (r.name === 'costjob') renderCostJob(r.jobNo, changed || first);
+    else if (r.name === 'notif') renderNotifPage(changed || first);
     else if (r.name === 'job') { renderVoyage(r.jobNo, changed || first); fitNames(); }
     else renderHome(changed || first);
     if (changed) view.scrollTop = 0;
@@ -856,7 +858,7 @@
     $('#sideName').textContent = state.user === 'MASTER' ? 'ADMIN' : state.user;
     $('#sideRole').textContent = ROLE_NAMES[state.role] || state.role;
     const tab = (nav, href, ic, label) => '<button type="button" class="tab" data-nav="' + nav + '" data-href="' + href + '">' + icon(ic, 22) + label + '</button>';
-    const bell = '<button type="button" class="tab" data-act="notif" aria-label="Notifications"><span class="nav-ic">' + icon('bell', 22) + '<span class="badge-dot" hidden></span></span>Alerts</button>';
+    const bell = '<button type="button" class="tab" data-act="notif" data-nav="notif" aria-label="Notifications"><span class="nav-ic">' + icon('bell', 22) + '<span class="badge-dot" hidden></span></span>Alerts</button>';
     const more = '<button type="button" class="tab" data-act="more">' + icon('more', 22) + 'More</button>';
     const plus = (act, label) => '<button type="button" class="tab-plus" data-act="' + act + '" aria-label="' + label + '">' + icon('plus', 22) + '</button>';
     $('#bottomBar').innerHTML = isAdmin() ? tab('admin', '#/admin', 'users', 'People') + tab('activity', '#/activity', 'clock', 'Activity') + plus('adm-add', 'Add user') + more
@@ -901,17 +903,17 @@
   const empty = (iconName, text) => '<div class="tile-empty">' + icon(iconName, 22) + '<span>' + esc(text) + '</span></div>';
 
   function watchTile(m, anim) {
-    const chip = (w) => w.level === 'urgent' ? 'chip chip-urgent' : w.level === 'soon' ? 'chip chip-soon-dark' : 'chip chip-calm-dark';
+    const chip = (w) => w.level === 'urgent' ? 'chip chip-urgent' : w.level === 'soon' ? 'chip chip-amber-dark' : 'chip chip-calm-dark';
     return '<section class="tile tile-ink t-watch' + anim + '" style="--d:60ms" aria-labelledby="watchTitle">' +
       '<div class="tile-head"><h2 class="tile-title" id="watchTitle">TODAY’S WATCH</h2><span class="watch-sub">' +
-      (m.deadlines ? m.deadlines + (m.deadlines === 1 ? ' deadline' : ' deadlines') + ' · next 48 h' : 'Nothing urgent · next 48 h') + '</span></div>' +
+      (m.deadlines ? m.deadlines + (m.deadlines === 1 ? ' deadline' : ' deadlines') + ' · next 3 days' : 'Nothing urgent · next 3 days') + '</span></div>' +
       '<div class="tile-body">' +
       (m.watch.length ? m.watch.slice(0, LIST_MAX).map((w) =>
         '<button type="button" class="watch-item li" data-job="' + esc(w.j.jobNo) + '">' +
         '<span class="watch-job">' + esc(w.j.jobNo) + '</span>' +
         '<span class="watch-text"><span class="watch-what">' + esc(w.what) + '</span><span class="watch-cust">' + esc(w.j.customer || '—') + ' · ' + esc(nice(w.j.route)) + '</span></span>' +
         '<span class="' + chip(w) + '">' + (w.level === 'urgent' ? icon('alert', 13) : '') + esc(w.when) + '</span></button>'
-      ).join('') : empty('check', 'No cutoffs, sailings or free-time deadlines in the next 48 hours.')) +
+      ).join('') : empty('check', 'No cutoffs, sailings or free-time deadlines in the next 3 days.')) +
       '</div>' + seeAll('watch', m.watch.length, true) + '</section>';
   }
 
@@ -1052,7 +1054,7 @@
       '<span class="jr-type"><span class="badge">' + esc(j.type || '—') + '</span><span class="jr-typename">' + esc(j.typeName) + '</span></span>' +
       '<span class="jr-cust"><span class="jr-name">' + esc(j.customer || '—') + '</span><span class="jr-route">' + esc(j.mode === 'misc' ? (j.against ? 'AGAINST ' + j.against : 'COSTING ONLY') : j.route) + '</span></span>' +
       '<span class="jr-track">' + miniTrack(j, 26) + '</span>' +
-      '<span class="jr-next">' + toneChip(j.next) + '</span>' +
+      '<span class="jr-next">' + toneChip(rowNext(j)) + cutChips(j) + '</span>' +
       '<span class="jr-etd"><span class="jr-k">ETD</span>' + esc(j.etd ? fmt(j.etd) : '—') + '</span>' +
       '<span class="jr-eta"><span class="jr-k">ETA</span>' + esc(j.eta ? fmt(j.eta) : '—') + (delayInfo(j) ? '<span class="jr-delay" title="Delayed">+' + delayInfo(j).total + 'D</span>' : '') + '</span>' +
       '<span class="jr-people"><span class="jr-cs">' + esc(j.cs || '—') + '</span><span class="jr-sales">' + esc(j.sales || '') + '</span></span>' +
@@ -1139,7 +1141,7 @@
   }
   function stopBtn(s, cls) {
     return '<button type="button" class="' + cls + ' is-' + s.state + (s.optional ? ' is-optional' : '') + '" data-stop="' + s.id + '" aria-label="' + esc(s.name + ': ' + s.sub) + '">' + stopDot(s) +
-      '<span class="stop-text"><span class="stop-name">' + esc(s.name) + '</span><span class="stop-sub">' + esc(s.sub) + '</span></span></button>';
+      '<span class="stop-text"><span class="stop-name">' + esc(s.name) + '</span><span class="stop-sub' + (s.cutTone && s.cutTone !== 'calm' ? ' cut-' + s.cutTone : '') + '">' + esc(s.sub) + '</span></span></button>';
   }
   const stopList = (list, cls) => list.length ? '<ol class="stops">' + list.map((s) => '<li>' + stopBtn(s, cls) + '</li>').join('') + '</ol>' : '';
 
@@ -1273,8 +1275,8 @@
   function peopleCard(j) {
     const person = (n, role, bg) => '<div class="person-row"><span class="avatar" style="' + bg + '">' + esc(initials(n || '?')) + '</span><div><div class="pr-name">' + esc(n || '—') + (n && n === state.user ? ' <span class="you">YOU</span>' : '') + '</div><div class="pr-role">' + role + '</div></div></div>';
     return '<section class="tile side-card" aria-labelledby="peopleTitle"><div class="tile-head"><h2 class="tile-title" id="peopleTitle">PEOPLE</h2></div>' +
-      person(j.cs, 'Customer Service · owns this job', '') +
-      (j.sales ? person(j.sales, 'Sales · follows this job', 'background:var(--teal-tint);color:var(--teal-text)') : '') + '</section>';
+      person(j.cs, 'Customer Service', '') +
+      (j.sales ? person(j.sales, 'Sales', 'background:var(--teal-tint);color:var(--teal-text)') : '') + '</section>';
   }
 
   // ---------- the story so far (notes + every change) ----------
@@ -1286,6 +1288,7 @@
   const stampText = (d) => d ? fmt(d) + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') : '';
   function friendly(action) {
     const a = String(action || '');
+    if (/^CHANGED /.test(a)) return friendlyDates(a.slice(8));
     let m = a.match(/^SET (.+?) TO (.+)$/);
     if (m) return 'set ' + m[1].toLowerCase().replace(/\bsi\b/g, 'SI').replace(/\bdo\b/g, 'DO').replace(/\bed\b/g, 'ED').replace(/\bbl\b/g, 'BL').replace(/\bawb\b/g, 'AWB').replace(/\betd\b/g, 'ETD').replace(/\beta\b/g, 'ETA').replace(/\bpol\b/g, 'POL').replace(/\bpod\b/g, 'POD').replace(/\bdg\b/g, 'DG').replace(/\bcs\b/g, 'CS') + ' to ' + m[2];
     if (a === 'CREATED NEW JOB') return 'opened the job';
@@ -1312,7 +1315,7 @@
     const items = [];
     const ms = (s) => { const d = parseStamp(s); return d ? d.getTime() : 0; };
     (st.data.notes || []).forEach((n, i) => items.push({ t: n.t || ms(n.at), seq: n.seq != null ? n.seq : i, k: 1, who: n.by, note: n.txt }));
-    (st.data.events || []).forEach((e, i) => items.push({ t: e[4] || ms(e[0]), seq: e[5] != null ? e[5] : -i, k: 0, who: e[1], what: friendly(e[2]) }));
+    (st.data.events || []).forEach((e, i) => items.push({ t: e[4] || ms(e[0]), seq: e[5] != null ? e[5] : -i, k: 0, who: e[1], what: friendly(e[2]), raw: e[2] }));
     items.sort((a, b) => b.t - a.t || b.k - a.k || b.seq - a.seq);
     items.forEach((x) => { x.at = x.t ? new Date(x.t) : null; });
     return items;
@@ -1371,11 +1374,11 @@
     const t0 = today0();
     const jr = j.journey;
     loadStory(j.jobNo);
-    const tab = state.voyageTab[j.jobNo] || 'overview';
+    const tab = ((t) => (t === 'story' ? 'notes' : t))(state.voyageTab[j.jobNo] || 'overview');
     const [sw, tone] = statusWord(j);
     const anim = first ? ' reveal' : '';
     const n = jr.next;
-    const storyCount = (storyItems(j.jobNo) || []).length;
+    const sp7 = storySplit(j.jobNo) || { notes: [], hist: [] };
     const nextBar = n && canEditJob(j) ? '<div class="nextbar glass" role="region" aria-label="Next stop"><div class="nb-text"><div class="kicker">NEXT STOP</div><div class="nb-name">' + esc(n.name) + ' <span class="nb-sub">' + esc(n.sub) + '</span></div></div>' +
       '<button type="button" class="btn-brutal" data-stop="' + n.id + '" data-quick="1">' + (n.id === 'costing' ? 'OPEN COSTING' : n.kind === 'field' ? 'MARK DONE' : n.kind === 'date' ? 'SET DATE' : n.kind === 'status' ? 'CLOSE JOB' : 'UPDATE') + '</button></div>' : '';
     view.innerHTML =
@@ -1385,20 +1388,18 @@
       '<header class="vhead' + anim + '" style="--d:30ms">' +
         '<div class="vh-titles"><div class="vh-idrow"><h1 class="vh-job">' + esc(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + delayChip(j) + readyChip(j) + '</div>' +
         '<div class="vh-cust">' + esc(j.customer || '—') + '</div>' + (j.closed && j.closed.reason ? '<div class="vh-why">' + esc(j.closed.reason) + '</div>' : '') + '</div>' +
-        (j.closed ? closedActions(j) : canEdit() ? '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="delay" title="Mark delay" aria-label="Mark delay">' + icon('clock', 16) + '<span>Mark delay</span></button><button type="button" class="btn-ghost" data-act="duplicate" title="Duplicate job" aria-label="Duplicate job">' + icon('copy', 16) + '<span>Duplicate</span></button><button type="button" class="btn-ghost" data-act="edit" title="Edit details" aria-label="Edit details">' + icon('edit', 16) + '<span>Edit details</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>'
+        (j.closed ? closedActions(j) : canEdit() ? '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="delay" title="Mark delay" aria-label="Mark delay">' + icon('clock', 16) + '<span class="bl-full">Mark delay</span><span class="bl-short">Delay</span></button><button type="button" class="btn-ghost" data-act="duplicate" title="Duplicate job" aria-label="Duplicate job">' + icon('copy', 16) + '<span>Duplicate</span></button><button type="button" class="btn-ghost" data-act="edit" title="Edit details" aria-label="Edit details">' + icon('edit', 16) + '<span class="bl-full">Edit details</span><span class="bl-short">Edit</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>'
           : '<div class="vh-actions is-ro"><span class="ro-chip">' + icon('lock', 14) + '<span>UPDATED BY ' + esc(j.cs || 'CUSTOMER SERVICE') + '</span></span>' + (canNote() ? '<button type="button" class="btn-brutal btn-icon" data-act="focus-note">' + icon('note', 16) + '<span>ADD A NOTE</span></button>' : '') + '</div>') +
       '</header>' +
       '<div class="ft-top">' + freeCard(j, t0) + '</div>' +
       '<div class="voyage-wrap' + anim + '" style="--d:60ms">' + (j.mode === 'misc' ? misCard(j, jr) : hero(j, jr, t0) + vcard(j, jr, t0)) + '</div>' +
       '<div class="vtabs" role="tablist" aria-label="Job sections">' +
-        [['overview', 'Overview'], ['details', 'All details'], ['story', 'Notes & history' + (storyCount ? ' · ' + storyCount : '')]].map(([id, l]) => '<button type="button" role="tab" data-tab="' + id + '" aria-selected="' + (tab === id) + '">' + esc(l) + '</button>').join('') +
+        [['overview', 'Overview'], ['details', 'All details'], ['notes', 'Notes' + (sp7.notes.length ? ' · ' + sp7.notes.length : '')], ['history', 'History' + (sp7.hist.length ? ' · ' + sp7.hist.length : '')]].map(([id, l]) => '<button type="button" role="tab" data-tab="' + id + '" aria-selected="' + (tab === id) + '">' + esc(l) + '</button>').join('') +
       '</div>' +
       (tab === 'details' ? allDetails(j)
-        : tab === 'story' ? '<section class="tile story-card">' + noteBox() + storyList(j.jobNo) + '</section>'
-        : '<div class="voverview">' +
-            '<section class="tile story-card" aria-labelledby="storyTitle"><div class="tile-head"><h2 class="tile-title" id="storyTitle">THE STORY SO FAR</h2>' + (isSales() ? (j.cs ? '<span class="small">Shared with ' + esc(j.cs) + ' (Customer Service)</span>' : '') : j.sales ? '<span class="small">Shared with ' + esc(j.sales) + ' (sales)</span>' : '') + '</div>' + noteBox() + storyList(j.jobNo, 6) + '</section>' +
-            '<div class="vside"><div class="ft-side">' + freeCard(j, t0) + '</div>' + delayCard(j) + followCard(j) + costCard(j) + keyDates(j, t0) + cargoCard(j) + peopleCard(j) + '</div>' +
-          '</div>') +
+        : tab === 'notes' ? notesWidget(j, 0)
+        : tab === 'history' ? historyWidget(j, 0)
+        : jobWidgets(j, t0)) +
       '</div>' + nextBar;
   }
 
@@ -1439,6 +1440,7 @@
         if (res && res.ok) {
           if (Array.isArray(res.row)) state.rowMap.set(k, res.row);
           clearPending(k, changes); rebuildJob(k); rerender(); refreshOverlay();
+          if (state.stories.has(k)) loadStory(no, true);
           if (opts.toast) toast(opts.toast, opts.undo === false ? {} : { action: { label: 'Undo', fn: () => saveJob(no, prev, { toast: 'Change undone', undo: false }) } });
           state.syncedAt = Date.now();
           return true;
@@ -1647,7 +1649,7 @@
       }
       if (e.target.closest('[data-act="focus-note"]')) {
         const k = findJob(no) ? findJob(no).jobNo : no;
-        if (state.voyageTab[k] === 'details') { state.voyageTab[k] = 'overview'; rerender(); }
+        if (['details', 'history'].includes(state.voyageTab[k])) { state.voyageTab[k] = 'overview'; rerender(); }
         const inp = $('#noteInput'); if (inp) { inp.scrollIntoView({ block: 'center', behavior: 'smooth' }); inp.focus({ preventScroll: true }); }
         return;
       }
@@ -1998,19 +2000,9 @@
         '<span class="nt-text">' + esc(x.text) + '</span><span class="nt-when">' + esc(ago(x.t)) + '</span></span></button></li>').join('') + '</ol>'
         : '<div class="tile-empty">' + icon('bell', 22) + '<span>' + (state.role === 'SALES' ? 'Updates, delays and enquiry replies from Customer Service show here.' : 'Notes and enquiries from sales show here.') + '</span></div>');
   }
-  function openNotifications(opener) {
+  function openNotifications() {               // v2.7: notifications are a page of their own
     closeOverlays(true);
-    state.notifSeenShown = (state.notif && state.notif.seen) || 0;
-    popRender = notifPanel;
-    $('#drawerKicker').textContent = 'NOTIFICATIONS';
-    $('#drawerBody').innerHTML = notifPanel();
-    showDrawer(opener);
-    state.overlay = 'drawer';
-    if (state.notif && notifUnread()) {
-      state.notif.seen = Math.max(state.notif.seen || 0, ...state.notif.items.map((x) => x.t));   // server time, not this device’s clock
-      drawBadges();
-      api.call('ethixNotifSeen').catch(() => {});
-    }
+    go('#/notifications');
   }
 
   // ---------- my account ----------
@@ -2273,7 +2265,7 @@
     return { every, checks, last, since, today, mineToday, due, nextIn };
   }
   function roundRows(t0, list) {
-    const rows = (list || scoped().filter((j) => j.active)).map((j) => ({ j, f: followState(j, t0) }));
+    const rows = (list || mineJobs().filter((j) => j.active)).map((j) => ({ j, f: followState(j, t0) }));
     return {
       due: rows.filter((x) => x.f.due).sort((a, b) => a.j.next.rank - b.j.next.rank || (b.f.since === null ? 1e9 : b.f.since) - (a.f.since === null ? 1e9 : a.f.since)),
       done: rows.filter((x) => x.f.today).sort((a, b) => b.f.last[0] - a.f.last[0]),
@@ -2297,15 +2289,19 @@
     }
     return '<span class="dots" aria-hidden="true">' + out + '</span>';
   }
+  // A tap = checked today (once). A remark fills today's check, or is added as one more line with its own time (v2.7).
   async function followCheck(no, remark) {
     const j = findJob(no); if (!j || !canEdit()) return;
     const K = keyOf(j);
     if (state.followBusy.has(K)) return;
     const prev = (state.follow.checks[K] || []).slice();
     const t0 = today0();
-    const had = prev.find((c) => days(dayOf(c[0]), t0) === 0 && c[1] === state.user);
-    const text = remark !== undefined ? remark : had ? had[2] : '';
-    state.follow.checks[K] = [[had ? had[0] : Date.now(), state.user, text]].concat(prev.filter((c) => c !== had));
+    const mineAll = prev.filter((c) => days(dayOf(c[0]), t0) === 0 && c[1] === state.user);
+    const had = mineAll[0] || null, text = String(remark || '').trim();
+    if (had && !text) return;
+    const blank = had && mineAll.find((c) => !c[2]);
+    const entry = blank ? [blank[0], state.user, text] : [Date.now(), state.user, text];
+    state.follow.checks[K] = blank ? prev.map((c) => (c === blank ? entry : c)) : [entry].concat(prev);
     state.followBusy.add(K);
     if (!had) state.justChecked = K;
     rerender(); state.justChecked = null; refreshOverlay(); updateNav();
@@ -2313,11 +2309,9 @@
     try {
       const res = await api.call('ethixFollowCheck', [j.jobNo, text]);
       if (!res || !res.ok) throw new Error((res && res.error) || 'Not saved.');
-      const now = state.follow.checks[K] || [];
-      const mine = now.find((c) => days(dayOf(c[0]), today0()) === 0 && c[1] === state.user);
-      if (mine) mine[0] = res.t || mine[0];
-      if (!had && remark === undefined) toast(j.jobNo + ' checked', { action: { label: 'Undo', fn: () => followUndo(j.jobNo) } });
-      else if (remark !== undefined) toast('Remark saved');
+      if (res.t) entry[0] = res.t;
+      if (!had && !text) toast(j.jobNo + ' checked', { action: { label: 'Undo', fn: () => followUndo(j.jobNo) } });
+      else toast(had ? 'Remark added' : j.jobNo + ' checked · remark saved');
     } catch (e) {
       state.follow.checks[K] = prev;
       if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'Follow-ups need the Phase 4 Code.gs update.' : 'Not saved: ' + e.message, { error: true });
@@ -2354,10 +2348,12 @@
     const j = findJob(no); if (!j) return '';
     const f = followState(j, today0());
     const mine = f.mineToday;
+    const today = remarksToday(f, today0());
     return '<div class="pop-title">' + (mine ? 'Checked today ' + hm(mine[0]) : 'Check ' + esc(j.jobNo)) + '</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p>' +
-      '<form class="pop-form" data-remark="' + esc(j.jobNo) + '"><label class="pop-label" for="remarkInput">Remark (optional)</label><input type="text" id="remarkInput" maxlength="200" value="' + esc(mine ? mine[2] : '') + '" placeholder="Type a remark" autocomplete="off">' +
-      '<button type="submit" class="btn-brutal pop-main" data-primary>' + (mine ? 'SAVE REMARK' : 'CHECK WITH REMARK') + '</button></form>' +
-      (mine ? '<button type="button" class="btn-ghost pop-wide" data-undo-check="' + esc(j.jobNo) + '">Undo today’s check</button>' : '');
+      (today.length ? remarkList(today) : '') +
+      '<form class="pop-form" data-remark="' + esc(j.jobNo) + '"><label class="pop-label" for="remarkInput">' + (today.length ? 'Add another remark' : mine ? 'Add a remark' : 'Remark (optional)') + '</label><input type="text" id="remarkInput" maxlength="200" value="" placeholder="Type a remark" autocomplete="off">' +
+      '<button type="submit" class="btn-brutal pop-main" data-primary>' + (mine ? 'ADD REMARK' : 'CHECK WITH REMARK') + '</button></form>' +
+      (mine ? '<button type="button" class="btn-ghost pop-wide" data-undo-check="' + esc(j.jobNo) + '">' + (today.some((c) => c[1] === state.user) ? 'Undo today’s check and your remarks' : 'Undo today’s check') + '</button>' : '');
   };
   // the month calendar of checked days (older months load when you go back)
   function followCalendar(j) {
@@ -2403,11 +2399,12 @@
       : f.every === 'PAUSED' ? '<span class="fu-muted">Paused — not in Follow-ups</span>'
       : f.due ? '<span class="fu-due">Due today' + (f.last ? ' · last ' + esc(lastCheckText(f, t0)) : '') + '</span>'
       : '<span class="fu-muted">Next check in ' + f.nextIn + (f.nextIn === 1 ? ' day' : ' days') + ' · last ' + esc(lastCheckText(f, t0)) + '</span>';
-    const remark = f.last && f.last[2] ? '<p class="fu-remark">“' + esc(f.last[2]) + '”</p>' : '';
+    const rt = remarksToday(f, t0), lr = lastRemark(f);
+    const remark = rt.length ? remarkList(rt, 3) : lr ? '<p class="fu-remark">“' + esc(lr.text) + '”</p>' : '';
     return '<section class="tile side-card fu-card" aria-labelledby="fuTitle"><div class="tile-head"><h2 class="tile-title" id="fuTitle">FOLLOW-UP</h2>' +
       (canEditJob(j) ? '<button type="button" class="every-pill" data-every="' + esc(j.jobNo) + '">' + EVERY_LABEL[f.every] + icon('chevron', 13) + '</button>' : '<span class="every-pill is-ro">' + EVERY_LABEL[f.every] + '</span>') + '</div>' +
       '<div class="fu-status">' + status + '</div>' + remark +
-      (canEditJob(j) && j.active ? (f.mineToday ? '<button type="button" class="btn-ghost fu-btn" data-check-menu="' + esc(j.jobNo) + '">' + icon('edit', 15) + 'Remark or undo</button>'
+      (canEditJob(j) && j.active ? (f.mineToday ? '<button type="button" class="btn-ghost fu-btn" data-check-menu="' + esc(j.jobNo) + '">' + icon('edit', 15) + 'Add remark or undo</button>'
         : '<button type="button" class="btn-brutal fu-btn" data-check="' + esc(j.jobNo) + '">' + icon('check', 16) + 'CHECKED TODAY</button>') : '') +
       followCalendar(j) + '</section>';
   }
@@ -2424,8 +2421,8 @@
     return '<li class="rr' + (f.today ? ' is-done' : '') + (f.mineToday ? ' is-mine' : '') + (f.due ? ' is-due' : '') + '">' +
       '<button type="button" class="rr-main" data-job="' + esc(j.jobNo) + '"><span class="rr-job">' + esc(j.jobNo) + '<span class="badge">' + esc(j.type) + '</span></span>' +
         '<span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span></button>' +
-      '<span class="rr-next">' + toneChip(j.next) + '</span>' +
-      '<span class="rr-last"><span>' + esc(lastCheckText(f, t0)) + '</span>' + (f.last && f.last[2] ? '<span class="rr-remark">“' + esc(f.last[2]) + '”</span>' : '') + '</span>' +
+      '<span class="rr-next">' + toneChip(rowNext(j)) + cutChips(j) + '</span>' +
+      '<span class="rr-last"><span>' + esc(lastCheckText(f, t0)) + '</span>' + ((lr) => (lr ? '<span class="rr-remark">“' + esc(lr.text) + '”' + (lr.n > 1 ? ' <b>+' + (lr.n - 1) + '</b>' : '') + '</span>' : ''))(lastRemark(f)) + '</span>' +
       '<span class="rr-strip">' + dotStrip(j, t0, 14) + '</span>' +
       '<span class="rr-every"><button type="button" class="every-pill" data-every="' + esc(j.jobNo) + '">' + EVERY_LABEL[f.every] + icon('chevron', 13) + '</button></span>' +
       '<span class="rr-act">' + checkCircle(j, f) + '</span>' +
@@ -2447,10 +2444,9 @@
     const doneRows = R.done.filter((x) => !inSnap.has(keyOf(x.j)));
     const section = (id, title, rows, sub, n) => rows.length ? '<section class="round-sec' + anim + '" aria-labelledby="rs-' + id + '"><div class="tile-head"><h2 class="tile-title" id="rs-' + id + '">' + title + ' <span class="tile-count">' + (n === undefined ? rows.length : n) + '</span></h2>' + (sub ? '<span class="small">' + sub + '</span>' : '') + '</div><ul class="round-list">' + rows.map((x) => roundRow(x, t0)).join('') + '</ul></section>' : '';
     const keepQ = $('#roundSearch') ? $('#roundSearch').value : state.roundQ || '';
-    $('#view').innerHTML = '<div class="wrap round-page">' +
-      '<header class="page-head' + anim + '"><div class="head-main"><div class="meta-line"><span>FOLLOW-UPS · ' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div><h1 class="greeting">Follow-ups</h1></div>' +
+    $('#view').innerHTML = '<div class="wrap round-page no-seg">' +
+      '<header class="page-head' + anim + '"><div class="head-main"><div class="meta-line"><span>FOLLOW-UPS · YOUR JOBS · ' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div><h1 class="greeting">Follow-ups</h1></div>' +
         '<div class="head-actions">' +
-          '<div class="seg" role="group" aria-label="Whose jobs"><button type="button" data-scope="mine" aria-pressed="' + (state.scope === 'mine') + '"><span class="l-full">My jobs</span><span class="l-short">Mine</span></button><button type="button" data-scope="all" aria-pressed="' + (state.scope === 'all') + '"><span class="l-full">Everyone</span><span class="l-short">All</span></button></div>' +
           '<label class="search">' + icon('search') + '<input id="roundSearch" type="search" placeholder="Job no, customer, port…" aria-label="Filter follow-ups" autocomplete="off" value="' + esc(keepQ) + '"></label>' +
           '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' +
         '</div></header>' +
@@ -3108,16 +3104,17 @@
     });
   }
 
-  // ================================================================ v2.6
+  // ================================================================ v2.6 · v2.7
   // Costing (a full page per job + the Costing menu), Excel made in the browser,
   // remembered lists, duplicate job, stay signed in after a refresh.
-  const BASIS = [['SHIP', 'Per shipment'], ['BOX', 'Per box'], ['B20', 'Per 20′'], ['B40', 'Per 40′'], ['UNIT', 'Per unit']];
-  const BASIS_SHORT = { SHIP: 'Per shipment', BOX: 'Per box', B20: 'Per 20′', B40: 'Per 40′', UNIT: 'Per unit' };
+  // v2.7: every USD amount has its own rate, All-in / Itemised, charges that fill themselves.
+  const BASIS = [['SHIP', 'Per shipment'], ['BOX', 'Per box'], ['B20', 'Per 20′'], ['B40', 'Per 40′'], ['DOC', 'Per document'], ['UNIT', 'Per unit']];
+  const BASIS_SHORT = { SHIP: 'Per shipment', BOX: 'Per box', B20: 'Per 20′', B40: 'Per 40′', DOC: 'Per document', UNIT: 'Per unit' };
   const ABBR = new Set(['THC', 'OTHC', 'DPC', 'ISPS', 'VGM', 'BL', 'DG', 'DO', 'ED', 'TLUC', 'ITT', 'FOB', 'VAT', 'MECRC', 'IMCO', 'AWB', 'LCL', 'FCL']);
   const chipName = (q) => String(q).split(' ').map((w) => (ABBR.has(w) ? w : nice(w))).join(' ');
   const QUICK = {
-    sea: ['OCEAN FREIGHT', 'THC', 'BILL OF LADING', 'DPC', 'ISPS', 'TOKEN', 'TRANSPORTATION', 'DOCUMENTATION CHARGES'],
-    cnd: ['THC', 'DPC', 'CUSTOMS CHARGES', 'TOKEN', 'TRANSPORTATION', 'PORT STORAGE', 'DOCUMENTATION CHARGES'],
+    sea: ['OCEAN FREIGHT', 'THC', 'TLUC', 'BILL OF LADING', 'SEAL CHARGES', 'DPC', 'ED / BILL OF ENTRY', 'EXIT SUBMISSION', 'ISPS', 'TOKEN', 'TRANSPORTATION', 'DOCUMENTATION CHARGES'],
+    cnd: ['THC', 'TLUC', 'DPC', 'ED / BILL OF ENTRY', 'CUSTOMS CHARGES', 'TOKEN', 'TRANSPORTATION', 'PORT STORAGE', 'DOCUMENTATION CHARGES'],
     air: ['AIR FREIGHT', 'HANDLING CHARGES', 'CUSTOMS CHARGES', 'TRANSPORTATION', 'DOCUMENTATION CHARGES'],
     courier: ['COURIER CHARGES', 'CUSTOMS CHARGES', 'HANDLING CHARGES', 'TRANSPORTATION'],
     misc: ['HANDLING CHARGES', 'DOCUMENTATION CHARGES', 'OTHER CHARGES']
@@ -3132,7 +3129,19 @@
   const money = (n) => { const v = Math.round((Number(n) || 0) * 100) / 100; const p = Math.abs(v).toFixed(2).split('.'); return (v < 0 ? '−' : '') + p[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',') + '.' + p[1]; };
   const pctTxt = (v) => (isFinite(v) ? (Math.round(v * 1000) / 10).toFixed(1) + '%' : '—');
   const numTxt = (n) => (n === 0 || n === '' || n == null ? '' : String(Math.round(Number(n) * 10000) / 10000));
+  const fxTxt = (n) => (Number(n) ? String(Math.round(Number(n) * 100000) / 100000) : '');
   const amtOf = (qty, rate, cur, fx) => { const q = num6(qty), r = num6(rate); return (isNaN(q) ? 0 : q) * (isNaN(r) ? 0 : r) * (cur === 'USD' ? fx : 1); };
+  // ---------- USD rates: each USD amount has its own; the shipping line decides where the buying side starts ----------
+  const COMPANY_FX = () => Number(state.rate) || 3.685;
+  const LINE_FX = [[/HAPAG/, 3.7], [/\bCMA\b|CMA[\s\-]*CGM/, 3.6725], [/MAERSK/, 3.70922]];
+  const upq = (v) => String(v || '').toUpperCase().replace(/\s+/g, ' ').trim();
+  function vendorFx(v) { const s = upq(v); for (let i = 0; i < LINE_FX.length; i++) if (LINE_FX[i][0].test(s)) return LINE_FX[i][1]; return COMPANY_FX(); }
+  const isDPW = (v) => /^DPW\b|\bDPW\b|DP ?WORLD/.test(upq(v));
+  const fxOk = (v) => { const n = num6(v); return n >= 3 && n <= 4.5; };
+  const fxIs = (v) => (fxOk(v) ? num6(v) : COMPANY_FX());          // a rate box left empty → the company rate
+  const lineAmt = (l, k) => amtOf(l.qty, l[k + 'r'], l[k + 'c'], fxIs(l[k + 'x']));
+  const allIn = (C) => !!(C && C.draft && C.draft.mode === 'ALLIN');
+  const sellsNothing = (l) => !num6(l.sr);
   const newLineId = () => (Math.random().toString(36).slice(2, 10) + 'k0x9').slice(0, 8);
   const boxesOf = (j) => (j.c20 || 0) + (j.c40 || 0);
   const canCostSee = (j) => !!j && (canEdit() || (isSales() && j.sales === state.user));
@@ -3147,9 +3156,9 @@
     return 'pending';
   }
   const costSum = (j) => state.costing[keyOf(j)] || null;
-  function costTotals(lines, fx) {
+  function costTotals(lines) {
     let sell = 0, buy = 0;
-    lines.forEach((l) => { buy += amtOf(l.qty, l.br, l.bc, fx); sell += amtOf(l.qty, l.sr, l.sc, fx); });
+    lines.forEach((l) => { buy += lineAmt(l, 'b'); sell += lineAmt(l, 's'); });
     return { sell, buy, profit: sell - buy };
   }
 
@@ -3169,7 +3178,8 @@
       const boot = await api.call('ethixBootstrap', [], { timeout: 40000 });
       state.resuming = false;
       document.body.classList.remove('is-resuming');
-      enterApp(boot, s.u, s.r);
+      state.resumedNow = true;
+      try { enterApp(boot, s.u, s.r); } finally { state.resumedNow = false; }
       return true;
     } catch (e) {
       state.resuming = false;
@@ -3238,9 +3248,15 @@
   function costFor(no) { const C = state.cost; return C && C.no === String(no).toUpperCase() ? C : null; }
   function setCostData(C, data, keepNotes) {
     C.data = data; C.err = '';
+    const fx0 = Number(data.rate) || COMPANY_FX();                 // lines saved by v2.6 used the costing's rate
     C.draft = {
-      rate: data.rate,
-      lines: (data.lines || []).map((l) => ({ id: l.id, charge: l.charge, vendor: l.vendor || '', basis: l.basis || 'SHIP', qty: l.qty === 0 ? '0' : numTxt(l.qty) || '1', bc: l.bc || 'AED', br: numTxt(l.br), sc: l.sc || 'AED', sr: numTxt(l.sr) })),
+      rate: data.rate, mode: data.mode === 'ALLIN' ? 'ALLIN' : 'ITEM',
+      lines: (data.lines || []).map((l) => {
+        const bc = l.bc || 'AED', sc = l.sc || 'AED';
+        const bx = bc === 'USD' ? fxTxt(l.bx || fx0) : '', sx = sc === 'USD' ? fxTxt(l.sx || fx0) : '';
+        return { id: l.id, charge: l.charge, vendor: l.vendor || '', basis: l.basis || 'SHIP', qty: l.qty === 0 ? '0' : numTxt(l.qty) || '1', bc, br: numTxt(l.br), bx, sc, sr: numTxt(l.sr), sx,
+          bxAuto: !bx || num6(bx) === vendorFx(l.vendor) };
+      }),
       notes: keepNotes && C.draft ? C.draft.notes : []
     };
     C.dirty = false; C.err = '';
@@ -3273,6 +3289,7 @@
     if (basis === 'BOX') return String(boxesOf(j) || 1);
     if (basis === 'B20') return String(j.c20 || 0);
     if (basis === 'B40') return String(j.c40 || 0);
+    if (basis === 'DOC') return '1';
     return cur || '1';
   }
   function costStatusPill(D, dirty) {
@@ -3303,10 +3320,10 @@
     if (!costCanEdit(j, D)) return '<div class="cost-banner">' + icon('lock', 15) + '<span>Read-only.</span></div>';
     return '';
   }
+  // The glass summary. USD figures under the AED totals use the company rate; each line keeps its own.
   function costBar(j, D, C) {
-    const fx = Number(C.draft.rate) || state.rate || 3.685;
-    const t = costTotals(C.draft.lines, fx), bx = boxesOf(j);
-    const rateEdit = costCanEdit(j, D) && canEdit();
+    const fx = COMPANY_FX();
+    const t = costTotals(C.draft.lines), bx = boxesOf(j);
     const cell = (id, label, value, sub, cls) => '<div class="cb-cell' + (cls ? ' ' + cls : '') + '"><span class="cb-k">' + label + '</span><span class="cb-v" id="' + id + '">' + value + '</span>' + (sub !== undefined ? '<span class="cb-s" id="' + id + 'S">' + sub + '</span>' : '') + '</div>';
     return '<section class="cost-bar glass' + (bx ? ' has-box' : '') + '" aria-label="Costing summary" id="costBar">' +
       cell('cbSell', 'SELLING · AED', money(t.sell), 'USD ' + money(t.sell / fx)) +
@@ -3315,28 +3332,47 @@
       cell('cbMargin', 'MARGIN', pctTxt(t.sell ? t.profit / t.sell : NaN), 'on selling') +
       cell('cbMarkup', 'MARK-UP', pctTxt(t.buy ? t.profit / t.buy : NaN), 'on buying') +
       (bx ? cell('cbBox', 'PER BOX · AED', money(t.profit / bx), 'USD ' + money(t.profit / bx / fx) + ' · ×' + bx) : '') +
-      '<div class="cb-rate">' + (rateEdit ? '<button type="button" class="rate-chip" data-act="cost-rate" title="Change the USD rate for this costing">' : '<span class="rate-chip">') + 'USD 1 = AED <b id="cbRate">' + esc(String(fx)) + '</b>' + (rateEdit ? icon('edit', 12) + '</button>' : '</span>') + '</div>' +
     '</section>';
+  }
+  // The same figures in one slim line that takes over once the glass bar scrolls away (laptops).
+  function costSlim(j, D, C) {
+    const t = costTotals(C.draft.lines), bx = boxesOf(j), edit = costCanEdit(j, D);
+    const it = (id, k, v, cls) => '<span class="csl-it' + (cls ? ' ' + cls : '') + '"><span class="csl-k">' + k + '</span><b id="' + id + '">' + v + '</b></span>';
+    return '<div class="cost-slim" aria-hidden="true"><div class="csl-in glass" id="costSlim">' +
+      it('cslSell', 'SELLING', money(t.sell)) + it('cslBuy', 'BUYING', money(t.buy)) + it('cslProfit', 'PROFIT', money(t.profit), 'is-profit' + (t.profit < 0 ? ' is-loss' : '')) +
+      it('cslMargin', 'MARGIN', pctTxt(t.sell ? t.profit / t.sell : NaN)) + it('cslMarkup', 'MARK-UP', pctTxt(t.buy ? t.profit / t.buy : NaN)) +
+      (bx ? it('cslBox', 'PER BOX', money(t.profit / bx)) : '') +
+      '<span class="csl-k csl-aed">AED</span>' +
+      (edit ? '<button type="button" class="btn-ghost csl-save" data-act="cost-save" tabindex="-1"' + (C.busy || !C.dirty ? ' disabled' : '') + '>' + icon('check', 15) + '<span id="cslSaveLbl">' + (C.dirty ? 'Save' : 'Saved') + '</span></button>' : '') +
+    '</div></div>';
   }
   function basisSelect(j, l, dis) {
     const bx = boxesOf(j);
     return '<select class="ct-in" id="cl_' + l.id + '_basis" data-f="basis" aria-label="Basis"' + dis + '>' + BASIS.filter(([k]) => bx || !['BOX', 'B20', 'B40'].includes(k) || l.basis === k).map(([k, label]) => '<option value="' + k + '"' + (l.basis === k ? ' selected' : '') + '>' + label + '</option>').join('') + '</select>';
   }
-  function costRow(j, l, fx, edit, i) {
-    const b = amtOf(l.qty, l.br, l.bc, fx), s = amtOf(l.qty, l.sr, l.sc, fx);
-    const outB = '<span class="ct-out" data-o="b">' + money(b) + '</span>', outS = '<span class="ct-out" data-o="s">' + money(s) + '</span>';
-    const outP = '<span class="ct-c ct-pf' + (s - b < 0 ? ' is-loss' : '') + '" data-o="p">' + money(s - b) + '</span>';
+  // One charge on one line: buying and selling side by side. A USD side shows its own rate (@ 3.7).
+  // All-in: a line with no selling shows "incl." and no line profit — the profit is the total.
+  function costRow(j, l, edit, i, C) {
+    const ai = allIn(C), b = lineAmt(l, 'b'), s = lineAmt(l, 's'), incl = ai && sellsNothing(l);
+    const outB = '<span class="ct-out" data-o="b">' + money(b) + '</span>';
+    const outS = '<span class="ct-out' + (incl ? ' is-incl' : '') + '" data-o="s">' + (incl ? '' : money(s)) + '</span>';
+    const outP = '<span class="ct-c ct-pf' + (!ai && s - b < 0 ? ' is-loss' : '') + '" data-o="p">' + (ai ? '' : money(s - b)) + '</span>';
+    const fxRo = (k) => (l[k + 'c'] === 'USD' ? '<span class="ct-ro-fx">@ ' + esc(fxTxt(fxIs(l[k + 'x']))) + '</span>' : '');
     if (!edit) {
       return '<div class="ct-row is-ro" data-line="' + esc(l.id) + '" role="row">' +
         '<div class="ct-c ct-what"><span class="ct-name">' + esc(l.charge) + '</span><span class="ct-sub">' + esc(l.vendor || '—') + '</span></div>' +
         '<div class="ct-c ct-basis"><span class="ct-name">' + esc(BASIS_SHORT[l.basis] || l.basis) + '</span><span class="ct-sub">× ' + esc(l.qty || '0') + '</span></div>' +
-        '<div class="ct-c ct-side ct-b"><span class="ct-ro-rate"><i>' + esc(l.bc) + '</i> ' + (l.br ? money(num6(l.br)) : '—') + '</span>' + outB + '</div>' +
-        '<div class="ct-c ct-side ct-s"><span class="ct-ro-rate"><i>' + esc(l.sc) + '</i> ' + (l.sr ? money(num6(l.sr)) : '—') + '</span>' + outS + '</div>' +
+        '<div class="ct-c ct-side ct-b"><span class="ct-ro-rate"><i>' + esc(l.bc) + '</i> ' + (l.br ? money(num6(l.br)) : '—') + fxRo('b') + '</span>' + outB + '</div>' +
+        '<div class="ct-c ct-side ct-s">' + (incl ? '<span class="ct-ro-rate is-incl">incl.</span>' : '<span class="ct-ro-rate"><i>' + esc(l.sc) + '</i> ' + (l.sr ? money(num6(l.sr)) : '—') + fxRo('s') + '</span>') + outS + '</div>' +
         outP + '<span class="ct-c"></span></div>';
     }
     const id = (f) => 'cl_' + l.id + '_' + f;
-    const side = (k) => '<div class="ct-c ct-side ct-' + k + '"><div class="ct-money"><button type="button" class="cur' + (l[k + 'c'] === 'USD' ? ' is-usd' : '') + '" data-cur="' + k + 'c" aria-label="Currency: ' + l[k + 'c'] + '. Change">' + l[k + 'c'] + '</button>' +
-      '<input class="ct-in r" id="' + id(k + 'r') + '" data-f="' + k + 'r" inputmode="decimal" autocomplete="off" value="' + esc(l[k + 'r']) + '" placeholder="Rate" aria-label="' + (k === 'b' ? 'Buying' : 'Selling') + ' rate"></div>' + (k === 'b' ? outB : outS) + '</div>';
+    const side = (k) => {
+      const usd = l[k + 'c'] === 'USD', who = k === 'b' ? 'Buying' : 'Selling';
+      return '<div class="ct-c ct-side ct-' + k + '"><div class="ct-money"><button type="button" class="cur' + (usd ? ' is-usd' : '') + '" data-cur="' + k + 'c" aria-label="Currency: ' + l[k + 'c'] + '. Change">' + l[k + 'c'] + '</button>' +
+        '<input class="ct-in r" id="' + id(k + 'r') + '" data-f="' + k + 'r" inputmode="decimal" autocomplete="off" value="' + esc(l[k + 'r']) + '" placeholder="' + (k === 's' && ai ? 'incl.' : 'Rate') + '" aria-label="' + who + ' rate"></div>' +
+        '<div class="ct-under">' + (usd ? '<label class="ct-fx" title="AED for 1 USD on this ' + who.toLowerCase() + ' amount"><span>@</span><input class="ct-in fx" id="' + id(k + 'x') + '" data-f="' + k + 'x" inputmode="decimal" autocomplete="off" value="' + esc(l[k + 'x']) + '" aria-label="' + who + ' USD rate"></label>' : '') + (k === 'b' ? outB : outS) + '</div></div>';
+    };
     return '<div class="ct-row" data-line="' + esc(l.id) + '" role="row">' +
       '<div class="ct-c ct-what"><input class="ct-in ct-charge" id="' + id('charge') + '" data-f="charge" list="dlCharges" autocomplete="off" spellcheck="false" value="' + esc(l.charge) + '" placeholder="Choose or type a charge" aria-label="Charge ' + (i + 1) + '">' +
         '<input class="ct-in ct-vendor" id="' + id('vendor') + '" data-f="vendor" list="dlVendors" autocomplete="off" spellcheck="false" value="' + esc(l.vendor) + '" placeholder="Vendor" aria-label="Vendor"></div>' +
@@ -3345,13 +3381,17 @@
       '<button type="button" class="icon-btn ct-del" data-del="' + esc(l.id) + '" aria-label="Remove this line">' + icon('close', 14) + '</button></div>';
   }
   function costTable(j, D, C) {
-    const fx = Number(C.draft.rate) || 3.685, edit = costCanEdit(j, D), lines = C.draft.lines;
-    const t = costTotals(lines, fx);
+    const edit = costCanEdit(j, D), lines = C.draft.lines, ai = allIn(C);
+    const t = costTotals(lines);
     const quick = (QUICK[j.type === 'CND' ? 'cnd' : j.mode] || QUICK.sea);
-    return '<section class="cost-card" aria-label="Charges">' +
+    const modeSw = edit ? '<div class="seg ct-mode" role="group" aria-label="Costing type"><button type="button" data-cost-mode="ITEM" aria-pressed="' + !ai + '">Itemised</button><button type="button" data-cost-mode="ALLIN" aria-pressed="' + ai + '">All-in</button></div>'
+      : '<span class="ct-mode-ro">' + (ai ? 'ALL-IN' : 'ITEMISED') + '</span>';
+    return '<section class="cost-card' + (ai ? ' is-allin' : '') + '" aria-label="Charges">' +
+      '<div class="ct-bar"><div class="ct-bar-t"><h2 class="tile-title">CHARGES</h2><span class="tile-count">' + lines.length + '</span></div>' +
+        '<div class="ct-bar-r"><span class="ct-mode-hint">' + (ai ? 'Selling is all-in · profit in the total' : 'Profit on every line') + '</span>' + modeSw + '</div></div>' +
       '<div class="ct' + (edit ? '' : ' is-ro') + '" role="table">' +
-        '<div class="ct-head" role="row"><span>CHARGE · VENDOR</span><span>BASIS · QTY</span><span class="r">BUYING <small>→ AED</small></span><span class="r">SELLING <small>→ AED</small></span><span class="r">PROFIT AED</span><span></span></div>' +
-        '<div id="ctBody">' + (lines.length ? lines.map((l, i) => costRow(j, l, fx, edit, i)).join('') : '<div class="ct-empty">' + icon('costing', 22) + '<span>' + (edit ? 'No charges yet. Add the first one below — buying and selling side by side on one line.' : 'No charges in this costing.') + '</span></div>') + '</div>' +
+        '<div class="ct-head" role="row"><span>CHARGE · VENDOR</span><span>BASIS · QTY</span><span class="r ct-hb">BUYING <small>→ AED</small></span><span class="r ct-hs">SELLING <small>→ AED</small></span><span class="r">' + (ai ? '' : 'PROFIT AED') + '</span><span></span></div>' +
+        '<div id="ctBody">' + (lines.length ? lines.map((l, i) => costRow(j, l, edit, i, C)).join('') : '<div class="ct-empty">' + icon('costing', 22) + '<span>' + (edit ? 'No charges yet. Add the first one below — buying and selling side by side on one line.' : 'No charges in this costing.') + '</span></div>') + '</div>' +
         '<div class="ct-total" role="row"><span class="ct-tl">TOTAL · AED</span><span class="ct-c ct-side ct-b"><span class="ct-tk">BUYING</span><span class="ct-out" id="ctB">' + money(t.buy) + '</span></span><span class="ct-c ct-side ct-s"><span class="ct-tk">SELLING</span><span class="ct-out" id="ctS">' + money(t.sell) + '</span></span><span class="ct-c ct-pf' + (t.profit < 0 ? ' is-loss' : '') + '" id="ctP">' + money(t.profit) + '</span><span></span></div>' +
       '</div>' +
       (edit ? '<div class="ct-add"><button type="button" class="btn-ghost" data-act="cost-add">' + icon('plus', 16) + '<span>Add charge</span></button><div class="ct-quick" aria-label="Quick add">' +
@@ -3397,41 +3437,56 @@
         : '<section class="cost-bar glass is-loading"><span class="sk"></span><span class="sk"></span><span class="sk"></span></section><section class="cost-card"><div class="story-loading"><span class="sk"></span><span class="sk"></span><span class="sk short"></span></div></section>') + '</div>';
       return;
     }
-    const D = C.data;
-    view.innerHTML = '<div class="wrap cost-page' + (costCanEdit(j, D) ? ' is-edit' : '') + '">' + crumbs(costStatusPill(D, C.dirty)) + costHead(j, D, C) + costBanner(j, D) + costBar(j, D, C) + costTable(j, D, C) +
+    const D = C.data, T = costTotals(C.draft.lines);
+    view.innerHTML = '<div class="wrap cost-page' + (costCanEdit(j, D) ? ' is-edit' : '') + '">' + crumbs(costStatusPill(D, C.dirty)) + costHead(j, D, C) + costBanner(j, D) + costBar(j, D, C) + costSlim(j, D, C) + costTable(j, D, C) +
       '<div class="cost-side">' + costNotes(j, D, C) + costLog(D, C) + '</div>' +
-      (costCanEdit(j, D) ? '<div class="cost-dock glass"><span class="cd-state"><b id="cdProfit"' + (costTotals(C.draft.lines, Number(C.draft.rate) || 3.685).profit < 0 ? ' class="is-loss"' : '') + '>' + ((t) => 'PROFIT AED ' + money(t.profit) + '</b><span id="costDockState">' + (t.sell ? pctTxt(t.profit / t.sell) + ' margin · ' : '') + (C.dirty ? 'unsaved' : 'all saved'))(costTotals(C.draft.lines, Number(C.draft.rate) || 3.685)) + '</span></span><button type="button" class="btn-ghost" data-act="cost-save"' + (C.busy || !C.dirty ? ' disabled' : '') + '>Save</button><button type="button" class="btn-brutal" data-act="cost-done"' + (C.busy ? ' disabled' : '') + '>DONE</button></div>' : '') +
+      (costCanEdit(j, D) ? '<div class="cost-dock glass"><span class="cd-state"><b id="cdProfit"' + (T.profit < 0 ? ' class="is-loss"' : '') + '>PROFIT AED ' + money(T.profit) + '</b><span id="costDockState">' + (T.sell ? pctTxt(T.profit / T.sell) + ' margin · ' : '') + (C.dirty ? 'unsaved' : 'all saved') + '</span></span><button type="button" class="btn-ghost" data-act="cost-save"' + (C.busy || !C.dirty ? ' disabled' : '') + '>Save</button><button type="button" class="btn-brutal" data-act="cost-done"' + (C.busy ? ' disabled' : '') + '>DONE</button></div>' : '') +
       datalist('dlCharges', listSrc('dlCharges')) + datalist('dlVendors', listSrc('dlVendors')) +
     '</div>';
+    costSlimSync();
+  }
+  // The slim line shows once the glass bar has scrolled out of sight.
+  function costSlimSync() {
+    const bar = $('#costBar'), slim = $('#costSlim'), view = $('#view');
+    if (!bar || !slim || !view) return;
+    const on = bar.getBoundingClientRect().bottom < view.getBoundingClientRect().top + 12;
+    slim.classList.toggle('is-on', on);
+    slim.parentNode.setAttribute('aria-hidden', on ? 'false' : 'true');
+    const sv = slim.querySelector('.csl-save'); if (sv) sv.tabIndex = on ? 0 : -1;
   }
   // Repaints only the numbers (no re-render while typing).
   function costPaint(j) {
     const C = state.cost; if (!C || !C.draft || !j) return;
-    const fx = Number(C.draft.rate) || 3.685, bx = boxesOf(j);
-    const t = costTotals(C.draft.lines, fx);
+    const fx = COMPANY_FX(), bx = boxesOf(j), ai = allIn(C);
+    const t = costTotals(C.draft.lines);
     const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
+    const loss = (id, on) => { const el = document.getElementById(id); if (el) (el.closest('.cb-cell, .csl-it') || el).classList.toggle('is-loss', on); };
     set('cbSell', money(t.sell)); set('cbSellS', 'USD ' + money(t.sell / fx));
     set('cbBuy', money(t.buy)); set('cbBuyS', 'USD ' + money(t.buy / fx));
     set('cbProfit', money(t.profit)); set('cbProfitS', 'USD ' + money(t.profit / fx));
-    const pc = $('#cbProfit') && $('#cbProfit').closest('.cb-cell'); if (pc) pc.classList.toggle('is-loss', t.profit < 0);
+    loss('cbProfit', t.profit < 0); loss('cslProfit', t.profit < 0);
     set('cbMargin', pctTxt(t.sell ? t.profit / t.sell : NaN)); set('cbMarkup', pctTxt(t.buy ? t.profit / t.buy : NaN));
     if (bx) { set('cbBox', money(t.profit / bx)); set('cbBoxS', 'USD ' + money(t.profit / bx / fx) + ' · ×' + bx); }
+    set('cslSell', money(t.sell)); set('cslBuy', money(t.buy)); set('cslProfit', money(t.profit));
+    set('cslMargin', pctTxt(t.sell ? t.profit / t.sell : NaN)); set('cslMarkup', pctTxt(t.buy ? t.profit / t.buy : NaN));
+    if (bx) set('cslBox', money(t.profit / bx));
     set('cdProfit', 'PROFIT AED ' + money(t.profit));
     set('costDockState', (t.sell ? pctTxt(t.profit / t.sell) + ' margin · ' : '') + (C.dirty ? 'unsaved' : 'all saved'));
     const dp = $('#cdProfit'); if (dp) dp.classList.toggle('is-loss', t.profit < 0);
-    set('cbRate', esc(String(fx)));
     set('ctB', money(t.buy)); set('ctS', money(t.sell)); set('ctP', money(t.profit));
     const tp = $('#ctP'); if (tp) tp.classList.toggle('is-loss', t.profit < 0);
     C.draft.lines.forEach((l) => {
       const row = document.querySelector('.ct-row[data-line="' + l.id + '"]'); if (!row) return;
-      const b = amtOf(l.qty, l.br, l.bc, fx), s = amtOf(l.qty, l.sr, l.sc, fx);
+      const b = lineAmt(l, 'b'), s = lineAmt(l, 's'), incl = ai && sellsNothing(l);
       const o = (k) => row.querySelector('[data-o="' + k + '"]');
-      if (o('b')) o('b').textContent = money(b); if (o('s')) o('s').textContent = money(s);
-      if (o('p')) { o('p').textContent = money(s - b); o('p').classList.toggle('is-loss', s - b < 0); }
+      if (o('b')) o('b').textContent = money(b);
+      if (o('s')) { o('s').textContent = incl ? '' : money(s); o('s').classList.toggle('is-incl', incl); }
+      if (o('p')) { o('p').textContent = ai ? '' : money(s - b); o('p').classList.toggle('is-loss', !ai && s - b < 0); }
     });
     $$('[data-act="cost-save"]').forEach((b) => { b.disabled = !!C.busy || !C.dirty; b.classList.toggle('is-dirty', C.dirty); });
     $$('[data-act="cost-done"]').forEach((b) => { b.disabled = !!C.busy; });
     set('costSaveLbl', C.busy === 'save' ? 'Saving…' : C.dirty ? 'Save' : 'Saved');
+    set('cslSaveLbl', C.busy === 'save' ? 'Saving…' : C.dirty ? 'Save' : 'Saved');
     const pill = $('.cost-page .crumbs .status-pill'); if (pill && C.data && C.data.status === 'DRAFT') pill.textContent = 'DRAFT · V' + C.data.version + (C.dirty ? ' · UNSAVED' : ''); if (pill && C.data && C.data.status === 'NEW') pill.textContent = C.dirty ? 'NEW · UNSAVED' : 'NOT STARTED';
   }
   function costDirty(j) { const C = state.cost; if (!C) return; C.dirty = true; costPaint(j); }
@@ -3473,7 +3528,9 @@
       if (isNaN(q) || q < 0) return { bad: l.id, f: 'qty', msg: charge + ': quantity should be a number.' };
       if (isNaN(br)) return { bad: l.id, f: 'br', msg: charge + ': the buying rate should be a number.' };
       if (isNaN(sr)) return { bad: l.id, f: 'sr', msg: charge + ': the selling rate should be a number.' };
-      out.push({ id: l.id, charge, vendor, basis: l.basis, qty: q, bc: l.bc, br, sc: l.sc, sr });
+      if (l.bc === 'USD' && String(l.bx).trim() && !fxOk(l.bx)) return { bad: l.id, f: 'bx', msg: charge + ': the buying USD rate should be between 3 and 4.5.' };
+      if (l.sc === 'USD' && String(l.sx).trim() && !fxOk(l.sx)) return { bad: l.id, f: 'sx', msg: charge + ': the selling USD rate should be between 3 and 4.5.' };
+      out.push({ id: l.id, charge, vendor, basis: l.basis, qty: q, bc: l.bc, br, bx: l.bc === 'USD' ? fxIs(l.bx) : 0, sc: l.sc, sr, sx: l.sc === 'USD' ? fxIs(l.sx) : 0 });
     }
     return { lines: out };
   }
@@ -3485,8 +3542,7 @@
       const el = document.getElementById('cl_' + read.bad + '_' + read.f); if (el) { el.focus(); el.classList.add('is-bad'); setTimeout(() => el.classList.remove('is-bad'), 2400); }
       return false;
     }
-    const payload = { lines: read.lines, addNotes: C.draft.notes.slice() };
-    if (canEdit() && Number(C.draft.rate) !== Number(C.data.rate)) payload.rate = Number(C.draft.rate);
+    const payload = { lines: read.lines, addNotes: C.draft.notes.slice(), mode: C.draft.mode === 'ALLIN' ? 'ALLIN' : 'ITEM' };
     C.busy = 'save'; costPaint(j);
     setSaving(1);
     try {
@@ -3548,37 +3604,77 @@
     } catch (e) { if (e.kind !== 'auth') toast(e.message, { error: true }); }
     finally { setSaving(-1); }
   }
-  async function costRate(j) {
-    const C = costFor(j.jobNo); if (!C || !C.draft) return;
-    const v = await ask({ title: 'USD rate for this costing', text: 'Company rate ' + (state.rate || 3.685) + '. Every USD amount on this job converts at this rate.', yes: 'Use this rate', no: 'Cancel', input: 'AED for 1 USD', value: String(C.draft.rate), inputmode: 'decimal' });
-    if (v === false) return;
-    const n = Math.round(num6(v) * 10000) / 10000;
-    if (!(n >= 3.5 && n <= 3.9)) { toast('Enter a rate between 3.5 and 3.9.', { error: true }); return; }
-    if (n === Number(C.draft.rate)) return;
-    C.draft.rate = n; costDirty(j);
-  }
+  function blankLine(charge) { return { id: newLineId(), charge: charge || '', vendor: '', basis: 'SHIP', qty: '1', bc: 'AED', br: '', bx: '', sc: 'AED', sr: '', sx: '', bxAuto: true }; }
   function addCostLine(j, charge) {
     const C = state.cost; if (!C || !C.draft) return;
-    const l = { id: newLineId(), charge: charge || '', vendor: '', basis: 'SHIP', qty: '1', bc: 'AED', br: '', sc: 'AED', sr: '' };
-    if (charge) oceanDefaults(j, l);
+    const l = blankLine(charge);
     C.draft.lines.push(l);
+    const extra = charge ? chargeRule(j, l) : null;
+    if (extra) C.draft.lines.push(extra);
     C.dirty = true;
     rerender();
     const f = document.getElementById('cl_' + l.id + '_' + (charge ? 'br' : 'charge'));
     if (f) { f.focus(); if (f.scrollIntoView) f.scrollIntoView({ block: 'nearest' }); }
   }
-  // Ocean / air freight is usually per container and in USD — set that up once, on a fresh line.
-  function oceanDefaults(j, l) {
-    if (l.br || l.sr) return false;
-    if (/OCEAN FREIGHT|SEA FREIGHT/.test(String(l.charge).toUpperCase()) && boxesOf(j)) { l.basis = 'BOX'; l.qty = String(boxesOf(j)); l.bc = 'USD'; l.sc = 'USD'; return true; }
-    if (/AIR FREIGHT/.test(String(l.charge).toUpperCase())) { l.bc = 'USD'; l.sc = 'USD'; return true; }
+  // A USD side gets its rate the moment it turns USD: buying from the shipping line, selling at the company rate.
+  function setCur(l, k, cur) {
+    l[k + 'c'] = cur;
+    if (cur !== 'USD') return;
+    if (!fxOk(l[k + 'x'])) { l[k + 'x'] = fxTxt(k === 'b' ? vendorFx(l.vendor) : COMPANY_FX()); if (k === 'b') l.bxAuto = true; }
+  }
+  // Picking a vendor: the buying rate follows its shipping line (unless you typed one); DPW bills in AED.
+  function vendorRule(l) {
+    if (isDPW(l.vendor) && l.bc === 'USD' && !num6(l.br)) { l.bc = 'AED'; return true; }
+    if (l.bc === 'USD' && l.bxAuto !== false) { const v = fxTxt(vendorFx(l.vendor)); if (v !== l.bx) { l.bx = v; l.bxAuto = true; return true; } }
     return false;
+  }
+  // The usual set-up of the common charges, filled once on a fresh line (nothing typed in the rates yet):
+  // ocean freight and THC per container type (two lines when the job has 20′ and 40′), TLUC and seal per
+  // container, bill of lading / bill of entry / DPC / exit submission per document. Returns a second line or null.
+  function chargeRule(j, l) {
+    if (num6(l.br) || num6(l.sr)) return null;
+    const c = upq(l.charge), line = upq(j.vendor), dg = j.dg === 'DG';
+    const c20 = j.c20 || 0, c40 = j.c40 || 0, boxes = c20 + c40;
+    const fill = (o) => { Object.keys(o).forEach((k) => { if (k === 'vendor') { if (!l.vendor && o.vendor) l.vendor = o.vendor; } else l[k] = o[k]; }); };
+    const twin = (o) => { const x = blankLine(l.charge); x.vendor = l.vendor; Object.keys(o).forEach((k) => { x[k] = o[k]; }); return x; };
+    const byType = (make) => {                        // [20′ set-up, 40′ set-up] for this job
+      if (c20 && c40) return [make('B20', c20), make('B40', c40)];
+      if (c20) return [make('B20', c20)];
+      if (c40) return [make('B40', c40)];
+      return [make('SHIP', 1)];
+    };
+    let sets = null;
+    if (/OCEAN FREIGHT|SEA FREIGHT/.test(c)) {
+      sets = byType((b, q) => ({ basis: b, qty: String(q), vendor: line, bc: 'USD', sc: 'USD' }));
+    } else if (/^THC\b|TERMINAL HANDLING/.test(c)) {
+      const r = (b) => (b === 'B20' ? 700 + (dg ? 350 : 0) : b === 'B40' ? 1100 + (dg ? 550 : 0) : '');
+      sets = byType((b, q) => ({ basis: b, qty: String(q), bc: 'AED', br: String(r(b)) }));
+    } else if (/^TLUC\b|^TLC\b/.test(c)) {
+      sets = [{ basis: boxes ? 'BOX' : 'SHIP', qty: String(boxes || 1), bc: 'AED', br: '314' }];
+    } else if (/^SEAL/.test(c)) {
+      sets = [{ basis: boxes ? 'BOX' : 'SHIP', qty: String(boxes || 1), vendor: line }];
+    } else if (c === 'BILL OF LADING') {
+      sets = [{ basis: 'DOC', qty: '1', vendor: line }];
+    } else if (/BILL OF ENTRY/.test(c) || c === 'DPC' || /^EXIT SUBMISSION/.test(c)) {
+      sets = [{ basis: 'DOC', qty: '1', vendor: 'DPW', bc: 'AED' }];
+    } else if (/AIR FREIGHT/.test(c)) {
+      sets = [{ bc: 'USD', sc: 'USD' }];
+    }
+    if (!sets) return null;
+    fill(sets[0]);
+    ['b', 's'].forEach((k) => { if (l[k + 'c'] === 'USD') setCur(l, k, 'USD'); });
+    vendorRule(l);
+    if (!sets[1]) return null;
+    const x = twin(sets[1]);
+    ['b', 's'].forEach((k) => { if (x[k + 'c'] === 'USD') { x[k + 'x'] = ''; setCur(x, k, 'USD'); } });
+    vendorRule(x);
+    return x;
   }
 
   // ================================================================ COSTING — the menu page
   function costRows() {
     const t0 = today0();
-    const base = (isSales() ? state.jobs : scoped()).filter((j) => j.active);
+    const base = mineJobs().filter((j) => j.active);                // your own jobs only (Customer Service: the jobs you own)
     const all = base.map((j) => ({ j, st: costState(j), s: costSum(j) })).filter((x) => x.st !== 'none');
     const due = (j) => (j.etd && j.etd < t0) || j.arrived;
     const pending = all.filter((x) => x.st === 'pending').sort((a, b) => (due(b.j) - due(a.j)) || ((a.j.etd ? +a.j.etd : 9e15) - (b.j.etd ? +b.j.etd : 9e15)) || (a.j.jobNo < b.j.jobNo ? -1 : 1));
@@ -3592,7 +3688,9 @@
       ? ((j.etd && j.etd < t0) || j.arrived ? '<span class="chip chip-soon">' + (j.arrived ? 'ARRIVED' : (j.mode === 'air' ? 'DEPARTED ' : j.mode === 'courier' ? 'PICKED UP ' : 'SAILED ') + fmt(j.etd)) + '</span>' : '<span class="chip chip-calm">' + (j.etd ? (j.mode === 'courier' ? 'PICK-UP ' : 'ETD ') + fmt(j.etd) : j.mode === 'misc' ? 'COSTING ONLY' : 'DATES TO CONFIRM') + '</span>')
       : x.st === 'draft' ? '<span class="chip chip-done">DRAFT · V' + (s ? s[4] : 1) + '</span>' : '<span class="chip chip-hold">' + icon('lock', 12) + 'DONE</span>';
     const who = s ? (x.st === 'done' && s[7] ? 'Locked by ' + nice(s[7]) : s[6] ? nice(s[6]) + ' · ' + ago(s[5]) : '') : '';
-    const nums = s ? '<span class="cl-profit' + (s[3] < 0 ? ' is-loss' : '') + '"><small>AED</small> ' + money(s[3]) + '</span><span class="cl-sub">' + (s[1] ? pctTxt(s[3] / s[1]) + ' margin' : 'no selling yet') + '</span>' : x.st === 'done' ? '<span class="cl-sub">Marked done (no sheet)</span>' : '<span class="cl-sub">Not started</span>';
+    const fig = (k, v, cls) => '<span class="cl-fig' + (cls ? ' ' + cls : '') + '"><span class="cl-k">' + k + '</span><b>' + money(v) + '</b></span>';
+    const nums = s ? '<span class="cl-figs">' + fig('SELLING', s[1]) + fig('BUYING', s[2]) + fig('PROFIT', s[3], 'is-profit' + (s[3] < 0 ? ' is-loss' : '')) + '</span><span class="cl-sub">AED · ' + (s[1] ? pctTxt(s[3] / s[1]) + ' margin' : 'no selling yet') + '</span>'
+      : x.st === 'done' ? '<span class="cl-sub">Marked done (no sheet)</span>' : '<span class="cl-sub">Not started</span>';
     return '<li class="cr-row"><button type="button" class="cr-open" data-cost="' + esc(j.jobNo) + '" aria-label="Open costing of ' + esc(j.jobNo) + '">' +
       '<span class="rr-main"><span class="rr-job">' + esc(j.jobNo) + ' <span class="badge">' + esc(j.type) + '</span></span><span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span></span>' +
       '<span class="cr-when">' + when + (who ? '<span class="cl-sub">' + esc(who) + '</span>' : '') + '</span>' +
@@ -3609,10 +3707,9 @@
     const rows = R[tab].filter(match);
     const keepQ = $('#costSearch') ? $('#costSearch').value : U.q || '';
     const big = (id, label, n, sub) => '<button type="button" class="cs-big' + (tab === id ? ' is-on' : '') + '" data-cost-tab="' + id + '" aria-pressed="' + (tab === id) + '"><span class="cs-k">' + label + '</span><span class="cs-n">' + n + '</span><span class="cs-s">' + sub + '</span></button>';
-    $('#view').innerHTML = '<div class="wrap round-page cost-list">' +
-      '<header class="page-head' + anim + '"><div class="head-main"><div class="meta-line"><span>COSTING · ' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div><h1 class="greeting">Costing</h1></div>' +
+    $('#view').innerHTML = '<div class="wrap round-page cost-list no-seg">' +
+      '<header class="page-head' + anim + '"><div class="head-main"><div class="meta-line"><span>COSTING · YOUR JOBS · ' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div><h1 class="greeting">Costing</h1></div>' +
         '<div class="head-actions">' +
-          (canEdit() ? '<div class="seg" role="group" aria-label="Whose jobs"><button type="button" data-scope="mine" aria-pressed="' + (state.scope === 'mine') + '"><span class="l-full">My jobs</span><span class="l-short">Mine</span></button><button type="button" data-scope="all" aria-pressed="' + (state.scope === 'all') + '"><span class="l-full">Everyone</span><span class="l-short">All</span></button></div>' : '') +
           '<label class="search">' + icon('search') + '<input id="costSearch" type="search" placeholder="Job no, customer, port" aria-label="Search costings" autocomplete="off" value="' + esc(keepQ) + '"></label>' +
           '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' +
         '</div></header>' +
@@ -3643,7 +3740,7 @@
 
   // ================================================================ EXCEL (made here, no download needed)
   // A real .xlsx: logo, header band, summary, one table with live formulas, A4 one page wide,
-  // header row repeated on every printed page; sheet 2 has the notes and version history.
+  // header rows repeated on every printed page; notes under the table.
   const XL = (() => {
     const T = new Uint32Array(256);
     for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; T[n] = c >>> 0; }
@@ -3761,11 +3858,15 @@
     return { Styles, sheetXml, book, col };
   })();
 
-  // The costing workbook. info: { job, customer, route, type, cargo, boxes, sales, cs, status, statusLine, rate, lines, notes, log, user, unsaved, at }
+  // The costing workbook. info: { job, customer, route, type, cargo, boxes, sales, cs, status, statusLine, mode, lines, notes, user, unsaved, at }
+  // Sheet layout: header band · summary · BUYING and SELLING as two coloured blocks with a gap between · profit.
+  // Every USD amount converts at its own rate (the @ column); totals and the summary are live formulas.
   function costWorkbook(info, logo, opts = {}) {
     const S = XL.Styles(), C = XL.col;
     const INK = '0B1B2B', NAVY = '1C5179', GREY = '5A6878', FOG = 'E9EEF3', LINE = 'DFE6ED', TEAL = '0E7C7B', TINT = 'E4F5F5', ZEBRA = 'F6F8FA';
-    const AED = '#,##0.00;[Red]-#,##0.00', RATE = '#,##0.00##', PCT = '0.0%;[Red]-0.0%';
+    const B_HEAD = 'DCE6F0', B_CELL = 'F3F7FB', B_ZEB = 'E8EFF6', S_HEAD = 'D5EFEE', S_CELL = 'F0F9F9', S_ZEB = 'E2F3F2';
+    const AED = '#,##0.00;[Red]-#,##0.00', RATE = '#,##0.00##', FX = '0.000##', PCT = '0.0%;[Red]-0.0%';
+    const CO = 3.685;                                              // per-box USD figures use the company rate
     const st = {
       title: S({ font: { sz: 18, b: true, color: INK }, align: { h: 'right', v: 'center' } }),
       job: S({ font: { sz: 11, b: true, color: NAVY }, align: { h: 'right', v: 'center' } }),
@@ -3777,105 +3878,126 @@
       sAed: S({ font: { sz: 13, b: true, color: INK }, fmt: AED, align: { h: 'left', v: 'center', indent: 1 } }),
       sProfit: S({ font: { sz: 13, b: true, color: TEAL }, fmt: AED, fill: TINT, align: { h: 'left', v: 'center', indent: 1 } }),
       sPct: S({ font: { sz: 13, b: true, color: INK }, fmt: PCT, align: { h: 'left', v: 'center', indent: 1 } }),
-      sRate: S({ font: { sz: 13, b: true, color: INK }, fmt: '0.000#', align: { h: 'left', v: 'center', indent: 1 } }),
       sTxt: S({ font: { sz: 13, b: true, color: GREY }, align: { h: 'left', v: 'center', indent: 1 } }),
-      hint: S({ font: { sz: 8, i: true, color: GREY }, align: { indent: 1 } }),
+      grpB: S({ font: { sz: 9, b: true, color: 'FFFFFF' }, fill: NAVY, align: { h: 'center', v: 'center' } }),
+      grpS: S({ font: { sz: 9, b: true, color: 'FFFFFF' }, fill: TEAL, align: { h: 'center', v: 'center' } }),
+      grpP: S({ font: { sz: 9, b: true, color: 'FFFFFF' }, fill: INK, align: { h: 'center', v: 'center' } }),
       th: S({ font: { sz: 8, b: true, color: 'FFFFFF' }, fill: INK, align: { v: 'center', indent: 1, wrap: true } }),
       thR: S({ font: { sz: 8, b: true, color: 'FFFFFF' }, fill: INK, align: { h: 'right', v: 'center', wrap: true } }),
-      thC: S({ font: { sz: 8, b: true, color: 'FFFFFF' }, fill: INK, align: { h: 'center', v: 'center', wrap: true } })
+      thB: S({ font: { sz: 8, b: true, color: NAVY }, fill: B_HEAD, align: { h: 'center', v: 'center', wrap: true } }),
+      thBR: S({ font: { sz: 8, b: true, color: NAVY }, fill: B_HEAD, align: { h: 'right', v: 'center', wrap: true } }),
+      thS: S({ font: { sz: 8, b: true, color: TEAL }, fill: S_HEAD, align: { h: 'center', v: 'center', wrap: true } }),
+      thSR: S({ font: { sz: 8, b: true, color: TEAL }, fill: S_HEAD, align: { h: 'right', v: 'center', wrap: true } })
     };
-    const cellSt = (z, kind) => {
-      const base = { border: { bottom: ['hair', 'B8C4CF'] }, fill: z ? ZEBRA : undefined };
+    // a cell of the table: z = zebra row, side = '' | 'b' | 's'
+    const cellSt = (z, kind, side) => {
+      const fill = side === 'b' ? (z ? B_ZEB : B_CELL) : side === 's' ? (z ? S_ZEB : S_CELL) : (z ? ZEBRA : undefined);
+      const base = { border: { bottom: ['hair', 'B8C4CF'] }, fill };
+      const color = side === 's' ? '0B4F4E' : INK;
       if (kind === 'txt') return S(Object.assign({}, base, { font: { sz: 9, color: INK }, align: { v: 'center', indent: 1, wrap: true } }));
       if (kind === 'b') return S(Object.assign({}, base, { font: { sz: 9, b: true, color: INK }, align: { v: 'center', indent: 1, wrap: true } }));
       if (kind === 'cur') return S(Object.assign({}, base, { font: { sz: 8, b: true, color: GREY }, align: { h: 'center', v: 'center' } }));
       if (kind === 'qty') return S(Object.assign({}, base, { font: { sz: 9, color: INK }, fmt: 'General', align: { h: 'right', v: 'center' } }));
-      if (kind === 'rate') return S(Object.assign({}, base, { font: { sz: 9, color: INK }, fmt: RATE, align: { h: 'right', v: 'center' } }));
-      if (kind === 'aed') return S(Object.assign({}, base, { font: { sz: 9, color: INK }, fmt: AED, align: { h: 'right', v: 'center' } }));
+      if (kind === 'rate') return S(Object.assign({}, base, { font: { sz: 9, color: color }, fmt: RATE, align: { h: 'right', v: 'center' } }));
+      if (kind === 'fx') return S(Object.assign({}, base, { font: { sz: 8, color: GREY }, fmt: FX, align: { h: 'right', v: 'center' } }));
+      if (kind === 'aed') return S(Object.assign({}, base, { font: { sz: 9, b: true, color: color }, fmt: AED, align: { h: 'right', v: 'center' } }));
+      if (kind === 'incl') return S(Object.assign({}, base, { font: { sz: 8, i: true, color: GREY }, align: { h: 'right', v: 'center' } }));
       return S(Object.assign({}, base, { font: { sz: 9, b: true, color: TEAL }, fmt: AED, align: { h: 'right', v: 'center' } }));
     };
-    const tot = { l: S({ font: { sz: 10, b: true, color: INK }, fill: TINT, border: { top: ['medium', INK] }, align: { h: 'right', v: 'center', indent: 1 } }), n: S({ font: { sz: 10, b: true, color: INK }, fill: TINT, border: { top: ['medium', INK] }, fmt: AED, align: { h: 'right', v: 'center' } }) };
+    const gap = S({});
     const rows = {}, merges = [];
     const put = (r, c, v, s, f) => { (rows[r] = rows[r] || { c: {} }).c[c] = { v, s, f }; };
     const height = (r, h) => { (rows[r] = rows[r] || { c: {} }).h = h; };
     const merge = (r1, c1, r2, c2) => merges.push(C(c1) + r1 + ':' + C(c2) + r2);
-    const fx = Number(info.rate) || 3.685;
+    const ai = info.mode === 'ALLIN';
     // ---- header
     height(1, 30); height(2, 22); height(3, 8);
-    put(1, 7, 'COST SHEET', st.title); merge(1, 7, 1, 10);
-    put(2, 7, 'JOB ' + info.job, st.job); merge(2, 7, 2, 10);
+    put(1, 11, 'COST SHEET', st.title); merge(1, 11, 1, 15);
+    put(2, 11, 'JOB ' + info.job, st.job); merge(2, 11, 2, 15);
     const band = (r, items) => { items.forEach(([c1, c2, label, value, vs]) => { put(r, c1, label, st.lab); put(r + 1, c1, value, vs || st.val); for (let c = c1 + 1; c <= c2; c++) { put(r, c, '', st.lab); put(r + 1, c, '', vs || st.val); } if (c2 > c1) { merge(r, c1, r, c2); merge(r + 1, c1, r + 1, c2); } }); height(r, 14); };
-    const custLines = Math.max(1, Math.ceil(String(info.customer || '').length / 34));
-    band(4, [[0, 0, 'JOB NO.', info.job], [1, 2, 'CUSTOMER', info.customer || '—'], [3, 7, 'ROUTE', info.route], [8, 10, 'TYPE', info.type]]);
+    const custLines = Math.max(1, Math.ceil(String(info.customer || '').length / 44));
+    band(4, [[0, 0, 'JOB NO.', info.job], [1, 3, 'CUSTOMER', info.customer || '—'], [4, 9, 'ROUTE', info.route], [10, 15, 'TYPE', info.type + (ai ? ' · ALL-IN' : ' · ITEMISED')]]);
     height(5, Math.max(20, 14 * custLines + 6));
-    band(6, [[0, 0, 'CONTAINERS', info.cargo || '—'], [1, 2, 'SALES', info.sales || '—'], [3, 7, 'CUSTOMER SERVICE', info.cs || '—'], [8, 10, 'STATUS', info.statusLine, info.status === 'LOCKED' ? st.lock : st.draft]]);
+    band(6, [[0, 0, 'CONTAINERS', info.cargo || '—'], [1, 3, 'SALES', info.sales || '—'], [4, 9, 'CUSTOMER SERVICE', info.cs || '—'], [10, 15, 'STATUS', info.statusLine, info.status === 'LOCKED' ? st.lock : st.draft]]);
     height(7, 20); height(8, 10);
-    // ---- table first (the summary refers to its totals)
-    const H = 12, first = 13, lines = info.lines, last = first + lines.length - 1, T = first + lines.length;
-    const heads = [['CHARGE', st.th], ['VENDOR', st.th], ['BASIS', st.th], ['QTY', st.thR], ['CUR', st.thC], ['BUY RATE', st.thR], ['CUR', st.thC], ['SELL RATE', st.thR], ['BUYING AED', st.thR], ['SELLING AED', st.thR], ['PROFIT AED', st.thR]];
-    heads.forEach(([t, s], c) => put(H, c, t, s)); height(H, 24);
+    // ---- the table first (the summary refers to its totals)
+    const G = 12, H = 13, first = 14, lines = info.lines, last = first + lines.length - 1, T = first + Math.max(lines.length, 0);
+    const GAPS = [4, 9, 14];
+    put(G, 0, '', st.th); for (let c = 1; c <= 3; c++) put(G, c, '', st.th); merge(G, 0, G, 3);
+    put(G, 5, 'BUYING', st.grpB); for (let c = 6; c <= 8; c++) put(G, c, '', st.grpB); merge(G, 5, G, 8);
+    put(G, 10, 'SELLING', st.grpS); for (let c = 11; c <= 13; c++) put(G, c, '', st.grpS); merge(G, 10, G, 13);
+    put(G, 15, ai ? 'PROFIT (TOTAL)' : 'PROFIT', st.grpP);
+    height(G, 18);
+    const heads = [[0, 'CHARGE', st.th], [1, 'VENDOR', st.th], [2, 'BASIS', st.th], [3, 'QTY', st.thR],
+      [5, 'CUR', st.thB], [6, 'RATE', st.thBR], [7, '@ USD', st.thBR], [8, 'AED', st.thBR],
+      [10, 'CUR', st.thS], [11, 'RATE', st.thSR], [12, '@ USD', st.thSR], [13, 'AED', st.thSR], [15, 'AED', st.thR]];
+    heads.forEach(([c, t, s]) => put(H, c, t, s)); height(H, 20);
+    GAPS.forEach((c) => { put(G, c, '', gap); put(H, c, '', gap); });
     let sb = 0, ss = 0;
     lines.forEach((l, i) => {
       const r = first + i, z = i % 2 === 1;
-      const b = (Number(l.qty) || 0) * (Number(l.br) || 0) * (l.bc === 'USD' ? fx : 1), s = (Number(l.qty) || 0) * (Number(l.sr) || 0) * (l.sc === 'USD' ? fx : 1);
+      const bxv = l.bc === 'USD' ? (Number(l.bx) || CO) : 0, sxv = l.sc === 'USD' ? (Number(l.sx) || CO) : 0;
+      const b = (Number(l.qty) || 0) * (Number(l.br) || 0) * (l.bc === 'USD' ? bxv : 1), s = (Number(l.qty) || 0) * (Number(l.sr) || 0) * (l.sc === 'USD' ? sxv : 1);
+      const incl = ai && !(Number(l.sr) || 0);
       sb += b; ss += s;
       put(r, 0, l.charge, cellSt(z, 'b')); put(r, 1, l.vendor || '', cellSt(z, 'txt')); put(r, 2, BASIS_SHORT[l.basis] || l.basis, cellSt(z, 'txt'));
-      put(r, 3, Number(l.qty) || 0, cellSt(z, 'qty')); put(r, 4, l.bc, cellSt(z, 'cur')); put(r, 5, Number(l.br) || 0, cellSt(z, 'rate'));
-      put(r, 6, l.sc, cellSt(z, 'cur')); put(r, 7, Number(l.sr) || 0, cellSt(z, 'rate'));
-      put(r, 8, b, cellSt(z, 'aed'), 'D' + r + '*F' + r + '*IF(E' + r + '="USD",$K$10,1)');
-      put(r, 9, s, cellSt(z, 'aed'), 'D' + r + '*H' + r + '*IF(G' + r + '="USD",$K$10,1)');
-      put(r, 10, s - b, cellSt(z, 'pf'), 'J' + r + '-I' + r);
+      put(r, 3, Number(l.qty) || 0, cellSt(z, 'qty'));
+      put(r, 5, l.bc, cellSt(z, 'cur', 'b')); put(r, 6, Number(l.br) || 0, cellSt(z, 'rate', 'b')); put(r, 7, bxv || '', cellSt(z, 'fx', 'b'));
+      put(r, 8, b, cellSt(z, 'aed', 'b'), 'D' + r + '*G' + r + '*IF(F' + r + '="USD",H' + r + ',1)');
+      if (incl) { put(r, 10, '', cellSt(z, 'cur', 's')); put(r, 11, '', cellSt(z, 'rate', 's')); put(r, 12, '', cellSt(z, 'fx', 's')); put(r, 13, 'incl.', cellSt(z, 'incl', 's')); }
+      else {
+        put(r, 10, l.sc, cellSt(z, 'cur', 's')); put(r, 11, Number(l.sr) || 0, cellSt(z, 'rate', 's')); put(r, 12, sxv || '', cellSt(z, 'fx', 's'));
+        put(r, 13, s, cellSt(z, 'aed', 's'), 'D' + r + '*L' + r + '*IF(K' + r + '="USD",M' + r + ',1)');
+      }
+      if (ai) put(r, 15, '', cellSt(z, 'txt')); else put(r, 15, s - b, cellSt(z, 'pf'), 'N' + r + '-I' + r);
+      GAPS.forEach((c) => put(r, c, '', gap));
       const long = Math.max(String(l.charge).length / 30, String(l.vendor || '').length / 22);
       height(r, long > 1 ? Math.ceil(long) * 12 + 6 : 18);
     });
-    for (let c = 0; c <= 7; c++) put(T, c, c === 0 ? 'TOTAL (AED)' : '', tot.l);
-    merge(T, 0, T, 7);
-    const sum = (L) => lines.length ? 'SUM(' + L + first + ':' + L + last + ')' : null;
-    put(T, 8, sb, tot.n, sum('I')); put(T, 9, ss, tot.n, sum('J')); put(T, 10, ss - sb, tot.n, lines.length ? 'J' + T + '-I' + T : null);
+    const tot = (fill, color) => ({ l: S({ font: { sz: 10, b: true, color: INK }, fill, border: { top: ['medium', INK] }, align: { h: 'right', v: 'center', indent: 1 } }), n: S({ font: { sz: 10, b: true, color }, fill, border: { top: ['medium', INK] }, fmt: AED, align: { h: 'right', v: 'center' } }) });
+    const tA = tot(TINT, INK), tB = tot(B_HEAD, NAVY), tS = tot(S_HEAD, TEAL), tP = tot(TINT, TEAL);
+    for (let c = 0; c <= 3; c++) put(T, c, c === 0 ? 'TOTAL (AED)' : '', tA.l);
+    merge(T, 0, T, 3);
+    const sum = (L) => (lines.length ? 'SUM(' + L + first + ':' + L + last + ')' : null);
+    for (let c = 5; c <= 7; c++) put(T, c, '', tB.l);
+    put(T, 8, sb, tB.n, sum('I'));
+    for (let c = 10; c <= 12; c++) put(T, c, '', tS.l);
+    put(T, 13, ss, tS.n, sum('N'));
+    put(T, 15, ss - sb, tP.n, lines.length ? 'N' + T + '-I' + T : null);
+    GAPS.forEach((c) => put(T, c, '', gap));
     height(T, 22);
-    // ---- summary (rows 9–11)
-    const p = ss - sb;
-    height(9, 14); height(10, 26); height(11, 14);
-    const sl = [[0, 0, 'SELLING (AED)'], [1, 1, 'BUYING (AED)'], [2, 3, 'PROFIT (AED)'], [4, 5, 'MARGIN'], [6, 7, 'MARK-UP'], [8, 8, info.boxes ? 'PROFIT / BOX (AED)' : 'PROFIT / BOX'], [9, 9, 'PROFIT (USD)'], [10, 10, 'USD → AED RATE']];
+    // ---- summary (rows 9–10)
+    const p = ss - sb, bx = info.boxes;
+    height(9, 14); height(10, 26); height(11, 8);
+    const sl = [[0, 0, 'SELLING (AED)'], [1, 1, 'BUYING (AED)'], [2, 3, 'PROFIT (AED)'], [5, 6, 'MARGIN'], [7, 8, 'MARK-UP'], [10, 11, 'PROFIT / BOX (AED)'], [12, 13, 'COST / BOX (USD)'], [14, 15, 'SELL / BOX (USD)']];
     sl.forEach(([c1, c2, t]) => { put(9, c1, t, st.slab); if (c2 > c1) { put(9, c2, '', st.slab); merge(9, c1, 9, c2); } });
-    put(10, 0, ss, st.sAed, 'J' + T); put(10, 1, sb, st.sAed, 'I' + T);
-    put(10, 2, p, st.sProfit, 'K' + T); put(10, 3, '', st.sProfit); merge(10, 2, 10, 3);
-    put(10, 4, ss ? p / ss : 0, st.sPct, 'IF(J' + T + '=0,0,K' + T + '/J' + T + ')'); put(10, 5, '', st.sPct); merge(10, 4, 10, 5);
-    put(10, 6, sb ? p / sb : 0, st.sPct, 'IF(I' + T + '=0,0,K' + T + '/I' + T + ')'); put(10, 7, '', st.sPct); merge(10, 6, 10, 7);
-    if (info.boxes) put(10, 8, p / info.boxes, st.sAed, 'K' + T + '/' + info.boxes); else put(10, 8, '—', st.sTxt);
-    put(10, 9, p / fx, st.sAed, 'K' + T + '/K10'); put(10, 10, fx, st.sRate);
-    put(11, 0, 'Margin = profit ÷ selling · Mark-up = profit ÷ buying · USD amounts convert at the rate in K10 (change it and every total follows).', st.hint); merge(11, 0, 11, 10);
-    // ---- under the table
+    const two = (c, v, s, f) => { put(10, c, v, s, f); put(10, c + 1, '', s); merge(10, c, 10, c + 1); };
+    put(10, 0, ss, st.sAed, 'N' + T); put(10, 1, sb, st.sAed, 'I' + T);
+    two(2, p, st.sProfit, 'P' + T);
+    two(5, ss ? p / ss : 0, st.sPct, 'IF(N' + T + '=0,0,P' + T + '/N' + T + ')');
+    two(7, sb ? p / sb : 0, st.sPct, 'IF(I' + T + '=0,0,P' + T + '/I' + T + ')');
+    if (bx) { two(10, p / bx, st.sAed, 'P' + T + '/' + bx); two(12, sb / bx / CO, st.sAed, 'I' + T + '/' + bx + '/' + CO); two(14, ss / bx / CO, st.sAed, 'N' + T + '/' + bx + '/' + CO); }
+    else { two(10, '—', st.sTxt); two(12, '—', st.sTxt); two(14, '—', st.sTxt); }
+    // ---- under the table: notes, then where it came from
     const foot = S({ font: { sz: 8, color: GREY }, align: { indent: 1 } });
-    put(T + 2, 0, 'Amounts in AED. 1 USD = AED ' + fx + '. Generated ' + info.at + ' by ' + info.user + ' from ETHIX.', foot); merge(T + 2, 0, T + 2, 10);
-    if (info.unsaved) { put(T + 3, 0, 'DRAFT — this export includes changes that were not saved yet.', S({ font: { sz: 9, b: true, color: 'B42318' }, align: { indent: 1 } })); merge(T + 3, 0, T + 3, 10); }
-    const sheet1 = { cols: [30, 22, 13, 8, 7, 12, 7, 12, 14, 14, 14], rows, merges, tab: true, landscape: true, footer: '&L&8ETHIX · Costing · Job ' + info.job + '&R&8Page &P of &N', noCache: !!opts.noCache };
-    // ---- sheet 2: notes + version history
-    const rows2 = {}, merges2 = [];
-    const put2 = (r, c, v, s) => { (rows2[r] = rows2[r] || { c: {} }).c[c] = { v, s }; };
-    const h2 = (r, h) => { (rows2[r] = rows2[r] || { c: {} }).h = h; };
-    const t2 = S({ font: { sz: 13, b: true, color: INK } }), sec = S({ font: { sz: 9, b: true, color: NAVY }, fill: FOG, align: { v: 'center', indent: 1 } });
-    const c2 = S({ font: { sz: 9, color: INK }, border: { bottom: ['hair', 'B8C4CF'] }, align: { v: 'top', indent: 1, wrap: true } });
-    const c2n = S({ font: { sz: 9, color: INK }, border: { bottom: ['hair', 'B8C4CF'] }, fmt: AED, align: { h: 'right', v: 'top' } });
-    put2(1, 0, 'NOTES & VERSION HISTORY · JOB ' + info.job, t2); merges2.push('A1:G1'); h2(1, 22);
-    let r2 = 3;
-    put2(r2, 0, 'COSTING NOTES', sec); for (let c = 1; c <= 6; c++) put2(r2, c, '', sec); merges2.push('A' + r2 + ':G' + r2); h2(r2, 18); r2++;
-    ['WHEN', 'WHO', '', 'NOTE'].forEach((t, c) => put2(r2, c, t, c === 3 ? st.th : st.th)); [4, 5, 6].forEach((c) => put2(r2, c, '', st.th)); merges2.push('D' + r2 + ':G' + r2); r2++;
-    if (!info.notes.length) { put2(r2, 0, 'No notes.', c2); r2++; }
-    info.notes.forEach((n) => { put2(r2, 0, n.when, c2); put2(r2, 1, n.by, c2); put2(r2, 2, '', c2); put2(r2, 3, n.txt, c2); [4, 5, 6].forEach((c) => put2(r2, c, '', c2)); merges2.push('D' + r2 + ':G' + r2); h2(r2, Math.max(16, Math.ceil(String(n.txt).length / 95) * 12 + 6)); r2++; });
-    r2++;
-    put2(r2, 0, 'VERSION HISTORY (NEWEST FIRST)', sec); for (let c = 1; c <= 6; c++) put2(r2, c, '', sec); merges2.push('A' + r2 + ':G' + r2); h2(r2, 18); r2++;
-    ['WHEN', 'WHO', 'VERSION', 'WHAT HAPPENED', 'SELL AED', 'BUY AED', 'PROFIT AED'].forEach((t, c) => put2(r2, c, t, c >= 4 ? st.thR : st.th)); r2++;
-    if (!info.log.length) { put2(r2, 0, 'Not saved yet.', c2); r2++; }
-    info.log.forEach((x) => {
-      put2(r2, 0, x.when, c2); put2(r2, 1, x.by, c2); put2(r2, 2, 'V' + x.ver, c2); put2(r2, 3, x.what, c2);
-      put2(r2, 4, x.sell, c2n); put2(r2, 5, x.buy, c2n); put2(r2, 6, x.profit, c2n);
-      h2(r2, Math.max(16, Math.ceil(String(x.what).length / 62) * 12 + 6)); r2++;
-    });
-    const sheet2 = { cols: [17, 13, 9, 62, 13, 13, 13], rows: rows2, merges: merges2, landscape: true, footer: '&L&8ETHIX · Costing · Job ' + info.job + '&R&8Page &P of &N' };
+    let r = T + 2;
+    if (info.notes.length) {
+      const sec = S({ font: { sz: 9, b: true, color: NAVY }, fill: FOG, align: { v: 'center', indent: 1 } });
+      const nC = S({ font: { sz: 9, color: INK }, border: { bottom: ['hair', 'B8C4CF'] }, align: { v: 'top', indent: 1, wrap: true } });
+      const nW = S({ font: { sz: 8, color: GREY }, border: { bottom: ['hair', 'B8C4CF'] }, align: { v: 'top', indent: 1, wrap: true } });
+      put(r, 0, 'NOTES', sec); for (let c = 1; c <= 15; c++) put(r, c, '', sec); merge(r, 0, r, 15); height(r, 18); r++;
+      info.notes.forEach((n) => {
+        put(r, 0, n.when + ' · ' + n.by, nW); put(r, 1, n.txt, nC); for (let c = 2; c <= 15; c++) put(r, c, '', nC); merge(r, 1, r, 15);
+        height(r, Math.max(16, Math.ceil(String(n.txt).length / 120) * 12 + 6)); r++;
+      });
+      r++;
+    }
+    put(r, 0, 'Amounts in AED. Every USD amount converts at its own rate (the @ USD column); per-box USD at ' + CO + '. Generated ' + info.at + ' by ' + info.user + ' from ETHIX.', foot); merge(r, 0, r, 15);
+    if (info.unsaved) { r++; put(r, 0, 'DRAFT — this export includes changes that were not saved yet.', S({ font: { sz: 9, b: true, color: 'B42318' }, align: { indent: 1 } })); merge(r, 0, r, 15); }
+    const sheet1 = { cols: [28, 20, 12, 6.5, 1.6, 6, 11, 8.5, 13.5, 1.6, 6, 11, 8.5, 13.5, 1.6, 13.5], rows, merges, tab: true, landscape: true, footer: '&L&8ETHIX · Costing · Job ' + info.job + '&R&8Page &P of &N', noCache: !!opts.noCache };
     return XL.book({
-      title: 'ETHIX costing ' + info.job, user: info.user, logo, logoH: 40, titles: "Costing!$12:$12",
-      sheets: [{ name: 'Costing', xml: (d) => XL.sheetXml(Object.assign({}, sheet1, { drawing: d })) }, { name: 'Notes & history', xml: () => XL.sheetXml(sheet2) }],
+      title: 'ETHIX costing ' + info.job, user: info.user, logo, logoH: 40, titles: "Costing!$12:$13",
+      sheets: [{ name: 'Costing', xml: (d) => XL.sheetXml(Object.assign({}, sheet1, { drawing: d })) }],
       styles: S.xml()
     });
   }
@@ -3892,16 +4014,16 @@
     return logoBytes;
   }
   function costInfo(j, C) {
-    const D = C.data, fx = Number(C.draft.rate) || D.rate || 3.685;
+    const D = C.data;
     const read = readLines(C);
     const lines = read.lines || D.lines;
     const stamp = (t) => (t ? stampText(new Date(t)) : '');
-    const statusLine = D.status === 'LOCKED' ? 'LOCKED · COSTING DONE' + (D.lockedBy ? ' · ' + D.lockedBy : '') + (D.lockedAt ? ' · ' + stamp(D.lockedAt) : '') : C.dirty ? 'DRAFT · NOT SAVED' : D.status === 'NEW' ? 'DRAFT · NOT SAVED' : 'DRAFT · V' + D.version + (D.by ? ' · ' + D.by : '');
+    const statusLine = D.status === 'LOCKED' ? 'COSTING DONE · LOCKED' + (D.lockedBy ? ' · ' + D.lockedBy : '') + (D.lockedAt ? ' · ' + stamp(D.lockedAt) : '')
+      : C.dirty || D.status === 'NEW' ? 'DRAFT · NOT SAVED' : 'DRAFT' + (D.by ? ' · SAVED BY ' + D.by : '') + (D.at ? ' · ' + stamp(D.at) : '');
     return {
       job: j.jobNo, customer: j.customer, route: j.mode === 'misc' ? (j.against ? 'AGAINST ' + j.against : 'COSTING ONLY') : (j.pol || '—') + ' → ' + (j.pod || '—'), type: j.type + ' · ' + j.typeName, cargo: j.cargo || (j.mode === 'air' ? 'AIR' : j.mode === 'courier' ? 'COURIER' : ''), boxes: boxesOf(j),
-      sales: j.sales, cs: j.cs, status: D.status === 'LOCKED' ? 'LOCKED' : 'DRAFT', statusLine, rate: fx, lines, unsaved: C.dirty || D.status === 'NEW', user: state.user, at: fmt(new Date(), true) + ' ' + stampText(new Date()).slice(-5),
-      notes: C.draft.notes.map((t) => ({ when: 'not saved yet', by: state.user, txt: t })).concat((D.notes || []).slice().reverse().map((n) => ({ when: stamp(n.t), by: n.by, txt: n.txt }))),
-      log: (D.log || []).map((x) => ({ when: stamp(x.t), by: x.by, ver: x.ver, what: x.action === 'SAVED' ? (x.changes || 'Saved') : x.action === 'LOCKED' ? 'Costing done — locked' : (x.changes || 'Unlocked'), sell: x.sell, buy: x.buy, profit: x.profit }))
+      sales: j.sales, cs: j.cs, status: D.status === 'LOCKED' ? 'LOCKED' : 'DRAFT', statusLine, mode: C.draft.mode, lines, unsaved: C.dirty || D.status === 'NEW', user: state.user, at: fmt(new Date(), true) + ' ' + stampText(new Date()).slice(-5),
+      notes: C.draft.notes.map((t) => ({ when: 'not saved yet', by: state.user, txt: t })).concat((D.notes || []).slice().reverse().map((n) => ({ when: stamp(n.t), by: n.by, txt: n.txt })))
     };
   }
   async function exportCost(j) {
@@ -3916,6 +4038,274 @@
       setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 4000);
       toast('Excel ready · ' + name);
     } catch (e) { toast('The Excel file could not be made: ' + e.message, { error: true }); }
+  }
+
+  // ================================================================ v2.7 — whose jobs
+  // Follow-ups and Costing are always your own jobs; Home and Jobs start on "My jobs" at every sign-in.
+  function mineJobs() { return canEdit() ? state.jobs.filter((j) => j.cs === state.user) : state.jobs; }
+
+  // ================================================================ v2.7 — cutoffs, every open one, coloured
+  // red: passed, today or tomorrow (inside 24 h) · amber: in 2–3 days · calm: later
+  const cutTone = (d) => (d <= 1 ? 'red' : d <= 3 ? 'amber' : 'calm');
+  const cutWhen = (d, date) => (d < 0 ? 'PASSED' : d === 0 ? 'TODAY' : d === 1 ? 'TOMORROW' : fmt(date));
+  function cutsFor(j, t0) {
+    if (!j.active || j.hold || (j.etd && j.etd <= t0)) return [];
+    const out = [], open = (v) => !v || v === 'PENDING';
+    const add = (k, label, date, pending) => { if (date && pending) { const d = days(t0, date); out.push({ k, label, d, date, tone: cutTone(d) }); } };
+    if (['EXPORT', 'CROSS'].includes(j.cat) && j.type !== 'CRR') add('SI', 'SI cutoff', j.siCut, open(j.sido));
+    if (j.cat === 'EXPORT') add('ED', 'ED cutoff', j.edCut, open(j.ed));
+    if (j.cat === 'EXPORT' && j.dg === 'DG') add('DG', 'DG cutoff', j.dgCut, true);
+    return out;
+  }
+  function cutChips(j) {
+    const list = cutsFor(j, today0());
+    return list.length ? '<span class="cut-chips">' + list.map((c) => '<span class="cut-chip is-' + c.tone + '" title="' + esc(c.label + ' ' + fmt(c.date, true)) + '"><b>' + c.k + '</b>' + esc(cutWhen(c.d, c.date)) + '</span>').join('') + '</span>' : '';
+  }
+  // The "next step" chip of a row: when the cutoff chips already say how close it is, it just names the step.
+  function rowNext(j) {
+    const n = j.next;
+    if (!n || !/cutoff/i.test(n.text) || !cutsFor(j, today0()).length) return n;
+    const st = j.journey.all.filter((s) => s.cutDays !== undefined && s.state !== 'done' && s.state !== 'skip').sort((a, b) => a.cutDays - b.cutDays)[0];
+    return { text: st ? st.def.next : n.text.replace(/\s*·?\s*cutoff.*$/i, ''), tone: 'calm', rank: n.rank };
+  }
+  // Step names say what is still to happen, until it has happened: "SI submission" → "SI submitted".
+  const PEND_NAME = { si: 'SI submission', docsReady: 'Docs to prepare', ed: 'ED pending', blConf: 'BL confirmation pending', blReceived: 'BL to receive', blIss: 'BL issue pending',
+    awbConf: 'AWB confirmation pending', awbIss: 'AWB issue pending', tracking: 'Tracking no. pending', costing: 'Costing pending', discharge: 'Discharge list pending',
+    doRel: 'DO release pending', customs: 'Customs clearance', sailed: 'Sailing', departed: 'Departing', pickedUp: 'Pick-up', arrived: 'ETA', deliveredEta: 'Delivery',
+    delivered: 'Delivery', deliveredOpt: 'Delivery', linked: 'Link to a job' };
+  function polishStops(all) {
+    all.forEach((s) => {
+      if (s.state === 'done' || s.state === 'skip') return;
+      if (PEND_NAME[s.id]) s.name = PEND_NAME[s.id];
+      if (s.kind === 'date' && s.def.tag && s.sub === s.def.tag + ' TO CONFIRM') s.sub = 'TO CONFIRM';
+      if (s.cutDays !== undefined) s.cutTone = cutTone(s.cutDays);
+    });
+  }
+
+  // ================================================================ v2.7 — notifications, a page of their own
+  // The whole page scrolls (no box inside a box); grouped by day; older alerts load as you reach the end.
+  let notifObs = null;
+  const notifKey = (x) => x.t + '|' + x.job + '|' + x.kind + '|' + x.from;
+  function notifAll() {
+    const n = state.notif || { items: [] }, have = new Set((n.items || []).map(notifKey));
+    return (n.items || []).concat((state.notifOld || []).filter((x) => !have.has(notifKey(x))));
+  }
+  function notifDay(t, t0) { const d = dayOf(t), n = days(d, t0); return n === 0 ? 'TODAY' : n === 1 ? 'YESTERDAY' : n < 7 ? DOW_UP[d.getDay()] + ' · ' + fmt(d) : fmt(d, true); }
+  function markNotifSeen() {
+    const n = state.notif; if (!n || !notifUnread()) return;
+    n.seen = Math.max(n.seen || 0, ...n.items.map((x) => x.t));         // server time, not this device's clock
+    drawBadges();
+    api.call('ethixNotifSeen').catch(() => {});
+  }
+  function notifRow(x, seen) {
+    return '<li><button type="button" class="notif' + (x.t > seen ? ' is-new' : '') + (x.kind === 'delay' ? ' is-delay' : '') + '" ' + (/^EQ-/.test(x.job) ? 'data-enq' : x.kind === 'costing' ? 'data-cost' : 'data-job') + '="' + esc(x.job) + '">' +
+      '<span class="avatar' + (x.kind === 'note' ? ' is-other' : '') + '">' + esc(initials(x.from)) + '</span>' +
+      '<span class="nt-body"><span class="nt-head">' + notifText(x) + ' <span class="nt-job">' + esc(x.job) + '</span></span><span class="nt-text">' + esc(x.text) + '</span></span>' +
+      '<span class="nt-time">' + esc(hm(x.t)) + '</span></button></li>';
+  }
+  function renderNotifPage(first) {
+    const t0 = today0(), anim = first ? ' reveal' : '';
+    if (first) state.notifSeenShown = (state.notif && state.notif.seen) || 0;
+    markNotifSeen();
+    const items = notifAll(), seen = state.notifSeenShown || 0;
+    const groups = [];
+    items.forEach((x) => { const k = notifDay(x.t, t0), g = groups[groups.length - 1]; if (g && g.k === k) g.list.push(x); else groups.push({ k, list: [x] }); });
+    const more = state.notifMore === undefined ? !!(state.notif && state.notif.more) : state.notifMore;
+    const fresh = items.filter((x) => x.t > seen).length;
+    $('#view').innerHTML = '<div class="wrap notif-page no-seg">' +
+      '<header class="page-head' + anim + '"><div class="head-main"><div class="meta-line"><span>NOTIFICATIONS · ' + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span>' + (fresh ? '<span class="meta-chip is-ready"><b>' + fresh + '</b> NEW</span>' : '') + '</div><h1 class="greeting">Notifications</h1></div>' +
+        '<div class="head-actions"><button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button></div></header>' +
+      (items.length ? groups.map((g, i) => '<section class="notif-sec' + anim + '" style="--d:' + Math.min(40 + i * 30, 220) + 'ms" aria-label="' + esc(g.k) + '"><div class="tile-head"><h2 class="tile-title">' + esc(g.k) + ' <span class="tile-count">' + g.list.length + '</span></h2></div><ol class="notif-list">' + g.list.map((x) => notifRow(x, seen)).join('') + '</ol></section>').join('') +
+          (more ? '<div class="notif-more"><button type="button" class="btn-ghost" data-act="notif-more"' + (state.notifLoading ? ' disabled' : '') + '>' + (state.notifLoading ? 'Loading older…' : 'Show older') + '</button></div>' : '<div class="jobs-end">THAT’S EVERYTHING</div>')
+        : '<section class="tile">' + empty('bell', isSales() ? 'Updates, delays and enquiry replies from Customer Service show here.' : 'Notes, costing news and enquiries from sales show here.') + '</section>') +
+      '</div>';
+    notifWatch();
+  }
+  function notifOlder() {
+    if (state.notifLoading) return;
+    const all = notifAll(); if (!all.length) return;
+    state.notifLoading = true; rerender();
+    api.call('ethixNotifMore', [all[all.length - 1].t]).then((res) => {
+      state.notifOld = (state.notifOld || []).concat((res && res.items) || []);
+      state.notifMore = !!(res && res.more);
+    }).catch((e) => { if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'Older notifications need the v2.7 Code.gs update.' : e.message, { error: true }); state.notifMore = false; })
+      .finally(() => { state.notifLoading = false; if (state.route && state.route.name === 'notif') rerender(); });
+  }
+  function notifWatch() {
+    if (notifObs) { notifObs.disconnect(); notifObs = null; }
+    const b = $('[data-act="notif-more"]'); if (!b || !('IntersectionObserver' in window)) return;
+    notifObs = new IntersectionObserver((en) => { if (en.some((x) => x.isIntersecting)) notifOlder(); }, { root: $('#view'), rootMargin: '0px 0px 240px 0px' });
+    notifObs.observe(b);
+  }
+
+  // ================================================================ v2.7 — the job page as widgets
+  // Facts on top (key dates · cargo · people), then notes and follow-up, then history and costing.
+  // Every row is solid — the cards in a row share one height; the phone stacks them in this order.
+  const DATE_LABEL = { 'ETD POL': 'ETD', 'ETA POD': 'ETA', 'SI CUTOFF': 'SI cutoff', 'ED CUTOFF': 'ED cutoff', 'DG CUTOFF': 'DG cutoff' };
+  function isDateAction(a) {
+    a = String(a || '');
+    if (/^CHANGED /.test(a) || /^(MARKED|REMOVED) DELAY/.test(a)) return true;
+    if (/^SET (ETD POL|ETA POD|SI CUTOFF|ED CUTOFF|DG CUTOFF) TO /.test(a)) return true;
+    const m = a.match(/^UPDATED (.+)$/);
+    return !!(m && m[1].split(', ').every((x) => DATE_LABEL[x]));
+  }
+  function friendlyDates(text) {
+    const day = (v) => { if (!v || v === '(BLANK)') return '—'; const d = parseDate(v); return d ? fmt(d) : v; };
+    return 'changed ' + String(text).split('; ').map((p) => { const m = p.match(/^(.+?) (\S+) → (\S+)$/); return m ? (DATE_LABEL[m[1]] || nice(m[1])) + ' ' + day(m[2]) + ' → ' + day(m[3]) : p.toLowerCase(); }).join(' · ');
+  }
+  function storySplit(no) {
+    const items = storyItems(no);
+    if (!items) return null;
+    const notes = [], hist = [];
+    items.forEach((x) => { if (x.note !== undefined || isDateAction(x.raw)) notes.push(x); else hist.push(x); });
+    return { notes, hist };
+  }
+  function storyLi(e) {
+    const date = e.note === undefined && isDateAction(e.raw);
+    return '<li' + (date ? ' class="is-date"' : '') + '><div class="st-when">' + esc(stampText(e.at)) + '</div><span class="avatar' + (e.who === state.user ? '' : ' is-other') + '">' + esc(initials(e.who || '?')) + '</span><div class="st-body"><div><strong>' + esc(e.who || '—') + '</strong> ' +
+      (e.note !== undefined ? 'added a note' : (date ? icon('calendar', 13) : '') + esc(e.what)) + '</div>' + (e.note !== undefined ? '<div class="st-note">' + esc(e.note) + '</div>' : '') + '</div></li>';
+  }
+  function storyBlock(list, limit, tab, emptyText) {
+    if (!list) return '<div class="story-loading"><span class="sk"></span><span class="sk"></span><span class="sk short"></span></div>';
+    if (!list.length) return '<div class="tile-empty">' + icon('clock', 22) + '<span>' + esc(emptyText) + '</span></div>';
+    return '<ol class="story">' + (limit ? list.slice(0, limit) : list).map(storyLi).join('') + '</ol>' +
+      (limit && list.length > limit ? '<button type="button" class="tile-link wg-more" data-tab="' + tab + '">See all ' + list.length + '</button>' : '');
+  }
+  function notesWidget(j, limit) {
+    const sp = storySplit(j.jobNo);
+    const share = isSales() ? (j.cs ? 'Shared with ' + j.cs + ' (Customer Service)' : '') : j.sales ? 'Shared with ' + j.sales + ' (sales)' : '';
+    return '<section class="tile story-card wg-notes" aria-labelledby="notesTitle"><div class="tile-head"><h2 class="tile-title" id="notesTitle">NOTES</h2>' + (share ? '<span class="small">' + esc(share) + '</span>' : '') + '</div>' +
+      noteBox() + storyBlock(sp && sp.notes, limit, 'notes', canNote() ? 'No notes yet. Notes you add, and every ETD, ETA and cutoff change, show here.' : 'No notes yet.') + '</section>';
+  }
+  function historyWidget(j, limit) {
+    const sp = storySplit(j.jobNo);
+    return '<section class="tile story-card wg-history" aria-labelledby="histTitle"><div class="tile-head"><h2 class="tile-title" id="histTitle">HISTORY</h2>' + (sp && sp.hist.length ? '<span class="tile-count">' + sp.hist.length + '</span>' : '') + '</div>' +
+      storyBlock(sp && sp.hist, limit, 'history', 'Every update to this job shows here.') + '</section>';
+  }
+  function keyDatesW(j, t0) {
+    const met = (f) => j[f] && ['SUBMITTED', 'APPROVED', 'PASSED/PAID', 'PASSED'].includes(j[f]);
+    const cut = (d, f) => {
+      if (!d) return { v: '—' };
+      if (f && met(f)) return { v: fmt(d) + ' · MET', tone: 'met' };
+      const n = days(t0, d), sailed = j.etd && j.etd <= t0;
+      return { v: fmt(d) + (n < 0 ? ' · PASSED' : n === 0 ? ' · TODAY' : n === 1 ? ' · TOMORROW' : ''), tone: sailed ? '' : cutTone(n) };
+    };
+    const rows = [['Job opened', { v: fmt(j.opened, true) }]];
+    if (['EXPORT', 'CROSS'].includes(j.cat) && j.type !== 'CRR') rows.push(['SI cutoff', cut(j.siCut, 'sido')]);
+    if (j.cat === 'EXPORT') rows.push(['ED cutoff', cut(j.edCut, 'ed')]);
+    if (j.dg === 'DG' && j.cat === 'EXPORT') rows.push(['DG cutoff', cut(j.dgCut, null)]);
+    if (j.mode !== 'misc') {
+      rows.push([(j.mode === 'courier' ? 'Pick-up' : 'ETD') + (j.pol ? ' ' + nice(j.pol) : ''), { v: fmt(j.etd, true) }]);
+      rows.push([(j.mode === 'courier' ? 'Delivery' : 'ETA') + (j.pod ? ' ' + nice(j.pod) : ''), { v: fmt(j.eta, true) }]);
+    }
+    if (j.cat === 'IMPORT') {
+      rows.push(['Delivered', { v: j.raw.delivery === NA ? 'NOT NEEDED' : fmt(j.delivery, true) }]);
+      if (j.lineFreeRaw) rows.push(['Line free time', { v: /^\d+$/.test(j.lineFreeRaw) ? j.lineFreeRaw + ' DAYS' : j.lineFreeRaw }]);
+      if (j.portFreeRaw) rows.push(['Port free time', { v: /^\d+$/.test(j.portFreeRaw) ? j.portFreeRaw + ' DAYS' : j.portFreeRaw }]);
+      if (j.type !== 'AFI') rows.push(['Original docs', { v: j.docs || '—' }]);
+    }
+    return '<section class="tile side-card" aria-labelledby="datesTitle"><div class="tile-head"><h2 class="tile-title" id="datesTitle">KEY DATES</h2></div>' +
+      rows.map((r) => '<div class="kv"><span class="kv-k">' + esc(r[0]) + '</span><span class="kv-v' + (r[1].tone && r[1].tone !== 'calm' ? ' kd-' + r[1].tone : '') + '">' + esc(r[1].v) + '</span></div>').join('') + '</section>';
+  }
+  function jobWidgets(j, t0) {
+    const rows = [
+      [keyDatesW(j, t0), cargoCard(j), peopleCard(j)],
+      [freeCard(j, t0) ? '<div class="ft-side wg-free">' + freeCard(j, t0) + '</div>' : '', delayCard(j)],
+      [notesWidget(j, 5), followCard(j)],
+      [historyWidget(j, 5), costCard(j)]
+    ];
+    return '<div class="wgrid">' + rows.map((r) => {
+      r = r.filter(Boolean);
+      return r.map((h, i) => '<div class="wg wg-' + (r.length === 3 ? 1 : r.length === 2 ? (i === 0 ? 2 : 1) : 3) + (/^<div class="ft-side/.test(h) ? ' wg-ft' : '') + '">' + h + '</div>').join('');
+    }).join('') + '</div>';
+  }
+
+  // ================================================================ v2.7 — follow-up remarks (several a day)
+  function remarksToday(f, t0) { return f.checks.filter((c) => c[2] && days(dayOf(c[0]), t0) === 0); }
+  function remarkList(list, max) {
+    const show = max ? list.slice(0, max) : list;
+    return '<ol class="fu-remarks">' + show.map((c) => '<li><span class="fr-when">' + esc(hm(c[0])) + (c[1] !== state.user ? ' · ' + esc(nice(c[1])) : '') + '</span><span class="fr-text">' + esc(c[2]) + '</span></li>').join('') + '</ol>' +
+      (max && list.length > max ? '<span class="fr-more">+' + (list.length - max) + ' more today</span>' : '');
+  }
+  // The newest remark of the day the job was last checked (and how many that day).
+  function lastRemark(f) {
+    if (!f.last) return null;
+    const d0 = +dayOf(f.last[0]);
+    const list = f.checks.filter((c) => c[2] && +dayOf(c[0]) === d0).sort((a, b) => b[0] - a[0]);
+    return list.length ? { text: list[0][2], n: list.length } : null;
+  }
+
+  // ================================================================ v2.7 — cutoffs worked out from ETD
+  // Same job types as the old ERP (SFEF, SFEL, AFE): ED cutoff = ETD − 2 · SI cutoff = ETD − 4 (DG: ETD − 5)
+  // · DG cutoff = ETD − 5. A cutoff you typed yourself is kept; one that still matches the old ETD moves.
+  // Sea import FCL, non-DG: port free time starts at 9 days when ETA is entered (as the old ERP did).
+  const CUT_TYPES = ['SFEF', 'SFEL', 'AFE'];
+  function cutPlan(etd, dg) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(etd || '')); if (!m) return null;
+    const d = new Date(+m[1], +m[2] - 1, +m[3]);
+    return { edCut: iso(addDays(d, -2)), siCut: iso(addDays(d, dg ? -5 : -4)), dgCut: dg ? iso(addDays(d, -5)) : '' };
+  }
+  function formType(form) { return form.id === 'jobForm' ? (state.newJob && state.newJob.type) || '' : ((form.querySelector('[name="type"]') || {}).value || ''); }
+  function flashField(el) { el.classList.remove('is-auto'); void el.offsetWidth; el.classList.add('is-auto'); setTimeout(() => el.classList.remove('is-auto'), 1600); }
+  function autoCuts(form) {
+    if (!CUT_TYPES.includes(formType(form))) return;
+    const field = (k) => form.querySelector('[name="' + k + '"]');
+    const dg = (field('dg') || {}).value === 'DG';
+    if (!form._cut) form._cut = form.id === 'editForm' && state.editing ? (cutPlan(state.editing.initial.etd, state.editing.initial.dg === 'DG') || {}) : {};
+    const was = form._cut, plan = cutPlan((field('etd') || {}).value, dg);
+    if (!plan) return;
+    const moved = [], kept = [];
+    ['edCut', 'siCut', 'dgCut'].forEach((k) => {
+      const el = field(k); if (!el || el.type !== 'date') return;
+      if (k === 'dgCut' && !dg) { if (el.value && el.value === was.dgCut) el.value = ''; return; }
+      if (!el.value || el.value === was[k]) { if (el.value !== plan[k]) { el.value = plan[k]; flashField(el); moved.push(k); } }
+      else if (el.value !== plan[k]) kept.push(k);
+    });
+    showCutHint(form, plan, kept, dg);
+  }
+  function showCutHint(form, plan, kept, dg) {
+    const field = (k) => form.querySelector('[name="' + k + '"]');
+    form._cut = plan;
+    const grid = field('etd') && field('etd').closest('.fgrid'); if (!grid) return;
+    let hint = form.querySelector('.cut-hint');
+    if (!hint) { hint = document.createElement('p'); hint.className = 'cut-hint'; grid.after(hint); }
+    const name = { edCut: 'ED cutoff', siCut: 'SI cutoff', dgCut: 'DG cutoff' };
+    const day = (v) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v); return m ? fmt(new Date(+m[1], +m[2] - 1, +m[3])) : v; };
+    hint.innerHTML = icon('clock', 14) + '<span>Cutoffs worked out from ETD: ED − 2 days, SI − ' + (dg ? 5 : 4) + ' days' + (dg ? ', DG − 5 days' : '') + '. ' +
+      (kept.length ? kept.map((k) => 'Kept the ' + name[k] + ' you typed — <button type="button" class="link-btn" data-cut-use="' + k + '" data-v="' + plan[k] + '">use ' + day(plan[k]) + '</button>.').join(' ') + ' '
+        : 'Change any date if the line’s cutoff differs.') + '</span>';
+  }
+  function autoPortFree(form) {
+    if (formType(form) !== 'SFIF') return;
+    const dg = form.querySelector('[name="dg"]'), eta = form.querySelector('[name="eta"]'), pf = form.querySelector('[name="portFree"]');
+    if (!pf || !eta || !eta.value || (dg && dg.value === 'DG') || pf.value) return;
+    pf.value = '9'; flashField(pf);
+  }
+
+  // ================================================================ v2.7 — wiring
+  let slimRaf = 0;
+  function initV27() {
+    const view = $('#view');
+    view.addEventListener('scroll', () => { if (state.route && state.route.name === 'costjob' && !slimRaf) slimRaf = requestAnimationFrame(() => { slimRaf = 0; costSlimSync(); }); }, { passive: true });
+    view.addEventListener('click', (e) => {
+      const r = state.route; if (!r || r.name !== 'notif') return;
+      if (e.target.closest('[data-act="notif-more"]')) { notifOlder(); return; }
+      const q = e.target.closest('[data-enq]'); if (q) { const id = q.dataset.enq; go('#/enquiries'); setTimeout(() => openEnquiry(id), 40); }
+    });
+    $('#drawerBody').addEventListener('click', (e) => {
+      const u = e.target.closest('[data-cut-use]'); if (!u || state.overlay !== 'form') return;
+      const f = u.closest('form'), el = f && f.querySelector('[name="' + u.dataset.cutUse + '"]'); if (!el) return;
+      el.value = u.dataset.v; flashField(el);
+      const dg = (f.querySelector('[name="dg"]') || {}).value === 'DG', plan = f._cut || {};
+      const kept = ['edCut', 'siCut', 'dgCut'].filter((k) => { const x = f.querySelector('[name="' + k + '"]'); return x && x.value && plan[k] && x.value !== plan[k] && (k !== 'dgCut' || dg); });
+      showCutHint(f, plan, kept, dg);
+    });
+    $('#drawerBody').addEventListener('change', (e) => {
+      if (state.overlay !== 'form') return;
+      const f = e.target.form; if (!f || (f.id !== 'jobForm' && f.id !== 'editForm')) return;
+      if (['etd', 'dg', 'type'].includes(e.target.name)) autoCuts(f);
+      if (['eta', 'dg'].includes(e.target.name)) autoPortFree(f);
+    });
   }
 
   // ================================================================ wiring
@@ -3952,7 +4342,6 @@
       if (r.name === 'job' && e.target.closest('[data-act="duplicate"]')) { duplicateJob(r.jobNo); return; }
       if (r.name === 'costing') {
         const tb = e.target.closest('[data-cost-tab]'); if (tb) { state.costUi.tab = tb.dataset.costTab; rerender(); return; }
-        const sc = e.target.closest('[data-scope]'); if (sc && canEdit()) { state.scope = sc.dataset.scope; store.set('ethix.v2.scope.' + state.user, state.scope); rerender(); }
         return;
       }
       if (r.name !== 'costjob') return;
@@ -3965,14 +4354,22 @@
       if (e.target.closest('[data-act="cost-done"]')) { costDone(j); return; }
       if (e.target.closest('[data-act="cost-unlock"]')) { costUnlock(j); return; }
       if (e.target.closest('[data-act="cost-xlsx"]')) { exportCost(j); return; }
-      if (e.target.closest('[data-act="cost-rate"]')) { costRate(j); return; }
       if (e.target.closest('[data-act="cost-log"]')) { C.showLog = !C.showLog; rerender(); return; }
       if (e.target.closest('[data-act="cost-add"]')) { addCostLine(j, ''); return; }
       const qc = e.target.closest('[data-quick-charge]'); if (qc) { addCostLine(j, qc.dataset.quickCharge); return; }
       const un = e.target.closest('[data-unnote]'); if (un) { C.draft.notes.splice(+un.dataset.unnote, 1); C.dirty = C.dirty || true; rerender(); return; }
       if (!costCanEdit(j, C.data)) return;
+      const md = e.target.closest('[data-cost-mode]');
+      if (md) { if (C.draft.mode !== md.dataset.costMode) { C.draft.mode = md.dataset.costMode === 'ALLIN' ? 'ALLIN' : 'ITEM'; C.dirty = true; rerender(); } return; }
       const cur = e.target.closest('[data-cur]');
-      if (cur) { const row = cur.closest('[data-line]'); const l = C.draft.lines.find((x) => x.id === row.dataset.line); if (!l) return; const k = cur.dataset.cur; l[k] = l[k] === 'USD' ? 'AED' : 'USD'; cur.textContent = l[k]; cur.classList.toggle('is-usd', l[k] === 'USD'); cur.setAttribute('aria-label', 'Currency: ' + l[k] + '. Change'); costDirty(j); return; }
+      if (cur) {
+        const row = cur.closest('[data-line]'); const l = C.draft.lines.find((x) => x.id === row.dataset.line); if (!l) return;
+        const k = cur.dataset.cur.charAt(0);
+        setCur(l, k, l[k + 'c'] === 'USD' ? 'AED' : 'USD');
+        C.dirty = true; rerender();
+        const r = document.getElementById('cl_' + l.id + '_' + k + (l[k + 'c'] === 'USD' ? 'x' : 'r')); if (r) r.focus();
+        return;
+      }
       const del = e.target.closest('[data-del]');
       if (del) {
         const i = C.draft.lines.findIndex((x) => x.id === del.dataset.del); if (i < 0) return;
@@ -3990,6 +4387,7 @@
       if (f === 'basis') return;
       l[f] = e.target.value;
       if (['qty', 'br', 'sr'].includes(f)) e.target.classList.toggle('is-bad', isNaN(num6(e.target.value)));
+      if (f === 'bx' || f === 'sx') { e.target.classList.toggle('is-bad', !!e.target.value.trim() && !fxOk(e.target.value)); if (f === 'bx') l.bxAuto = false; }
       costDirty(j);
     });
     view.addEventListener('change', (e) => {
@@ -3998,8 +4396,16 @@
       const row = e.target.closest('[data-line]'); const j = findJob(r.jobNo); const C = j && costFor(j.jobNo); if (!row || !C || !C.draft) return;
       const l = C.draft.lines.find((x) => x.id === row.dataset.line); if (!l) return;
       if (f === 'basis') { l.basis = e.target.value; l.qty = costQtyFor(j, l.basis, l.qty); const q = document.getElementById('cl_' + l.id + '_qty'); if (q) q.value = l.qty; costDirty(j); return; }
-      if (f === 'charge') { l.charge = e.target.value.toUpperCase().replace(/\s+/g, ' ').trim(); e.target.value = l.charge; if (oceanDefaults(j, l)) { C.dirty = true; rerender(); } }
-      if (f === 'vendor') { l.vendor = e.target.value.toUpperCase().replace(/\s+/g, ' ').trim(); e.target.value = l.vendor; }
+      if (f === 'charge') {
+        const was = l.charge;
+        l.charge = upq(e.target.value); e.target.value = l.charge;
+        if (l.charge && l.charge !== was) {
+          const before = JSON.stringify(l), extra = chargeRule(j, l);
+          if (extra) C.draft.lines.splice(C.draft.lines.indexOf(l) + 1, 0, extra);
+          if (extra || JSON.stringify(l) !== before) { C.dirty = true; rerender(); const r = document.getElementById('cl_' + l.id + '_br'); if (r) r.focus(); }
+        }
+      }
+      if (f === 'vendor') { l.vendor = upq(e.target.value); e.target.value = l.vendor; if (vendorRule(l)) { C.dirty = true; rerender(); } }
     });
     view.addEventListener('submit', (e) => {
       const fm = e.target.closest('[data-act="cost-note"]'); if (!fm) return;
@@ -4029,6 +4435,7 @@
     document.addEventListener('input', onList, true);
     document.addEventListener('focusin', onList, true);
     window.addEventListener('beforeunload', (e) => { if (state.cost && state.cost.dirty) { e.preventDefault(); e.returnValue = ''; } });
+    initV27();
   }
 
   // ------------------------------------------------------------ lists & menus
@@ -4099,7 +4506,7 @@
       else { rerender(); refreshOverlay(); }
       updateNav();
       const fresh = state.notif ? state.notif.items.filter((x) => x.t > newest && x.t > (state.notif.seen || 0)) : [];
-      state.nudged = fresh.length && notifUnread() > before && state.overlay !== 'drawer';
+      state.nudged = fresh.length && notifUnread() > before && state.overlay !== 'drawer' && !(state.route && state.route.name === 'notif');
       if (state.nudged) toast(fresh.length === 1 ? nice(fresh[0].from) + ' · ' + fresh[0].job + ': ' + fresh[0].text : fresh.length + ' new notifications', { action: { label: 'View', fn: () => openNotifications() } });
       if (state.route && state.route.name === 'job') loadStory(state.route.jobNo, true);
       if (manual && !state.nudged) toast('Up to date');
