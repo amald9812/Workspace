@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing — v2.7)
+   enquiries, follow-ups, delays, close & archive, costing — v2.8)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -761,9 +761,7 @@
     state.user = (boot.me && boot.me.user) || name;
     state.role = normRole((boot.me && boot.me.role) || role, state.user);
     applyBoot(boot);
-    const savedScope = state.resumedNow ? store.get('ethix.v2.scope.' + state.user, null) : null;   // v2.7: a new sign-in starts on My jobs
-    const hasMine = state.jobs.some((j) => j.active && j.cs === state.user);
-    state.scope = canEdit() ? savedScope || (hasMine ? 'mine' : 'all') : 'all';
+    state.scope = canEdit() ? 'mine' : 'all';   // v2.8: Customer Service sees their own jobs only
     stopVoyage();
     document.body.classList.remove('is-signin');
     document.body.dataset.role = state.role.toLowerCase();
@@ -872,7 +870,7 @@
     const r = state.route ? state.route.name : 'home';
     const cur = r === 'job' ? 'jobs' : r === 'costjob' ? 'costing' : r;
     $$('[data-nav]').forEach((b) => { if (b.dataset.nav === cur) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
-    const c = $('#navList [data-nav="jobs"] .count'); if (c) c.textContent = state.jobs.filter((j) => j.active).length;
+    const c = $('#navList [data-nav="jobs"] .count'); if (c) c.textContent = scoped().filter((j) => j.active).length;   // v2.8: your own jobs
     const p = $('#navList [data-nav="admin"] .count'); if (p && state.admin) p.textContent = state.admin.users.length;
     const setCount = (id, n) => { const el = $('#navList [data-nav="' + id + '"] .count'); if (el) { el.textContent = n; el.hidden = !n; } };
     if (canEdit()) { setCount('round', roundRows(today0()).due.length); setCount('enquiries', enqNew().length); }
@@ -887,7 +885,7 @@
     if (s < 60) return 'SYNCED JUST NOW';
     return 'SYNCED ' + Math.round(s / 60) + ' MIN AGO';
   }
-  function scoped() { return canEdit() && state.scope === 'mine' ? state.jobs.filter((j) => j.cs === state.user) : state.jobs; }
+  function scoped() { return scopedJobs8(); }   // v2.8: your own jobs (Customer Service); sales get their own from the server
 
   function track(j, w) {
     const pct = Math.round((j.pct || 0) * 1000) / 10;
@@ -991,12 +989,11 @@
     const searchVal = $('#searchInput') ? $('#searchInput').value : '';
     const view = $('#view');
     view.innerHTML =
-      '<div class="wrap home">' +
+      '<div class="wrap home no-seg">' +
       '<header class="page-head' + anim + '" style="--d:0ms">' +
         '<div class="head-main"><div class="meta-line"><span>' + (isSales() ? 'SALES · ' : '') + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span>' + homeChips() + '</div>' +
         '<h1 class="greeting">' + greeting() + ', ' + esc(state.user === 'MASTER' ? 'Admin' : nice(state.user)) + '</h1></div>' +
         '<div class="head-actions">' +
-          (canEdit() ? '<div class="seg" role="group" aria-label="Whose jobs"><button type="button" data-scope="mine" aria-pressed="' + (state.scope === 'mine') + '"><span class="l-full">My jobs</span><span class="l-short">Mine</span></button><button type="button" data-scope="all" aria-pressed="' + (state.scope === 'all') + '"><span class="l-full">Everyone</span><span class="l-short">All</span></button></div>' : '') +
           '<div class="search-wrap"><label class="search">' + icon('search') + '<input id="searchInput" type="search" placeholder="Job no, customer, port…" aria-label="Search jobs" autocomplete="off" value="' + esc(searchVal) + '"><kbd>/</kbd></label><div class="search-results glass" id="searchResults" hidden></div></div>' +
           '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' +
         '</div>' +
@@ -1037,7 +1034,7 @@
     if (u.status === 'closed') return closedList();
     if (u.status === 'ready' && !canEdit()) u.status = 'active';
     const q = u.q.trim().toUpperCase();
-    let list = scoped().filter((j) => inCat(j, u.cat) && inStatus(j, u.status));
+    let list = (u.status === 'unassigned' ? unassigned8() : scoped().filter((j) => inStatus(j, u.status))).filter((j) => inCat(j, u.cat));
     if (q) list = list.filter((j) => (j.jobNo + ' ' + j.customer + ' ' + j.vendor + ' ' + j.pol + ' ' + j.pod + ' ' + j.cs + ' ' + j.sales + ' ' + j.type + ' ' + j.remarks + ' ' + j.against).toUpperCase().includes(q));
     const t = (d) => (d ? d.getTime() : 9e15);
     const sl = (j) => num(j.sl);
@@ -1073,7 +1070,7 @@
     $('#view').innerHTML =
       '<div class="wrap jobs-page">' +
       '<header class="page-head jobs-head' + anim + '">' +
-        '<div class="head-main"><div class="meta-line"><span>' + active.length + ' ACTIVE · ' + active.filter((j) => j.hold).length + ' ON HOLD · ' + active.filter((j) => j.atSea).length + ' AT SEA</span></div><h1 class="greeting">' + (isSales() ? 'My jobs' : 'Jobs') + '</h1></div>' +
+        '<div class="head-main"><div class="meta-line"><span>' + active.length + ' ACTIVE · ' + active.filter((j) => j.hold).length + ' ON HOLD · ' + active.filter((j) => j.atSea).length + ' AT SEA' + (unassigned8().length ? ' · ' + unassigned8().length + ' UNASSIGNED' : '') + '</span></div><h1 class="greeting">' + (isSales() || canEdit() ? 'My jobs' : 'Jobs') + '</h1></div>' +
         '<div class="head-actions">' +
           '<label class="search">' + icon('search') + '<input id="jobsSearch" type="search" placeholder="Job no, customer, port…" aria-label="Search jobs" autocomplete="off" value="' + esc(keepQ) + '"></label>' +
           (canEdit() ? '<button type="button" class="btn-brutal btn-icon" data-act="new-job">' + icon('plus', 16) + '<span>NEW JOB</span></button>' : '') +
@@ -1082,8 +1079,7 @@
       '<div class="jobs-filters' + anim + '" style="--d:40ms">' +
         '<div class="chips-row" role="group" aria-label="Job category">' + CATS.map(([id, label]) => '<button type="button" class="fchip" data-cat="' + id + '" aria-pressed="' + (u.cat === id) + '">' + label + '</button>').join('') + '</div>' +
         '<div class="filter-tools">' +
-          (canEdit() ? '<button type="button" class="toggle" data-act="mine" aria-pressed="' + (state.scope === 'mine') + '"><span class="toggle-track"><span class="toggle-thumb"></span></span>My jobs only</button>' : '') +
-          '<label class="select-pill"><span>Show</span><select id="jobsStatus">' + [['active', 'Active']].concat(canEdit() ? [['ready', 'Ready to close']] : [], [['hold', 'On hold'], ['all', 'All in tracker'], ['closed', 'Closed jobs']]).map(([v, l]) => '<option value="' + v + '"' + (u.status === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></label>' +
+          '<label class="select-pill"><span>Show</span><select id="jobsStatus">' + [['active', 'Active']].concat(canEdit() ? [['ready', 'Ready to close']] : [], canEdit() && (unassigned8().length || u.status === 'unassigned') ? [['unassigned', 'Unassigned · ' + unassigned8().length]] : [], [['hold', 'On hold'], ['all', 'All in tracker'], ['closed', 'Closed jobs']]).map(([v, l]) => '<option value="' + v + '"' + (u.status === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></label>' +
           '<label class="select-pill"><span>Sort</span><select id="jobsSort">' + [['urgent', 'Most urgent'], ['newest', 'Newest'], ['etd', 'ETD'], ['eta', 'ETA']].map(([v, l]) => '<option value="' + v + '"' + (u.sort === v ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></label>' +
         '</div>' +
       '</div>' +
@@ -1115,9 +1111,8 @@
     view.addEventListener('click', (e) => {
       const c = e.target.closest('[data-cat]');
       if (c) { state.jobsUi.cat = c.dataset.cat; state.jobsUi.limit = 120; rerender(); return; }
-      if (e.target.closest('[data-act="mine"]') && canEdit()) { state.scope = state.scope === 'mine' ? 'all' : 'mine'; store.set('ethix.v2.scope.' + state.user, state.scope); rerender(); return; }
       if (e.target.closest('[data-act="jobs-more"]')) { state.jobsUi.limit += 120; rerender(); return; }
-      if (e.target.closest('[data-act="jobs-clear"]')) { Object.assign(state.jobsUi, { cat: 'all', status: 'all', q: '', limit: 120 }); if (state.scope === 'mine') { state.scope = 'all'; store.set('ethix.v2.scope.' + state.user, 'all'); } rerender(); }
+      if (e.target.closest('[data-act="jobs-clear"]')) { Object.assign(state.jobsUi, { cat: 'all', status: 'all', q: '', limit: 120 }); rerender(); }
     });
   }
 
@@ -1173,9 +1168,9 @@
     const dg = j.dg === 'DG' && j.dgCut && j.cat === 'EXPORT' && !(j.etd && j.etd <= t0) ? '<div class="vh-dg">DG CUTOFF ' + fmt(j.dgCut) + '</div>' : '';
     return '<section class="vhero is-' + mode + (j.hold ? ' is-hold' : '') + (j.arrived ? ' is-arrived' : '') + (j.atSea ? ' is-moving' : '') + '" style="--o:' + w[0] + '%;--s:' + w[1] + '%;--d:' + w[2] + '%" aria-label="' + esc('Voyage for job ' + j.jobNo + ' from ' + (j.pol || 'origin') + ' to ' + (j.pod || 'destination') + ': ' + vt.kicker.toLowerCase()) + '">' +
       '<div class="vh-sky">' +
-        '<div class="vh-port vh-pol"><div class="kicker">ORIGIN · POL</div><div class="vh-name">' + esc(j.pol || '—') + '</div><div class="vh-date">' + esc(portLine(j, 'o')) + '</div>' + dg + '</div>' +
+        '<div class="vh-port vh-pol"><div class="kicker">ORIGIN · POL</div><div class="vh-name">' + esc(j.pol || '—') + '</div><div class="vh-date">' + esc(portLine(j, 'o')) + '</div>' + portClock(j.pol, 'hero') + dg + '</div>' +
         '<div class="vh-mid"><div class="kicker">' + esc(vt.kicker) + '</div><div class="vh-name">' + esc(vt.title) + '</div><div class="vh-date">' + esc(vt.sub) + '</div></div>' +
-        '<div class="vh-port vh-pod"><div class="kicker">DESTINATION · POD</div><div class="vh-name">' + esc(j.pod || '—') + '</div><div class="vh-date">' + esc(portLine(j, 'd')) + '</div></div>' +
+        '<div class="vh-port vh-pod"><div class="kicker">DESTINATION · POD</div><div class="vh-name">' + esc(j.pod || '—') + '</div><div class="vh-date">' + esc(portLine(j, 'd')) + '</div>' + portClock(j.pod, 'hero') + '</div>' +
         '<span class="crane crane-o" aria-hidden="true"><i></i><b></b></span><span class="crane crane-d" aria-hidden="true"><i></i><b></b></span>' +
         (vt.bubble ? '<div class="vh-bubble" style="left:' + centre + '">' + esc(vt.bubble) + '</div>' : '') +
         '<div class="vh-mover is-' + mode + '" style="left:' + pos + '">' + (mode === 'air' ? PLANE_BIG : mode === 'road' ? VAN_BIG : SHIP_BIG) + '</div>' +
@@ -1196,7 +1191,7 @@
     const mode = j.mode === 'air' ? 'air' : j.mode === 'courier' ? 'road' : 'sea';
     const rail = (list) => list.length ? '<ol class="vc-stops">' + list.map((s, i) => '<li class="' + (i === list.length - 1 ? 'is-last' : '') + '">' + stopBtn(s, 'vc-stop') + '</li>').join('') + '</ol>' : '';
     return '<section class="vcard is-' + mode + (j.arrived ? ' is-arrived' : '') + (j.hold ? ' is-hold' : '') + '" aria-label="Voyage">' +
-      '<div class="vc-port"><div class="kicker">ORIGIN · POL</div><div class="vc-row"><span class="vc-name">' + esc(j.pol || '—') + '</span><span class="vc-date">' + esc(portLine(j, 'o')) + '</span></div></div>' +
+      '<div class="vc-port"><div class="kicker">ORIGIN · POL</div><div class="vc-row"><span class="vc-name">' + esc(j.pol || '—') + '</span><span class="vc-date">' + esc(portLine(j, 'o')) + '</span></div>' + portClock(j.pol, 'card') + '</div>' +
       rail(jr.origin) +
       '<div class="vc-sea" aria-hidden="false">' +
         '<div class="vc-progress" style="height:' + Math.round((j.hold ? 0 : j.arrived ? 1 : j.atSea ? j.pct : 0) * 100) + '%"></div>' +
@@ -1204,7 +1199,7 @@
         (jr.transit.length ? '<div class="vchips">' + jr.transit.map((s) => stopBtn(s, 'vchip')).join('') + '</div>' : '') +
         '<div class="vc-mover is-' + mode + '">' + (mode === 'air' ? PLANE_BIG : mode === 'road' ? VAN_BIG : SHIP_BIG) + '</div>' +
       '</div>' +
-      '<div class="vc-port is-dest"><div class="kicker">DESTINATION · POD</div><div class="vc-row"><span class="vc-name">' + esc(j.pod || '—') + '</span><span class="vc-date">' + esc(portLine(j, 'd')) + '</span></div></div>' +
+      '<div class="vc-port is-dest"><div class="kicker">DESTINATION · POD</div><div class="vc-row"><span class="vc-name">' + esc(j.pod || '—') + '</span><span class="vc-date">' + esc(portLine(j, 'd')) + '</span></div>' + portClock(j.pod, 'card') + '</div>' +
       rail(jr.dest) +
     '</section>';
   }
@@ -1274,7 +1269,7 @@
   }
   function peopleCard(j) {
     const person = (n, role, bg) => '<div class="person-row"><span class="avatar" style="' + bg + '">' + esc(initials(n || '?')) + '</span><div><div class="pr-name">' + esc(n || '—') + (n && n === state.user ? ' <span class="you">YOU</span>' : '') + '</div><div class="pr-role">' + role + '</div></div></div>';
-    return '<section class="tile side-card" aria-labelledby="peopleTitle"><div class="tile-head"><h2 class="tile-title" id="peopleTitle">PEOPLE</h2></div>' +
+    return '<section class="tile side-card" aria-labelledby="peopleTitle"><div class="tile-head"><h2 class="tile-title" id="peopleTitle">PEOPLE</h2>' + transferBtn(j) + '</div>' +
       person(j.cs, 'Customer Service', '') +
       (j.sales ? person(j.sales, 'Sales', 'background:var(--teal-tint);color:var(--teal-text)') : '') + '</section>';
   }
@@ -1288,6 +1283,7 @@
   const stampText = (d) => d ? fmt(d) + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') : '';
   function friendly(action) {
     const a = String(action || '');
+    if (/^TRANSFERRED THE JOB /.test(a)) return transferText(a);
     if (/^CHANGED /.test(a)) return friendlyDates(a.slice(8));
     let m = a.match(/^SET (.+?) TO (.+)$/);
     if (m) return 'set ' + m[1].toLowerCase().replace(/\bsi\b/g, 'SI').replace(/\bdo\b/g, 'DO').replace(/\bed\b/g, 'ED').replace(/\bbl\b/g, 'BL').replace(/\bawb\b/g, 'AWB').replace(/\betd\b/g, 'ETD').replace(/\beta\b/g, 'ETA').replace(/\bpol\b/g, 'POL').replace(/\bpod\b/g, 'POD').replace(/\bdg\b/g, 'DG').replace(/\bcs\b/g, 'CS') + ' to ' + m[2];
@@ -1427,6 +1423,7 @@
     const k = String(no).toUpperCase();
     const before = findJob(no);
     if (!before || !Object.keys(changes).length) return Promise.resolve(false);
+    if (!opts.datesOk) { const g8 = saveDateGate8(before, changes); if (g8) return g8.then((ok) => (ok === true ? saveJob(no, changes, Object.assign({}, opts, { datesOk: true })) : false)); }   // v2.8
     const prev = {};
     Object.keys(changes).forEach((f) => { prev[f] = asInput(f, before.raw[f]); });
     state.pending.set(k, Object.assign({}, state.pending.get(k) || {}, changes));
@@ -1867,7 +1864,7 @@
     else if (findJob(v.jobNo)) { fieldError('jobNo', 'Job ' + v.jobNo + ' already exists.'); bad = true; }
     if (!v.customer) { fieldError('customer', 'Customer is required.'); bad = true; }
     if (['SFEF', 'SFIF'].includes(t) && !(+v.c20 > 0) && !(+v.c40 > 0)) { fieldError('c20', 'Enter 20′ or 40′ containers.'); bad = true; }
-    if (v.etd && v.eta && v.eta < v.etd) { fieldError('eta', 'ETA is before ETD.'); bad = true; }
+    if (!bad) { const fd8 = formDateCheck8((k) => v[k], DATE_RULE_KEYS.filter((k) => v[k]), t === 'CRR' ? 'courier' : 'sea', state.newJob); if (fd8 === 'bad') bad = true; else if (fd8 === 'ask') return; }   // v2.8: strict dates
     if (bad) { const first = $('.field.has-error input, .field.has-error select', form); if (first) first.focus(); return; }
     if (v.dg !== 'DG') delete v.dgCut;
     const payload = Object.assign({ type: t }, v);
@@ -1902,7 +1899,7 @@
     loadLists();
     closeOverlays(true);
     const t = j.type;
-    const keys = ['customer', 'vendor', 'cs', 'sales', 'opened'];
+    const keys = ['customer', 'vendor', 'sales', 'opened'];   // v2.8: Customer Service moves by Transfer (People card)
     const route = TYPE_FIELDS[t] || [];
     const docs = FORM_STATUS[t] || ['sido', 'ed', 'bl'];
     const val = (k) => asInput(k, j.raw[k]);
@@ -1929,13 +1926,14 @@
     const v = readForm(form);
     $$('.field-err', form).forEach((e) => { e.textContent = ''; });
     if (!v.customer) { fieldError('customer', 'Customer is required.'); return; }
-    if (v.etd && v.eta && /^\d{4}/.test(v.etd) && /^\d{4}/.test(v.eta) && v.eta < v.etd) { fieldError('eta', 'ETA is before ETD.'); return; }
+    { const j8 = findJob(ed.no), touched = DATE_RULE_KEYS.filter((k) => k in v && String(v[k]) !== String(ed.initial[k] == null ? '' : ed.initial[k]));
+      if (formDateCheck8((k) => (k in v ? v[k] : j8 ? j8.raw[k] : ''), touched, j8 ? j8.mode : 'sea', ed) !== 'ok') return; }   // v2.8: strict dates
     const changes = {};
     Object.keys(v).forEach((k) => { if (k in ed.initial && String(v[k]) !== String(ed.initial[k])) changes[k] = v[k]; });
     closeOverlays();
     if (!Object.keys(changes).length) { toast('No changes to save'); return; }
     learnLocal('customers', [changes.customer]); learnLocal('vendors', [changes.vendor]); learnLocal('ports', [changes.pol, changes.pod]);
-    saveJob(ed.no, changes, { toast: Object.keys(changes).length === 1 ? fieldMeta(Object.keys(changes)[0], findJob(ed.no).type).label + ' saved' : Object.keys(changes).length + ' changes saved' });
+    saveJob(ed.no, changes, { datesOk: true, toast: Object.keys(changes).length === 1 ? fieldMeta(Object.keys(changes)[0], findJob(ed.no).type).label + ' saved' : Object.keys(changes).length + ' changes saved' });
   }
 
   function initForms() {
@@ -1988,6 +1986,7 @@
     if (x.kind === 'enq-update') return '<strong>' + esc(x.from) + '</strong> on enquiry';
     if (x.kind === 'delay') return '<strong>' + esc(x.from) + '</strong> marked a delay on';
     if (x.kind === 'costing') return '<strong>' + esc(x.from) + '</strong> on the costing of';
+    if (x.kind === 'transfer') return '<strong>' + esc(x.from) + '</strong> transferred';
     return '<strong>' + esc(x.from) + '</strong> updated';
   }
   function notifPanel() {
@@ -2267,7 +2266,7 @@
   function roundRows(t0, list) {
     const rows = (list || mineJobs().filter((j) => j.active)).map((j) => ({ j, f: followState(j, t0) }));
     return {
-      due: rows.filter((x) => x.f.due).sort((a, b) => a.j.next.rank - b.j.next.rank || (b.f.since === null ? 1e9 : b.f.since) - (a.f.since === null ? 1e9 : a.f.since)),
+      due: rows.filter((x) => x.f.due).sort(dueSort8(t0)),   // v2.8: urgent first, then by office hours at the port that matters now
       done: rows.filter((x) => x.f.today).sort((a, b) => b.f.last[0] - a.f.last[0]),
       later: rows.filter((x) => !x.f.due && !x.f.today && x.f.every !== 'PAUSED').sort((a, b) => a.f.nextIn - b.f.nextIn),
       paused: rows.filter((x) => x.f.every === 'PAUSED' && !x.f.today),
@@ -2363,7 +2362,7 @@
     const hist = state.followHist[K];
     const windowStart = addDays(t0, -(state.follow.days || 35));
     if (!hist && first < windowStart) loadFollowHistory(j);
-    const all = hist || checksFor(j);
+    const all = hist ? hist.filter((c) => dayOf(c[0]) < windowStart).concat(checksFor(j)) : checksFor(j);   // v2.8
     const by = {};
     all.forEach((c) => { const d = dayOf(c[0]); const k = d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate(); (by[k] = by[k] || []).push(c); });
     const lead = (first.getDay() + 6) % 7;                         // Monday first
@@ -2421,7 +2420,7 @@
     return '<li class="rr' + (f.today ? ' is-done' : '') + (f.mineToday ? ' is-mine' : '') + (f.due ? ' is-due' : '') + '">' +
       '<button type="button" class="rr-main" data-job="' + esc(j.jobNo) + '"><span class="rr-job">' + esc(j.jobNo) + '<span class="badge">' + esc(j.type) + '</span></span>' +
         '<span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span></button>' +
-      '<span class="rr-next">' + toneChip(rowNext(j)) + cutChips(j) + '</span>' +
+      '<span class="rr-next">' + toneChip(rowNext(j)) + cutChips(j) + rowClock(j, t0) + '</span>' +
       '<span class="rr-last"><span>' + esc(lastCheckText(f, t0)) + '</span>' + ((lr) => (lr ? '<span class="rr-remark">“' + esc(lr.text) + '”' + (lr.n > 1 ? ' <b>+' + (lr.n - 1) + '</b>' : '') + '</span>' : ''))(lastRemark(f)) + '</span>' +
       '<span class="rr-strip">' + dotStrip(j, t0, 14) + '</span>' +
       '<span class="rr-every"><button type="button" class="every-pill" data-every="' + esc(j.jobNo) + '">' + EVERY_LABEL[f.every] + icon('chevron', 13) + '</button></span>' +
@@ -2456,7 +2455,7 @@
           '<div class="rp-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '"><i style="width:' + pct + '%"></i></div>' +
           '<div class="rp-chips"><span>' + R.later.length + ' not due today</span><span>' + R.paused.length + ' paused</span><span>Tap the circle once you’ve followed a job up · set how often per job</span></div></div>' +
       '</section>' +
-      section('due', 'DUE NOW', dueRows.filter(match), 'Most urgent first', dueRows.filter((x) => x.f.due && match(x)).length) +
+      section('due', 'DUE NOW', dueRows.filter(match), 'Urgent first · then the office that closes soonest', dueRows.filter((x) => x.f.due && match(x)).length) +
       section('done', 'CHECKED TODAY', doneRows.filter(match)) +
       section('later', 'NOT DUE TODAY', R.later.filter(match), 'By their own pace') +
       section('paused', 'PAUSED', R.paused.filter(match)) +
@@ -3023,7 +3022,7 @@
     const A = state.archive, u = state.jobsUi;
     if (!A.jobs && !A.loading) setTimeout(loadArchive, 0);
     const q = u.q.trim().toUpperCase();
-    return (A.jobs || []).filter((j) => inCat(j, u.cat) && (!canEdit() || state.scope !== 'mine' || j.cs === state.user) &&
+    return (A.jobs || []).filter((j) => inCat(j, u.cat) && (!canEdit() || j.cs === state.user) &&
       (!q || (j.jobNo + ' ' + j.customer + ' ' + j.vendor + ' ' + j.pol + ' ' + j.pod + ' ' + j.cs + ' ' + j.sales + ' ' + j.type + ' ' + j.remarks + ' ' + j.against).toUpperCase().includes(q)));
   }
   function loadArchive() {
@@ -3107,7 +3106,8 @@
   // ================================================================ v2.6 · v2.7
   // Costing (a full page per job + the Costing menu), Excel made in the browser,
   // remembered lists, duplicate job, stay signed in after a refresh.
-  // v2.7: every USD amount has its own rate, All-in / Itemised, charges that fill themselves.
+  // v2.7: every USD amount has its own rate, charges that fill themselves. v2.8: all-in only, one line per
+  // charge on laptops, per-box figures in the bar, the statement-style Excel.
   const BASIS = [['SHIP', 'Per shipment'], ['BOX', 'Per box'], ['B20', 'Per 20′'], ['B40', 'Per 40′'], ['DOC', 'Per document'], ['UNIT', 'Per unit']];
   const BASIS_SHORT = { SHIP: 'Per shipment', BOX: 'Per box', B20: 'Per 20′', B40: 'Per 40′', DOC: 'Per document', UNIT: 'Per unit' };
   const ABBR = new Set(['THC', 'OTHC', 'DPC', 'ISPS', 'VGM', 'BL', 'DG', 'DO', 'ED', 'TLUC', 'ITT', 'FOB', 'VAT', 'MECRC', 'IMCO', 'AWB', 'LCL', 'FCL']);
@@ -3140,7 +3140,7 @@
   const fxOk = (v) => { const n = num6(v); return n >= 3 && n <= 4.5; };
   const fxIs = (v) => (fxOk(v) ? num6(v) : COMPANY_FX());          // a rate box left empty → the company rate
   const lineAmt = (l, k) => amtOf(l.qty, l[k + 'r'], l[k + 'c'], fxIs(l[k + 'x']));
-  const allIn = (C) => !!(C && C.draft && C.draft.mode === 'ALLIN');
+  const allIn = () => true;                                         // v2.8: costing is all-in only
   const sellsNothing = (l) => !num6(l.sr);
   const newLineId = () => (Math.random().toString(36).slice(2, 10) + 'k0x9').slice(0, 8);
   const boxesOf = (j) => (j.c20 || 0) + (j.c40 || 0);
@@ -3148,9 +3148,9 @@
   const onCostPage = (K) => !!state.route && state.route.name === 'costjob' && String(state.route.jobNo).toUpperCase() === K;
 
   // ---------- what every list knows about a job's costing ----------
-  function costState(j) {   // pending · draft · done · none
+  function costState(j) {   // pending · draft · done · none (a draft with no amounts at all is still pending)
     const s = state.costing[keyOf(j)];
-    if (s) return s[0] === 'LOCKED' ? 'done' : 'draft';
+    if (s) return s[0] === 'LOCKED' ? 'done' : (Number(s[1]) || Number(s[2])) ? 'draft' : 'pending';
     if (['COSTING DONE', 'COMPLETED'].includes(j.costing)) return 'done';
     if (j.costing === 'CANCELLED') return 'none';
     return 'pending';
@@ -3250,7 +3250,7 @@
     C.data = data; C.err = '';
     const fx0 = Number(data.rate) || COMPANY_FX();                 // lines saved by v2.6 used the costing's rate
     C.draft = {
-      rate: data.rate, mode: data.mode === 'ALLIN' ? 'ALLIN' : 'ITEM',
+      rate: data.rate, mode: 'ALLIN',
       lines: (data.lines || []).map((l) => {
         const bc = l.bc || 'AED', sc = l.sc || 'AED';
         const bx = bc === 'USD' ? fxTxt(l.bx || fx0) : '', sx = sc === 'USD' ? fxTxt(l.sx || fx0) : '';
@@ -3320,18 +3320,20 @@
     if (!costCanEdit(j, D)) return '<div class="cost-banner">' + icon('lock', 15) + '<span>Read-only.</span></div>';
     return '';
   }
-  // The glass summary. USD figures under the AED totals use the company rate; each line keeps its own.
+  // The glass summary in one row: selling, buying, profit (AED, with USD under), margin and mark-up,
+  // and per box — profit in AED, cost and selling in USD (USD at the company rate; each line keeps its own).
   function costBar(j, D, C) {
     const fx = COMPANY_FX();
     const t = costTotals(C.draft.lines), bx = boxesOf(j);
     const cell = (id, label, value, sub, cls) => '<div class="cb-cell' + (cls ? ' ' + cls : '') + '"><span class="cb-k">' + label + '</span><span class="cb-v" id="' + id + '">' + value + '</span>' + (sub !== undefined ? '<span class="cb-s" id="' + id + 'S">' + sub + '</span>' : '') + '</div>';
+    const mini = (id, k, v) => '<span class="cb-m"><span class="cb-mk">' + k + '</span><b id="' + id + '">' + v + '</b></span>';
     return '<section class="cost-bar glass' + (bx ? ' has-box' : '') + '" aria-label="Costing summary" id="costBar">' +
       cell('cbSell', 'SELLING · AED', money(t.sell), 'USD ' + money(t.sell / fx)) +
       cell('cbBuy', 'BUYING · AED', money(t.buy), 'USD ' + money(t.buy / fx)) +
       cell('cbProfit', 'PROFIT · AED', money(t.profit), 'USD ' + money(t.profit / fx), 'is-profit' + (t.profit < 0 ? ' is-loss' : '')) +
-      cell('cbMargin', 'MARGIN', pctTxt(t.sell ? t.profit / t.sell : NaN), 'on selling') +
-      cell('cbMarkup', 'MARK-UP', pctTxt(t.buy ? t.profit / t.buy : NaN), 'on buying') +
-      (bx ? cell('cbBox', 'PER BOX · AED', money(t.profit / bx), 'USD ' + money(t.profit / bx / fx) + ' · ×' + bx) : '') +
+      '<div class="cb-cell cb-pair">' + mini('cbMargin', 'MARGIN', pctTxt(t.sell ? t.profit / t.sell : NaN)) + mini('cbMarkup', 'MARK-UP', pctTxt(t.buy ? t.profit / t.buy : NaN)) + '</div>' +
+      (bx ? '<div class="cb-cell cb-box' + (t.profit < 0 ? ' is-loss' : '') + '"><span class="cb-k">PER BOX · ×' + bx + '</span>' +
+        mini('cbBox', 'PROFIT AED', money(t.profit / bx)) + mini('cbBoxCost', 'COST USD', money(t.buy / bx / fx)) + mini('cbBoxSell', 'SELL USD', money(t.sell / bx / fx)) + '</div>' : '') +
     '</section>';
   }
   // The same figures in one slim line that takes over once the glass bar scrolls away (laptops).
@@ -3340,59 +3342,60 @@
     const it = (id, k, v, cls) => '<span class="csl-it' + (cls ? ' ' + cls : '') + '"><span class="csl-k">' + k + '</span><b id="' + id + '">' + v + '</b></span>';
     return '<div class="cost-slim" aria-hidden="true"><div class="csl-in glass" id="costSlim">' +
       it('cslSell', 'SELLING', money(t.sell)) + it('cslBuy', 'BUYING', money(t.buy)) + it('cslProfit', 'PROFIT', money(t.profit), 'is-profit' + (t.profit < 0 ? ' is-loss' : '')) +
-      it('cslMargin', 'MARGIN', pctTxt(t.sell ? t.profit / t.sell : NaN)) + it('cslMarkup', 'MARK-UP', pctTxt(t.buy ? t.profit / t.buy : NaN)) +
-      (bx ? it('cslBox', 'PER BOX', money(t.profit / bx)) : '') +
+      it('cslMargin', 'MARGIN', pctTxt(t.sell ? t.profit / t.sell : NaN)) +
+      (bx ? it('cslBox', 'PER BOX', money(t.profit / bx), 'csl-box' + (t.profit < 0 ? ' is-loss' : '')) : '') +
       '<span class="csl-k csl-aed">AED</span>' +
       (edit ? '<button type="button" class="btn-ghost csl-save" data-act="cost-save" tabindex="-1"' + (C.busy || !C.dirty ? ' disabled' : '') + '>' + icon('check', 15) + '<span id="cslSaveLbl">' + (C.dirty ? 'Save' : 'Saved') + '</span></button>' : '') +
     '</div></div>';
   }
+  const BASIS_PICK = { SHIP: 'Shipment', BOX: 'Box', B20: '20′ box', B40: '40′ box', DOC: 'Document', UNIT: 'Unit' };   // short, so the line stays one line
   function basisSelect(j, l, dis) {
     const bx = boxesOf(j);
-    return '<select class="ct-in" id="cl_' + l.id + '_basis" data-f="basis" aria-label="Basis"' + dis + '>' + BASIS.filter(([k]) => bx || !['BOX', 'B20', 'B40'].includes(k) || l.basis === k).map(([k, label]) => '<option value="' + k + '"' + (l.basis === k ? ' selected' : '') + '>' + label + '</option>').join('') + '</select>';
+    return '<select class="ct-in" id="cl_' + l.id + '_basis" data-f="basis" aria-label="Basis"' + dis + '>' + BASIS.filter(([k]) => bx || !['BOX', 'B20', 'B40'].includes(k) || l.basis === k).map(([k, label]) => '<option value="' + k + '"' + (l.basis === k ? ' selected' : '') + ' title="' + label + '">' + (BASIS_PICK[k] || label) + '</option>').join('') + '</select>';
   }
-  // One charge on one line: buying and selling side by side. A USD side shows its own rate (@ 3.7).
-  // All-in: a line with no selling shows "incl." and no line profit — the profit is the total.
-  function costRow(j, l, edit, i, C) {
-    const ai = allIn(C), b = lineAmt(l, 'b'), s = lineAmt(l, 's'), incl = ai && sellsNothing(l);
-    const outB = '<span class="ct-out" data-o="b">' + money(b) + '</span>';
-    const outS = '<span class="ct-out' + (incl ? ' is-incl' : '') + '" data-o="s">' + (incl ? '' : money(s)) + '</span>';
-    const outP = '<span class="ct-c ct-pf' + (!ai && s - b < 0 ? ' is-loss' : '') + '" data-o="p">' + (ai ? '' : money(s - b)) + '</span>';
-    const fxRo = (k) => (l[k + 'c'] === 'USD' ? '<span class="ct-ro-fx">@ ' + esc(fxTxt(fxIs(l[k + 'x']))) + '</span>' : '');
+  // One charge, one line (laptops): charge · vendor · basis and qty · buying (currency, rate, @ USD rate) and its
+  // AED · selling and its AED. All-in: a line with no selling reads "incl." — the profit is the total.
+  function costRow(j, l, edit, i) {
+    const b = lineAmt(l, 'b'), s = lineAmt(l, 's'), incl = sellsNothing(l);
+    const out = (k, v, cls) => '<div class="ct-c ct-amt ct-' + k + 'o"><span class="ct-out' + (cls ? ' ' + cls : '') + '" data-o="' + k + '">' + v + '</span></div>';
     if (!edit) {
+      const ro = (k) => (k === 's' && incl ? '<span class="ct-ro-rate is-incl">incl.</span>'
+        : '<span class="ct-ro-rate"><i>' + esc(l[k + 'c']) + '</i> ' + (l[k + 'r'] ? money(num6(l[k + 'r'])) : '—') + (l[k + 'c'] === 'USD' ? '<span class="ct-ro-fx">@ ' + esc(fxTxt(fxIs(l[k + 'x']))) + '</span>' : '') + '</span>');
       return '<div class="ct-row is-ro" data-line="' + esc(l.id) + '" role="row">' +
-        '<div class="ct-c ct-what"><span class="ct-name">' + esc(l.charge) + '</span><span class="ct-sub">' + esc(l.vendor || '—') + '</span></div>' +
-        '<div class="ct-c ct-basis"><span class="ct-name">' + esc(BASIS_SHORT[l.basis] || l.basis) + '</span><span class="ct-sub">× ' + esc(l.qty || '0') + '</span></div>' +
-        '<div class="ct-c ct-side ct-b"><span class="ct-ro-rate"><i>' + esc(l.bc) + '</i> ' + (l.br ? money(num6(l.br)) : '—') + fxRo('b') + '</span>' + outB + '</div>' +
-        '<div class="ct-c ct-side ct-s">' + (incl ? '<span class="ct-ro-rate is-incl">incl.</span>' : '<span class="ct-ro-rate"><i>' + esc(l.sc) + '</i> ' + (l.sr ? money(num6(l.sr)) : '—') + fxRo('s') + '</span>') + outS + '</div>' +
-        outP + '<span class="ct-c"></span></div>';
+        '<div class="ct-c ct-what"><span class="ct-name">' + esc(l.charge) + '</span></div>' +
+        '<div class="ct-c ct-vend"><span class="ct-sub">' + esc(l.vendor || '—') + '</span></div>' +
+        '<div class="ct-c ct-basis"><span class="ct-sub">' + esc(BASIS_SHORT[l.basis] || l.basis) + ' × ' + esc(l.qty || '0') + '</span></div>' +
+        '<div class="ct-c ct-money ct-b">' + ro('b') + '</div>' + out('b', money(b)) +
+        '<div class="ct-c ct-money ct-s">' + ro('s') + '</div>' + out('s', incl ? '' : money(s), incl ? 'is-incl' : '') +
+        '<span class="ct-c"></span></div>';
     }
     const id = (f) => 'cl_' + l.id + '_' + f;
-    const side = (k) => {
+    const money3 = (k) => {
       const usd = l[k + 'c'] === 'USD', who = k === 'b' ? 'Buying' : 'Selling';
-      return '<div class="ct-c ct-side ct-' + k + '"><div class="ct-money"><button type="button" class="cur' + (usd ? ' is-usd' : '') + '" data-cur="' + k + 'c" aria-label="Currency: ' + l[k + 'c'] + '. Change">' + l[k + 'c'] + '</button>' +
-        '<input class="ct-in r" id="' + id(k + 'r') + '" data-f="' + k + 'r" inputmode="decimal" autocomplete="off" value="' + esc(l[k + 'r']) + '" placeholder="' + (k === 's' && ai ? 'incl.' : 'Rate') + '" aria-label="' + who + ' rate"></div>' +
-        '<div class="ct-under">' + (usd ? '<label class="ct-fx" title="AED for 1 USD on this ' + who.toLowerCase() + ' amount"><span>@</span><input class="ct-in fx" id="' + id(k + 'x') + '" data-f="' + k + 'x" inputmode="decimal" autocomplete="off" value="' + esc(l[k + 'x']) + '" aria-label="' + who + ' USD rate"></label>' : '') + (k === 'b' ? outB : outS) + '</div></div>';
+      return '<div class="ct-c ct-money ct-' + k + '"><button type="button" class="cur' + (usd ? ' is-usd' : '') + '" data-cur="' + k + 'c" aria-label="' + who + ' currency: ' + l[k + 'c'] + '. Change">' + l[k + 'c'] + '</button>' +
+        '<input class="ct-in r" id="' + id(k + 'r') + '" data-f="' + k + 'r" inputmode="decimal" autocomplete="off" value="' + esc(l[k + 'r']) + '" placeholder="' + (k === 's' ? 'incl.' : 'Rate') + '" aria-label="' + who + ' rate">' +
+        (usd ? '<label class="ct-fx" title="AED for 1 USD on this ' + who.toLowerCase() + ' amount"><span>@</span><input class="ct-in fx" id="' + id(k + 'x') + '" data-f="' + k + 'x" inputmode="decimal" autocomplete="off" value="' + esc(l[k + 'x']) + '" aria-label="' + who + ' USD rate"></label>' : '<span class="ct-fx is-none" aria-hidden="true"></span>') + '</div>';
     };
     return '<div class="ct-row" data-line="' + esc(l.id) + '" role="row">' +
-      '<div class="ct-c ct-what"><input class="ct-in ct-charge" id="' + id('charge') + '" data-f="charge" list="dlCharges" autocomplete="off" spellcheck="false" value="' + esc(l.charge) + '" placeholder="Choose or type a charge" aria-label="Charge ' + (i + 1) + '">' +
-        '<input class="ct-in ct-vendor" id="' + id('vendor') + '" data-f="vendor" list="dlVendors" autocomplete="off" spellcheck="false" value="' + esc(l.vendor) + '" placeholder="Vendor" aria-label="Vendor"></div>' +
+      '<div class="ct-c ct-what"><input class="ct-in ct-charge" id="' + id('charge') + '" data-f="charge" list="dlCharges" autocomplete="off" spellcheck="false" value="' + esc(l.charge) + '" placeholder="Choose or type a charge" aria-label="Charge ' + (i + 1) + '"></div>' +
+      '<div class="ct-c ct-vend"><input class="ct-in ct-vendor" id="' + id('vendor') + '" data-f="vendor" list="dlVendors" autocomplete="off" spellcheck="false" value="' + esc(l.vendor) + '" placeholder="Vendor" aria-label="Vendor"></div>' +
       '<div class="ct-c ct-basis">' + basisSelect(j, l, '') + '<label class="ct-qty"><span>QTY</span><input class="ct-in r" id="' + id('qty') + '" data-f="qty" inputmode="decimal" autocomplete="off" value="' + esc(l.qty) + '" aria-label="Quantity"></label></div>' +
-      side('b') + side('s') + outP +
+      money3('b') + out('b', money(b)) + money3('s') + out('s', incl ? '' : money(s), incl ? 'is-incl' : '') +
       '<button type="button" class="icon-btn ct-del" data-del="' + esc(l.id) + '" aria-label="Remove this line">' + icon('close', 14) + '</button></div>';
   }
   function costTable(j, D, C) {
-    const edit = costCanEdit(j, D), lines = C.draft.lines, ai = allIn(C);
+    const edit = costCanEdit(j, D), lines = C.draft.lines;
     const t = costTotals(lines);
     const quick = (QUICK[j.type === 'CND' ? 'cnd' : j.mode] || QUICK.sea);
-    const modeSw = edit ? '<div class="seg ct-mode" role="group" aria-label="Costing type"><button type="button" data-cost-mode="ITEM" aria-pressed="' + !ai + '">Itemised</button><button type="button" data-cost-mode="ALLIN" aria-pressed="' + ai + '">All-in</button></div>'
-      : '<span class="ct-mode-ro">' + (ai ? 'ALL-IN' : 'ITEMISED') + '</span>';
-    return '<section class="cost-card' + (ai ? ' is-allin' : '') + '" aria-label="Charges">' +
+    return '<section class="cost-card" aria-label="Charges">' +
       '<div class="ct-bar"><div class="ct-bar-t"><h2 class="tile-title">CHARGES</h2><span class="tile-count">' + lines.length + '</span></div>' +
-        '<div class="ct-bar-r"><span class="ct-mode-hint">' + (ai ? 'Selling is all-in · profit in the total' : 'Profit on every line') + '</span>' + modeSw + '</div></div>' +
+        '<span class="ct-mode-hint">All-in: a line without selling is included in the price</span></div>' +
       '<div class="ct' + (edit ? '' : ' is-ro') + '" role="table">' +
-        '<div class="ct-head" role="row"><span>CHARGE · VENDOR</span><span>BASIS · QTY</span><span class="r ct-hb">BUYING <small>→ AED</small></span><span class="r ct-hs">SELLING <small>→ AED</small></span><span class="r">' + (ai ? '' : 'PROFIT AED') + '</span><span></span></div>' +
-        '<div id="ctBody">' + (lines.length ? lines.map((l, i) => costRow(j, l, edit, i, C)).join('') : '<div class="ct-empty">' + icon('costing', 22) + '<span>' + (edit ? 'No charges yet. Add the first one below — buying and selling side by side on one line.' : 'No charges in this costing.') + '</span></div>') + '</div>' +
-        '<div class="ct-total" role="row"><span class="ct-tl">TOTAL · AED</span><span class="ct-c ct-side ct-b"><span class="ct-tk">BUYING</span><span class="ct-out" id="ctB">' + money(t.buy) + '</span></span><span class="ct-c ct-side ct-s"><span class="ct-tk">SELLING</span><span class="ct-out" id="ctS">' + money(t.sell) + '</span></span><span class="ct-c ct-pf' + (t.profit < 0 ? ' is-loss' : '') + '" id="ctP">' + money(t.profit) + '</span><span></span></div>' +
+        '<div class="ct-head" role="row"><span>CHARGE</span><span>VENDOR</span><span>BASIS · QTY</span><span class="ct-hb">BUYING</span><span class="r ct-hb">AED</span><span class="ct-hs">SELLING</span><span class="r ct-hs">AED</span><span></span></div>' +
+        '<div id="ctBody">' + (lines.length ? lines.map((l, i) => costRow(j, l, edit, i)).join('') : '<div class="ct-empty">' + icon('costing', 22) + '<span>' + (edit ? 'No charges yet. Pick one below — buying and selling sit side by side on one line.' : 'No charges in this costing.') + '</span></div>') + '</div>' +
+        '<div class="ct-total" role="row"><span class="ct-tl"><span>TOTAL · AED</span><span class="ct-tp">PROFIT <b id="ctP"' + (t.profit < 0 ? ' class="is-loss"' : '') + '>' + money(t.profit) + '</b><i id="ctM">' + (t.sell ? pctTxt(t.profit / t.sell) + ' margin' : '') + '</i></span></span>' +
+          '<span class="ct-c ct-bo"><span class="ct-tk">BUYING</span><span class="ct-out" id="ctB">' + money(t.buy) + '</span></span>' +
+          '<span class="ct-c ct-so"><span class="ct-tk">SELLING</span><span class="ct-out" id="ctS">' + money(t.sell) + '</span></span></div>' +
       '</div>' +
       (edit ? '<div class="ct-add"><button type="button" class="btn-ghost" data-act="cost-add">' + icon('plus', 16) + '<span>Add charge</span></button><div class="ct-quick" aria-label="Quick add">' +
         quick.map((q) => '<button type="button" class="choice" data-quick-charge="' + esc(q) + '">' + esc(chipName(q)) + '</button>').join('') + '</div></div>' : '') +
@@ -3457,31 +3460,30 @@
   // Repaints only the numbers (no re-render while typing).
   function costPaint(j) {
     const C = state.cost; if (!C || !C.draft || !j) return;
-    const fx = COMPANY_FX(), bx = boxesOf(j), ai = allIn(C);
+    const fx = COMPANY_FX(), bx = boxesOf(j);
     const t = costTotals(C.draft.lines);
     const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
     const loss = (id, on) => { const el = document.getElementById(id); if (el) (el.closest('.cb-cell, .csl-it') || el).classList.toggle('is-loss', on); };
     set('cbSell', money(t.sell)); set('cbSellS', 'USD ' + money(t.sell / fx));
     set('cbBuy', money(t.buy)); set('cbBuyS', 'USD ' + money(t.buy / fx));
     set('cbProfit', money(t.profit)); set('cbProfitS', 'USD ' + money(t.profit / fx));
-    loss('cbProfit', t.profit < 0); loss('cslProfit', t.profit < 0);
+    loss('cbProfit', t.profit < 0); loss('cslProfit', t.profit < 0); loss('cbBox', t.profit < 0); loss('cslBox', t.profit < 0);
     set('cbMargin', pctTxt(t.sell ? t.profit / t.sell : NaN)); set('cbMarkup', pctTxt(t.buy ? t.profit / t.buy : NaN));
-    if (bx) { set('cbBox', money(t.profit / bx)); set('cbBoxS', 'USD ' + money(t.profit / bx / fx) + ' · ×' + bx); }
+    if (bx) { set('cbBox', money(t.profit / bx)); set('cbBoxCost', money(t.buy / bx / fx)); set('cbBoxSell', money(t.sell / bx / fx)); }
     set('cslSell', money(t.sell)); set('cslBuy', money(t.buy)); set('cslProfit', money(t.profit));
-    set('cslMargin', pctTxt(t.sell ? t.profit / t.sell : NaN)); set('cslMarkup', pctTxt(t.buy ? t.profit / t.buy : NaN));
+    set('cslMargin', pctTxt(t.sell ? t.profit / t.sell : NaN));
     if (bx) set('cslBox', money(t.profit / bx));
     set('cdProfit', 'PROFIT AED ' + money(t.profit));
     set('costDockState', (t.sell ? pctTxt(t.profit / t.sell) + ' margin · ' : '') + (C.dirty ? 'unsaved' : 'all saved'));
     const dp = $('#cdProfit'); if (dp) dp.classList.toggle('is-loss', t.profit < 0);
-    set('ctB', money(t.buy)); set('ctS', money(t.sell)); set('ctP', money(t.profit));
+    set('ctB', money(t.buy)); set('ctS', money(t.sell)); set('ctP', money(t.profit)); set('ctM', t.sell ? pctTxt(t.profit / t.sell) + ' margin' : '');
     const tp = $('#ctP'); if (tp) tp.classList.toggle('is-loss', t.profit < 0);
     C.draft.lines.forEach((l) => {
       const row = document.querySelector('.ct-row[data-line="' + l.id + '"]'); if (!row) return;
-      const b = lineAmt(l, 'b'), s = lineAmt(l, 's'), incl = ai && sellsNothing(l);
+      const b = lineAmt(l, 'b'), s = lineAmt(l, 's'), incl = sellsNothing(l);
       const o = (k) => row.querySelector('[data-o="' + k + '"]');
       if (o('b')) o('b').textContent = money(b);
       if (o('s')) { o('s').textContent = incl ? '' : money(s); o('s').classList.toggle('is-incl', incl); }
-      if (o('p')) { o('p').textContent = ai ? '' : money(s - b); o('p').classList.toggle('is-loss', !ai && s - b < 0); }
     });
     $$('[data-act="cost-save"]').forEach((b) => { b.disabled = !!C.busy || !C.dirty; b.classList.toggle('is-dirty', C.dirty); });
     $$('[data-act="cost-done"]').forEach((b) => { b.disabled = !!C.busy; });
@@ -3542,7 +3544,7 @@
       const el = document.getElementById('cl_' + read.bad + '_' + read.f); if (el) { el.focus(); el.classList.add('is-bad'); setTimeout(() => el.classList.remove('is-bad'), 2400); }
       return false;
     }
-    const payload = { lines: read.lines, addNotes: C.draft.notes.slice(), mode: C.draft.mode === 'ALLIN' ? 'ALLIN' : 'ITEM' };
+    const payload = { lines: read.lines, addNotes: C.draft.notes.slice(), mode: 'ALLIN' };
     C.busy = 'save'; costPaint(j);
     setSaving(1);
     try {
@@ -3689,7 +3691,7 @@
       : x.st === 'draft' ? '<span class="chip chip-done">DRAFT · V' + (s ? s[4] : 1) + '</span>' : '<span class="chip chip-hold">' + icon('lock', 12) + 'DONE</span>';
     const who = s ? (x.st === 'done' && s[7] ? 'Locked by ' + nice(s[7]) : s[6] ? nice(s[6]) + ' · ' + ago(s[5]) : '') : '';
     const fig = (k, v, cls) => '<span class="cl-fig' + (cls ? ' ' + cls : '') + '"><span class="cl-k">' + k + '</span><b>' + money(v) + '</b></span>';
-    const nums = s ? '<span class="cl-figs">' + fig('SELLING', s[1]) + fig('BUYING', s[2]) + fig('PROFIT', s[3], 'is-profit' + (s[3] < 0 ? ' is-loss' : '')) + '</span><span class="cl-sub">AED · ' + (s[1] ? pctTxt(s[3] / s[1]) + ' margin' : 'no selling yet') + '</span>'
+    const nums = s && x.st === 'pending' ? '<span class="cl-sub">Started · no amounts yet</span>' : s ? '<span class="cl-figs">' + fig('SELLING', s[1]) + fig('BUYING', s[2]) + fig('PROFIT', s[3], 'is-profit' + (s[3] < 0 ? ' is-loss' : '')) + '</span><span class="cl-sub">AED · ' + (s[1] ? pctTxt(s[3] / s[1]) + ' margin' : 'no selling yet') + '</span>'
       : x.st === 'done' ? '<span class="cl-sub">Marked done (no sheet)</span>' : '<span class="cl-sub">Not started</span>';
     return '<li class="cr-row"><button type="button" class="cr-open" data-cost="' + esc(j.jobNo) + '" aria-label="Open costing of ' + esc(j.jobNo) + '">' +
       '<span class="rr-main"><span class="rr-job">' + esc(j.jobNo) + ' <span class="badge">' + esc(j.type) + '</span></span><span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span></span>' +
@@ -3702,7 +3704,6 @@
     const U = state.costUi, R = costRows();
     const q = (U.q || '').trim().toUpperCase();
     const match = (x) => !q || (x.j.jobNo + ' ' + x.j.customer + ' ' + x.j.route + ' ' + x.j.cs + ' ' + x.j.sales + ' ' + x.j.type).toUpperCase().includes(q);
-    const sumP = (list) => list.reduce((a, x) => a + (x.s ? x.s[3] : 0), 0);
     const tab = ['pending', 'draft', 'done'].includes(U.tab) ? U.tab : 'pending';
     const rows = R[tab].filter(match);
     const keepQ = $('#costSearch') ? $('#costSearch').value : U.q || '';
@@ -3715,8 +3716,8 @@
         '</div></header>' +
       '<section class="cost-sum tile tile-ink' + anim + '" style="--d:40ms" aria-label="Costing at a glance">' +
         big('pending', 'PENDING', R.pending.length, R.dueN ? R.dueN + ' sailed or arrived' : 'nothing overdue') +
-        big('draft', 'DRAFT', R.draft.length, R.draft.length ? 'AED ' + money(sumP(R.draft)) + ' profit' : 'none open') +
-        big('done', 'DONE', R.done.length, R.done.some((x) => x.s) ? 'AED ' + money(sumP(R.done)) + ' profit' : R.done.length ? 'marked done' : 'none yet') +
+        big('draft', 'DRAFT', R.draft.length, R.draft.length ? 'being worked on' : 'none open') +
+        big('done', 'DONE', R.done.length, R.done.length ? 'locked' : 'none yet') +
       '</section>' +
       '<section class="round-sec cost-sec' + anim + '" style="--d:80ms" aria-labelledby="cs-title"><div class="tile-head"><h2 class="tile-title" id="cs-title">' + { pending: 'COSTING PENDING', draft: 'DRAFTS', done: 'COSTING DONE' }[tab] + ' <span class="tile-count">' + rows.length + '</span></h2><span class="small">' + { pending: 'Sailed or arrived first', draft: 'Last changed first', done: 'Last changed first' }[tab] + '</span></div>' +
         (rows.length ? '<ul class="round-list cost-rows">' + rows.slice(0, 300).map((x) => costListRow(x, t0)).join('') + '</ul>' : '<div class="tile-empty">' + icon('check', 22) + '<span>' + (q ? 'Nothing matches “' + esc(U.q) + '”.' : { pending: 'Every active job has a costing.', draft: 'No drafts open.', done: 'No costing marked done yet.' }[tab]) + '</span></div>') +
@@ -3730,11 +3731,13 @@
     const st = costState(j), s = costSum(j);
     if (st === 'none') return '';
     const chip = st === 'done' ? '<span class="chip chip-hold">' + icon('lock', 12) + 'DONE</span>' : st === 'draft' ? '<span class="chip chip-done">DRAFT</span>' : '<span class="chip chip-calm">NOT STARTED</span>';
+    const sv = st === 'pending' ? null : s;
     const editable = !j.closed && st !== 'done' && (canEdit() || isSales());
     return '<section class="tile side-card cost-mini" aria-labelledby="cmTitle"><div class="tile-head"><h2 class="tile-title" id="cmTitle">COSTING</h2>' + chip + '</div>' +
-      (s ? '<div class="kv"><span class="kv-k">Selling</span><span class="kv-v">AED ' + money(s[1]) + '</span></div><div class="kv"><span class="kv-k">Buying</span><span class="kv-v">AED ' + money(s[2]) + '</span></div>' +
-        '<div class="kv cm-profit' + (s[3] < 0 ? ' is-loss' : '') + '"><span class="kv-k">Profit</span><span class="kv-v">AED ' + money(s[3]) + (s[1] ? ' · ' + pctTxt(s[3] / s[1]) : '') + '</span></div>'
-        : '<p class="pop-text">' + (st === 'done' ? 'Marked done before costing sheets.' : 'No costing yet.') + '</p>') +
+      (sv ? '<div class="kv"><span class="kv-k">Selling</span><span class="kv-v">AED ' + money(sv[1]) + '</span></div><div class="kv"><span class="kv-k">Buying</span><span class="kv-v">AED ' + money(sv[2]) + '</span></div>' +
+        '<div class="kv cm-profit' + (sv[3] < 0 ? ' is-loss' : '') + '"><span class="kv-k">Profit</span><span class="kv-v">AED ' + money(sv[3]) + (sv[1] ? ' · ' + pctTxt(sv[3] / sv[1]) : '') + '</span></div>' +
+        (boxesOf(j) ? '<div class="kv"><span class="kv-k">Profit / box</span><span class="kv-v">AED ' + money(sv[3] / boxesOf(j)) + '</span></div>' : '')
+        : '<p class="pop-text">' + (st === 'done' ? 'Marked done before costing sheets.' : s ? 'Started — no amounts yet.' : 'No costing yet.') + '</p>') +
       '<button type="button" class="btn-ghost pop-wide" data-cost="' + esc(j.jobNo) + '">' + icon('costing', 16) + '<span>' + (s ? 'Open costing' : editable ? 'Start costing' : 'Open costing') + '</span></button></section>';
   }
 
@@ -3799,7 +3802,7 @@
         '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles><dxfs count="0"/><tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/></styleSheet>';
       return s;
     }
-    // sheet: { cols: [width], rows: { n: { h, c: { colIndex: { v, f, s } } } }, merges: [], tab, landscape, titles, footer, drawing }
+    // sheet: { cols: [width], rows: { n: { h, c: { colIndex: { v, f, s } } } }, merges: [], tab, tabColor, landscape, titles, footer, drawing }
     function sheetXml(o) {
       const rn = Object.keys(o.rows).map(Number).sort((a, b) => a - b);
       const last = rn.length ? rn[rn.length - 1] : 1;
@@ -3815,13 +3818,13 @@
         return '<row r="' + r + '"' + (R.h ? ' ht="' + R.h + '" customHeight="1"' : '') + '>' + cells + '</row>';
       }).join('');
       return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
-        '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:' + col(o.cols.length - 1) + last + '"/>' +
+        '<sheetPr>' + (o.tabColor ? '<tabColor rgb="FF' + o.tabColor + '"/>' : '') + '<pageSetUpPr fitToPage="1"/></sheetPr><dimension ref="A1:' + col(o.cols.length - 1) + last + '"/>' +
         '<sheetViews><sheetView showGridLines="0" ' + (o.tab ? 'tabSelected="1" ' : '') + 'workbookViewId="0"/></sheetViews><sheetFormatPr defaultRowHeight="15"/>' +
         '<cols>' + o.cols.map((w, i) => '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + w + '" customWidth="1"/>').join('') + '</cols>' +
         '<sheetData>' + data + '</sheetData>' +
         (o.merges.length ? '<mergeCells count="' + o.merges.length + '">' + o.merges.map((m) => '<mergeCell ref="' + m + '"/>').join('') + '</mergeCells>' : '') +
         '<printOptions horizontalCentered="1"/><pageMargins left="0.4" right="0.4" top="0.5" bottom="0.6" header="0.25" footer="0.3"/>' +
-        '<pageSetup paperSize="9" orientation="' + (o.landscape ? 'landscape' : 'portrait') + '" fitToWidth="1" fitToHeight="0"/>' +
+        '<pageSetup paperSize="9" orientation="' + (o.landscape ? 'landscape' : 'portrait') + '" fitToWidth="1" fitToHeight="' + (o.fitH || 0) + '"/>' +
         (o.footer ? '<headerFooter><oddFooter>' + X(o.footer) + '</oddFooter></headerFooter>' : '') +
         (o.drawing ? '<drawing r:id="rId1"/>' : '') + '</worksheet>';
     }
@@ -3858,145 +3861,177 @@
     return { Styles, sheetXml, book, col };
   })();
 
-  // The costing workbook. info: { job, customer, route, type, cargo, boxes, sales, cs, status, statusLine, mode, lines, notes, user, unsaved, at }
-  // Sheet layout: header band · summary · BUYING and SELLING as two coloured blocks with a gap between · profit.
-  // Every USD amount converts at its own rate (the @ column); totals and the summary are live formulas.
+  // The costing workbook (v2.8). info: { job, customer, route, type, cargo, boxes, carrier, carrierLabel, dates, datesLabel,
+  // sales, cs, status, statusLine, lines, notes, user, unsaved, at }
+  // One sheet, read top to bottom like a statement: the job · the result (selling, buying, profit, margin, mark-up) ·
+  // per box · the charges with BUYING and SELLING side by side · the result in one line · notes.
+  // Columns A–J. Every USD amount converts at its own rate (the @ column, USD lines only); everything is a live formula.
   function costWorkbook(info, logo, opts = {}) {
     const S = XL.Styles(), C = XL.col;
-    const INK = '0B1B2B', NAVY = '1C5179', GREY = '5A6878', FOG = 'E9EEF3', LINE = 'DFE6ED', TEAL = '0E7C7B', TINT = 'E4F5F5', ZEBRA = 'F6F8FA';
-    const B_HEAD = 'DCE6F0', B_CELL = 'F3F7FB', B_ZEB = 'E8EFF6', S_HEAD = 'D5EFEE', S_CELL = 'F0F9F9', S_ZEB = 'E2F3F2';
-    const AED = '#,##0.00;[Red]-#,##0.00', RATE = '#,##0.00##', FX = '0.000##', PCT = '0.0%;[Red]-0.0%';
+    const INK = '0B1B2B', NAVY = '1C5179', GREY = '5A6878', MUTE = '7D8B9A', LINE = 'D5DDE5', HAIR = 'E8EDF2', TEAL = '0E7C7B', ZEBRA = 'F7F9FB', RED = 'B42318';
+    const AED = '#,##0.00;[Red]-#,##0.00', AEDL = '#,##0.00;[Red]-#,##0.00;"–"', FX = '0.000##', PCT = '0.0%;[Red]-0.0%', USD2 = '#,##0.00;[Red]-#,##0.00';
+    const RATEF = { USD: '"USD "#,##0.00##', AED: '"AED "#,##0.00##' };
     const CO = 3.685;                                              // per-box USD figures use the company rate
-    const st = {
-      title: S({ font: { sz: 18, b: true, color: INK }, align: { h: 'right', v: 'center' } }),
-      job: S({ font: { sz: 11, b: true, color: NAVY }, align: { h: 'right', v: 'center' } }),
-      lab: S({ font: { sz: 7, b: true, color: GREY }, fill: FOG, align: { v: 'center', indent: 1 } }),
-      val: S({ font: { sz: 11, b: true, color: INK }, border: { bottom: ['thin', LINE] }, align: { v: 'center', indent: 1, wrap: true } }),
-      lock: S({ font: { sz: 11, b: true, color: 'FFFFFF' }, fill: INK, align: { v: 'center', indent: 1, wrap: true } }),
-      draft: S({ font: { sz: 11, b: true, color: NAVY }, border: { left: ['medium', NAVY], right: ['medium', NAVY], top: ['medium', NAVY], bottom: ['medium', NAVY] }, align: { v: 'center', indent: 1, wrap: true } }),
-      slab: S({ font: { sz: 7, b: true, color: GREY }, align: { h: 'left', v: 'bottom', indent: 1 } }),
-      sAed: S({ font: { sz: 13, b: true, color: INK }, fmt: AED, align: { h: 'left', v: 'center', indent: 1 } }),
-      sProfit: S({ font: { sz: 13, b: true, color: TEAL }, fmt: AED, fill: TINT, align: { h: 'left', v: 'center', indent: 1 } }),
-      sPct: S({ font: { sz: 13, b: true, color: INK }, fmt: PCT, align: { h: 'left', v: 'center', indent: 1 } }),
-      sTxt: S({ font: { sz: 13, b: true, color: GREY }, align: { h: 'left', v: 'center', indent: 1 } }),
-      grpB: S({ font: { sz: 9, b: true, color: 'FFFFFF' }, fill: NAVY, align: { h: 'center', v: 'center' } }),
-      grpS: S({ font: { sz: 9, b: true, color: 'FFFFFF' }, fill: TEAL, align: { h: 'center', v: 'center' } }),
-      grpP: S({ font: { sz: 9, b: true, color: 'FFFFFF' }, fill: INK, align: { h: 'center', v: 'center' } }),
-      th: S({ font: { sz: 8, b: true, color: 'FFFFFF' }, fill: INK, align: { v: 'center', indent: 1, wrap: true } }),
-      thR: S({ font: { sz: 8, b: true, color: 'FFFFFF' }, fill: INK, align: { h: 'right', v: 'center', wrap: true } }),
-      thB: S({ font: { sz: 8, b: true, color: NAVY }, fill: B_HEAD, align: { h: 'center', v: 'center', wrap: true } }),
-      thBR: S({ font: { sz: 8, b: true, color: NAVY }, fill: B_HEAD, align: { h: 'right', v: 'center', wrap: true } }),
-      thS: S({ font: { sz: 8, b: true, color: TEAL }, fill: S_HEAD, align: { h: 'center', v: 'center', wrap: true } }),
-      thSR: S({ font: { sz: 8, b: true, color: TEAL }, fill: S_HEAD, align: { h: 'right', v: 'center', wrap: true } })
+    const W = [28, 22, 14, 6.5, 16.5, 8.5, 16, 16.5, 8.5, 16];   // A–J (generous: nothing may clip in Excel — not even AED 1,234,567.89)
+    const LAST = W.length - 1;
+    // Arial character widths (1/1000 em) — so wrapped cells get exactly the height they need in Excel
+    const AW = { U: [667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611], UB: [722, 722, 722, 722, 667, 611, 778, 722, 278, 556, 722, 611, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611],
+      L: [556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500], LB: [556, 611, 556, 611, 556, 333, 611, 611, 278, 278, 556, 278, 889, 611, 611, 611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500] };
+    const cw = (ch, b) => { const u = ch.charCodeAt(0); if (u >= 65 && u <= 90) return AW[b ? 'UB' : 'U'][u - 65]; if (u >= 97 && u <= 122) return AW[b ? 'LB' : 'L'][u - 97]; if (u >= 48 && u <= 57) return 556; return ' .,:;\'′|!il'.includes(ch) ? 278 : '-()[]/'.includes(ch) ? 333 : '—→€@%&W'.includes(ch) ? 1000 : 600; };
+    const tw = (t, pt, b) => { let w = 0; for (const ch of String(t)) w += cw(ch, b); return w / 1000 * pt * 4 / 3; };
+    const span = (c1, c2) => { let w = 0; for (let c = c1; c <= c2; c++) w += W[c] * 7 + 5; return w; };
+    const linesOf = (t, pt, b, c1, c2) => {                      // word-wrap the way Excel does, with a 12 % margin
+      const room = span(c1, c2) - 16;
+      return String(t || '').split('\n').reduce((n, part) => {
+        let lines = 1, cur = '';
+        part.split(' ').forEach((wd) => { const tr = cur ? cur + ' ' + wd : wd; if (cur && tw(tr, pt, b) * 1.12 > room) { lines++; cur = wd; } else cur = tr; });
+        return n + lines;
+      }, 0);
     };
-    // a cell of the table: z = zebra row, side = '' | 'b' | 's'
-    const cellSt = (z, kind, side) => {
-      const fill = side === 'b' ? (z ? B_ZEB : B_CELL) : side === 's' ? (z ? S_ZEB : S_CELL) : (z ? ZEBRA : undefined);
-      const base = { border: { bottom: ['hair', 'B8C4CF'] }, fill };
-      const color = side === 's' ? '0B4F4E' : INK;
-      if (kind === 'txt') return S(Object.assign({}, base, { font: { sz: 9, color: INK }, align: { v: 'center', indent: 1, wrap: true } }));
-      if (kind === 'b') return S(Object.assign({}, base, { font: { sz: 9, b: true, color: INK }, align: { v: 'center', indent: 1, wrap: true } }));
-      if (kind === 'cur') return S(Object.assign({}, base, { font: { sz: 8, b: true, color: GREY }, align: { h: 'center', v: 'center' } }));
-      if (kind === 'qty') return S(Object.assign({}, base, { font: { sz: 9, color: INK }, fmt: 'General', align: { h: 'right', v: 'center' } }));
-      if (kind === 'rate') return S(Object.assign({}, base, { font: { sz: 9, color: color }, fmt: RATE, align: { h: 'right', v: 'center' } }));
-      if (kind === 'fx') return S(Object.assign({}, base, { font: { sz: 8, color: GREY }, fmt: FX, align: { h: 'right', v: 'center' } }));
-      if (kind === 'aed') return S(Object.assign({}, base, { font: { sz: 9, b: true, color: color }, fmt: AED, align: { h: 'right', v: 'center' } }));
-      if (kind === 'incl') return S(Object.assign({}, base, { font: { sz: 8, i: true, color: GREY }, align: { h: 'right', v: 'center' } }));
-      return S(Object.assign({}, base, { font: { sz: 9, b: true, color: TEAL }, fmt: AED, align: { h: 'right', v: 'center' } }));
-    };
-    const gap = S({});
     const rows = {}, merges = [];
     const put = (r, c, v, s, f) => { (rows[r] = rows[r] || { c: {} }).c[c] = { v, s, f }; };
     const height = (r, h) => { (rows[r] = rows[r] || { c: {} }).h = h; };
-    const merge = (r1, c1, r2, c2) => merges.push(C(c1) + r1 + ':' + C(c2) + r2);
-    const ai = info.mode === 'ALLIN';
-    // ---- header
-    height(1, 30); height(2, 22); height(3, 8);
-    put(1, 11, 'COST SHEET', st.title); merge(1, 11, 1, 15);
-    put(2, 11, 'JOB ' + info.job, st.job); merge(2, 11, 2, 15);
-    const band = (r, items) => { items.forEach(([c1, c2, label, value, vs]) => { put(r, c1, label, st.lab); put(r + 1, c1, value, vs || st.val); for (let c = c1 + 1; c <= c2; c++) { put(r, c, '', st.lab); put(r + 1, c, '', vs || st.val); } if (c2 > c1) { merge(r, c1, r, c2); merge(r + 1, c1, r + 1, c2); } }); height(r, 14); };
-    const custLines = Math.max(1, Math.ceil(String(info.customer || '').length / 44));
-    band(4, [[0, 0, 'JOB NO.', info.job], [1, 3, 'CUSTOMER', info.customer || '—'], [4, 9, 'ROUTE', info.route], [10, 15, 'TYPE', info.type + (ai ? ' · ALL-IN' : ' · ITEMISED')]]);
-    height(5, Math.max(20, 14 * custLines + 6));
-    band(6, [[0, 0, 'CONTAINERS', info.cargo || '—'], [1, 3, 'SALES', info.sales || '—'], [4, 9, 'CUSTOMER SERVICE', info.cs || '—'], [10, 15, 'STATUS', info.statusLine, info.status === 'LOCKED' ? st.lock : st.draft]]);
-    height(7, 20); height(8, 10);
+    const cell = (r, c1, c2, v, s, f) => { put(r, c1, v, s, f); for (let c = c1 + 1; c <= c2; c++) put(r, c, '', s); if (c2 > c1) merges.push(C(c1) + r + ':' + C(c2) + r); };
+    const st = {
+      title: S({ font: { sz: 18, b: true, color: INK }, align: { h: 'right', v: 'center' } }),
+      job: S({ font: { sz: 11, b: true, color: NAVY }, align: { h: 'right', v: 'center' } }),
+      state: S({ font: { sz: 9, b: true, color: info.status === 'LOCKED' ? TEAL : NAVY }, align: { h: 'right', v: 'center' } }),
+      rule: S({ border: { bottom: ['thin', INK] } }),
+      lab: S({ font: { sz: 7.5, b: true, color: MUTE }, align: { v: 'bottom', indent: 1 } }),
+      val: S({ font: { sz: 10, b: true, color: INK }, border: { bottom: ['thin', LINE] }, align: { v: 'top', indent: 1, wrap: true } }),
+      chg: S({ font: { sz: 8, b: true, color: INK }, border: { bottom: ['thin', INK] }, align: { v: 'center', indent: 1 } }),
+      grpB: S({ font: { sz: 8.5, b: true, color: NAVY }, border: { bottom: ['medium', NAVY] }, align: { h: 'center', v: 'center' } }),
+      grpS: S({ font: { sz: 8.5, b: true, color: TEAL }, border: { bottom: ['medium', TEAL], left: ['thin', LINE] }, align: { h: 'center', v: 'center' } }),
+      foot: S({ font: { sz: 7.5, color: MUTE }, align: { v: 'top', indent: 1, wrap: true } })
+    };
+    // KPI tiles: a thin rule on top, a hairline between tiles (left edge), label then value
+    const tileLab = (first, color) => S({ font: { sz: 7.5, b: true, color: color || MUTE }, border: Object.assign({ top: ['thin', LINE] }, first ? {} : { left: ['thin', LINE] }), align: { v: 'bottom', indent: 1 } });
+    const tileVal = (first, sz, color, fmt, bottom) => S({ font: { sz, b: true, color: color || INK }, fmt, border: Object.assign(first ? {} : { left: ['thin', LINE] }, bottom ? { bottom: ['thin', LINE] } : {}), align: { h: 'left', v: 'center', indent: 1 } });
+    // table cells: z = zebra row; side '' | 'b' | 's'; the selling side opens with a hairline (the divider)
+    const td = (z, kind, side, fmt) => {
+      const o = { border: Object.assign({ bottom: ['thin', HAIR] }, side === 's' && (kind === 'rate' || kind === 'incl') ? { left: ['thin', LINE] } : {}), fill: z ? ZEBRA : undefined };
+      const tone = side === 'b' ? NAVY : side === 's' ? TEAL : INK;
+      if (kind === 'chg') o.font = { sz: 9, b: true, color: INK }, o.align = { v: 'center', indent: 1, wrap: true };
+      else if (kind === 'txt') o.font = { sz: 9, color: GREY }, o.align = { v: 'center', indent: 1, wrap: true };
+      else if (kind === 'basis') o.font = { sz: 9, color: GREY }, o.align = { v: 'center', indent: 1 };
+      else if (kind === 'qty') o.font = { sz: 9, color: INK }, o.fmt = 'General', o.align = { h: 'right', v: 'center', indent: 1 };
+      else if (kind === 'rate') o.font = { sz: 9, color: INK }, o.fmt = fmt, o.align = { h: 'right', v: 'center', indent: 1 };
+      else if (kind === 'fx') o.font = { sz: 8, color: MUTE }, o.fmt = FX, o.align = { h: 'right', v: 'center' };
+      else if (kind === 'incl') o.font = { sz: 8, i: true, color: MUTE }, o.align = { h: 'right', v: 'center', indent: 1 };
+      else o.font = { sz: 9, b: true, color: tone }, o.fmt = AEDL, o.align = { h: 'right', v: 'center', indent: 1 };
+      return S(o);
+    };
+    const th = (side, right) => S({ font: { sz: 7.5, b: true, color: side === 'b' ? NAVY : side === 's' ? TEAL : MUTE }, border: Object.assign({ bottom: ['thin', LINE] }, side === 's' && right === 'first' ? { left: ['thin', LINE] } : {}), align: { h: right ? 'right' : 'left', v: 'center', indent: 1 } });
+
+    // ---- header: logo left, title right
+    height(1, 28); height(2, 17); height(3, 14); height(4, 6);
+    cell(1, 4, LAST, 'COST SHEET', st.title);
+    cell(2, 4, LAST, 'JOB ' + info.job, st.job);
+    cell(3, 4, LAST, info.statusLine, st.state);
+    for (let c = 0; c <= LAST; c++) put(4, c, '', st.rule);
+    // ---- the job (two rows of four)
+    const BLOCKS = [[0, 0], [1, 3], [4, 6], [7, LAST]];
+    const facts = (r, items) => {
+      let n = 1;
+      items.forEach(([label, value], i) => { const [c1, c2] = BLOCKS[i]; cell(r, c1, c2, label, st.lab); cell(r + 1, c1, c2, value || '—', st.val); n = Math.max(n, linesOf(value || '—', 10, true, c1, c2)); });
+      height(r, 14); height(r + 1, 13 * n + 4);
+    };
+    facts(5, [['JOB NO.', info.job], ['CUSTOMER', info.customer], ['ROUTE', info.route], ['TYPE', info.type]]);
+    facts(7, [['CONTAINERS', info.cargo], [info.carrierLabel, info.carrier], [info.datesLabel, info.dates], ['SALES · CUSTOMER SERVICE', (info.sales || '—') + ' · ' + (info.cs || '—')]]);
+    height(9, 10);
     // ---- the table first (the summary refers to its totals)
-    const G = 12, H = 13, first = 14, lines = info.lines, last = first + lines.length - 1, T = first + Math.max(lines.length, 0);
-    const GAPS = [4, 9, 14];
-    put(G, 0, '', st.th); for (let c = 1; c <= 3; c++) put(G, c, '', st.th); merge(G, 0, G, 3);
-    put(G, 5, 'BUYING', st.grpB); for (let c = 6; c <= 8; c++) put(G, c, '', st.grpB); merge(G, 5, G, 8);
-    put(G, 10, 'SELLING', st.grpS); for (let c = 11; c <= 13; c++) put(G, c, '', st.grpS); merge(G, 10, G, 13);
-    put(G, 15, ai ? 'PROFIT (TOTAL)' : 'PROFIT', st.grpP);
+    const G = 15, H = 16, first = 17, lines = info.lines, last = first + lines.length - 1, T = first + lines.length;
+    cell(G, 0, 3, 'CHARGES · ' + lines.length, st.chg);
+    cell(G, 4, 6, 'BUYING', st.grpB);
+    cell(G, 7, LAST, 'SELLING', st.grpS);
     height(G, 18);
-    const heads = [[0, 'CHARGE', st.th], [1, 'VENDOR', st.th], [2, 'BASIS', st.th], [3, 'QTY', st.thR],
-      [5, 'CUR', st.thB], [6, 'RATE', st.thBR], [7, '@ USD', st.thBR], [8, 'AED', st.thBR],
-      [10, 'CUR', st.thS], [11, 'RATE', st.thSR], [12, '@ USD', st.thSR], [13, 'AED', st.thSR], [15, 'AED', st.thR]];
-    heads.forEach(([c, t, s]) => put(H, c, t, s)); height(H, 20);
-    GAPS.forEach((c) => { put(G, c, '', gap); put(H, c, '', gap); });
+    [[0, 'CHARGE', th('')], [1, 'VENDOR', th('')], [2, 'BASIS', th('')], [3, 'QTY', th('', 1)],
+      [4, 'RATE', th('b', 1)], [5, '@ USD', th('b', 1)], [6, 'AED', th('b', 1)],
+      [7, 'RATE', th('s', 'first')], [8, '@ USD', th('s', 1)], [9, 'AED', th('s', 1)]].forEach(([c, t, s]) => put(H, c, t, s));
+    height(H, 17);
     let sb = 0, ss = 0;
     lines.forEach((l, i) => {
-      const r = first + i, z = i % 2 === 1;
-      const bxv = l.bc === 'USD' ? (Number(l.bx) || CO) : 0, sxv = l.sc === 'USD' ? (Number(l.sx) || CO) : 0;
-      const b = (Number(l.qty) || 0) * (Number(l.br) || 0) * (l.bc === 'USD' ? bxv : 1), s = (Number(l.qty) || 0) * (Number(l.sr) || 0) * (l.sc === 'USD' ? sxv : 1);
-      const incl = ai && !(Number(l.sr) || 0);
-      sb += b; ss += s;
-      put(r, 0, l.charge, cellSt(z, 'b')); put(r, 1, l.vendor || '', cellSt(z, 'txt')); put(r, 2, BASIS_SHORT[l.basis] || l.basis, cellSt(z, 'txt'));
-      put(r, 3, Number(l.qty) || 0, cellSt(z, 'qty'));
-      put(r, 5, l.bc, cellSt(z, 'cur', 'b')); put(r, 6, Number(l.br) || 0, cellSt(z, 'rate', 'b')); put(r, 7, bxv || '', cellSt(z, 'fx', 'b'));
-      put(r, 8, b, cellSt(z, 'aed', 'b'), 'D' + r + '*G' + r + '*IF(F' + r + '="USD",H' + r + ',1)');
-      if (incl) { put(r, 10, '', cellSt(z, 'cur', 's')); put(r, 11, '', cellSt(z, 'rate', 's')); put(r, 12, '', cellSt(z, 'fx', 's')); put(r, 13, 'incl.', cellSt(z, 'incl', 's')); }
-      else {
-        put(r, 10, l.sc, cellSt(z, 'cur', 's')); put(r, 11, Number(l.sr) || 0, cellSt(z, 'rate', 's')); put(r, 12, sxv || '', cellSt(z, 'fx', 's'));
-        put(r, 13, s, cellSt(z, 'aed', 's'), 'D' + r + '*L' + r + '*IF(K' + r + '="USD",M' + r + ',1)');
-      }
-      if (ai) put(r, 15, '', cellSt(z, 'txt')); else put(r, 15, s - b, cellSt(z, 'pf'), 'N' + r + '-I' + r);
-      GAPS.forEach((c) => put(r, c, '', gap));
-      const long = Math.max(String(l.charge).length / 30, String(l.vendor || '').length / 22);
-      height(r, long > 1 ? Math.ceil(long) * 12 + 6 : 18);
+      const r = first + i, z = i % 2 === 1, q = Number(l.qty) || 0;
+      const side = (k) => {
+        const usd = l[k + 'c'] === 'USD', rate = Number(l[k + 'r']) || 0, fx = usd ? (Number(l[k + 'x']) || CO) : 0;
+        return { usd, rate, fx, aed: q * rate * (usd ? fx : 1) };
+      };
+      const B = side('b'), Sd = side('s'), incl = !Sd.rate;
+      sb += B.aed; ss += Sd.aed;
+      put(r, 0, l.charge, td(z, 'chg')); put(r, 1, l.vendor || '', td(z, 'txt')); put(r, 2, BASIS_SHORT[l.basis] || l.basis, td(z, 'basis'));
+      put(r, 3, q, td(z, 'qty'));
+      put(r, 4, B.rate || '', td(z, 'rate', 'b', RATEF[B.usd ? 'USD' : 'AED'])); put(r, 5, B.usd ? B.fx : '', td(z, 'fx', 'b'));
+      put(r, 6, B.aed, td(z, 'aed', 'b'), 'D' + r + '*N(E' + r + ')*IF(ISNUMBER(F' + r + '),F' + r + ',1)');
+      put(r, 7, incl ? 'incl.' : Sd.rate, incl ? td(z, 'incl', 's') : td(z, 'rate', 's', RATEF[Sd.usd ? 'USD' : 'AED']));
+      put(r, 8, !incl && Sd.usd ? Sd.fx : '', td(z, 'fx', 's'));
+      put(r, 9, Sd.aed, td(z, 'aed', 's'), 'D' + r + '*N(H' + r + ')*IF(ISNUMBER(I' + r + '),I' + r + ',1)');
+      const n = Math.max(linesOf(l.charge, 9, true, 0, 0), linesOf(l.vendor, 9, false, 1, 1));
+      height(r, n > 1 ? 11.6 * n + 5 : 17);
     });
-    const tot = (fill, color) => ({ l: S({ font: { sz: 10, b: true, color: INK }, fill, border: { top: ['medium', INK] }, align: { h: 'right', v: 'center', indent: 1 } }), n: S({ font: { sz: 10, b: true, color }, fill, border: { top: ['medium', INK] }, fmt: AED, align: { h: 'right', v: 'center' } }) });
-    const tA = tot(TINT, INK), tB = tot(B_HEAD, NAVY), tS = tot(S_HEAD, TEAL), tP = tot(TINT, TEAL);
-    for (let c = 0; c <= 3; c++) put(T, c, c === 0 ? 'TOTAL (AED)' : '', tA.l);
-    merge(T, 0, T, 3);
+    // totals
+    const tl = S({ font: { sz: 9.5, b: true, color: INK }, border: { top: ['thin', INK] }, align: { v: 'center', indent: 1 } });
+    const te = (left) => S({ border: Object.assign({ top: ['thin', INK] }, left ? { left: ['thin', LINE] } : {}) });
+    const tn = (color) => S({ font: { sz: 10, b: true, color }, fmt: AED, border: { top: ['thin', INK], bottom: ['double', INK] }, align: { h: 'right', v: 'center', indent: 1 } });
     const sum = (L) => (lines.length ? 'SUM(' + L + first + ':' + L + last + ')' : null);
-    for (let c = 5; c <= 7; c++) put(T, c, '', tB.l);
-    put(T, 8, sb, tB.n, sum('I'));
-    for (let c = 10; c <= 12; c++) put(T, c, '', tS.l);
-    put(T, 13, ss, tS.n, sum('N'));
-    put(T, 15, ss - sb, tP.n, lines.length ? 'N' + T + '-I' + T : null);
-    GAPS.forEach((c) => put(T, c, '', gap));
-    height(T, 22);
-    // ---- summary (rows 9–10)
-    const p = ss - sb, bx = info.boxes;
-    height(9, 14); height(10, 26); height(11, 8);
-    const sl = [[0, 0, 'SELLING (AED)'], [1, 1, 'BUYING (AED)'], [2, 3, 'PROFIT (AED)'], [5, 6, 'MARGIN'], [7, 8, 'MARK-UP'], [10, 11, 'PROFIT / BOX (AED)'], [12, 13, 'COST / BOX (USD)'], [14, 15, 'SELL / BOX (USD)']];
-    sl.forEach(([c1, c2, t]) => { put(9, c1, t, st.slab); if (c2 > c1) { put(9, c2, '', st.slab); merge(9, c1, 9, c2); } });
-    const two = (c, v, s, f) => { put(10, c, v, s, f); put(10, c + 1, '', s); merge(10, c, 10, c + 1); };
-    put(10, 0, ss, st.sAed, 'N' + T); put(10, 1, sb, st.sAed, 'I' + T);
-    two(2, p, st.sProfit, 'P' + T);
-    two(5, ss ? p / ss : 0, st.sPct, 'IF(N' + T + '=0,0,P' + T + '/N' + T + ')');
-    two(7, sb ? p / sb : 0, st.sPct, 'IF(I' + T + '=0,0,P' + T + '/I' + T + ')');
-    if (bx) { two(10, p / bx, st.sAed, 'P' + T + '/' + bx); two(12, sb / bx / CO, st.sAed, 'I' + T + '/' + bx + '/' + CO); two(14, ss / bx / CO, st.sAed, 'N' + T + '/' + bx + '/' + CO); }
-    else { two(10, '—', st.sTxt); two(12, '—', st.sTxt); two(14, '—', st.sTxt); }
+    put(T, 0, 'TOTAL · AED', tl); for (let c = 1; c <= LAST; c++) put(T, c, '', te(c === 7));
+    put(T, 6, sb, tn(NAVY), sum('G')); put(T, 9, ss, tn(TEAL), sum('J'));
+    height(T, 19);
+    const p = ss - sb, bx = info.boxes, gT = 'G' + T, jT = 'J' + T;
+    const money2 = (v) => (Math.round(v * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const resTxt = 'Selling ' + money2(ss) + '  −  Buying ' + money2(sb) + '  =  Profit ' + money2(p) + (ss ? '  ·  ' + (Math.round(p / ss * 1000) / 10).toFixed(1) + '% margin' : '');
+    const resF = '"Selling "&TEXT(' + jT + ',"#,##0.00")&"  −  Buying "&TEXT(' + gT + ',"#,##0.00")&"  =  Profit "&TEXT(' + jT + '-' + gT + ',"#,##0.00")&IF(' + jT + '=0,"","  ·  "&TEXT((' + jT + '-' + gT + ')/' + jT + ',"0.0%")&" margin")';
+    cell(T + 1, 0, LAST, resTxt, S({ font: { sz: 10.5, b: true, color: p < 0 ? RED : TEAL }, align: { h: 'right', v: 'center', indent: 1 } }), lines.length ? resF : null);
+    height(T + 1, 20);
+    // ---- the result (rows 10–11) and per box (rows 12–13)
+    const TILES = [[0, 0], [1, 1], [2, 3], [4, 6], [7, LAST]];        // the same columns as the table below
+    const tiles = (rl, items, sz, bottom) => {
+      items.forEach(([label, value, fmt, f, color, lcolor], i) => {
+        const [c1, c2] = TILES[i];
+        cell(rl, c1, c2, label, tileLab(i === 0, lcolor));
+        cell(rl + 1, c1, c2, value, tileVal(i === 0, sz, color, fmt, bottom), f);
+      });
+    };
+    height(10, 14); height(11, 25);
+    tiles(10, [
+      ['PROFIT · AED', p, AED, jT + '-' + gT, p < 0 ? RED : TEAL, TEAL],
+      ['MARGIN', ss ? p / ss : 0, PCT, 'IF(' + jT + '=0,0,(' + jT + '-' + gT + ')/' + jT + ')'],
+      ['MARK-UP', sb ? p / sb : 0, PCT, 'IF(' + gT + '=0,0,(' + jT + '-' + gT + ')/' + gT + ')'],
+      ['BUYING · AED', sb, AED, gT, INK, NAVY],
+      ['SELLING · AED', ss, AED, jT, INK, TEAL]
+    ], 15, false);
+    height(12, 14); height(13, 21);
+    tiles(12, bx ? [
+      ['PROFIT / BOX · AED', p / bx, AED, '(' + jT + '-' + gT + ')/' + bx, p < 0 ? RED : TEAL],
+      ['BOXES', bx + ' · ' + info.cargo, null, null, INK],
+      ['USD RATE · PER BOX', CO, FX, null, INK],
+      ['COST / BOX · USD', sb / bx / CO, USD2, gT + '/' + bx + '/' + CO, NAVY],
+      ['SELL / BOX · USD', ss / bx / CO, USD2, jT + '/' + bx + '/' + CO, TEAL]
+    ] : [
+      ['PROFIT / BOX · AED', '—', null, null, MUTE], ['BOXES', info.cargo || '—', null, null, INK], ['USD RATE · PER BOX', CO, FX, null, INK],
+      ['COST / BOX · USD', '—', null, null, MUTE], ['SELL / BOX · USD', '—', null, null, MUTE]
+    ], 12, true);
+    height(14, 12);
     // ---- under the table: notes, then where it came from
-    const foot = S({ font: { sz: 8, color: GREY }, align: { indent: 1 } });
-    let r = T + 2;
+    let r = T + 3;
     if (info.notes.length) {
-      const sec = S({ font: { sz: 9, b: true, color: NAVY }, fill: FOG, align: { v: 'center', indent: 1 } });
-      const nC = S({ font: { sz: 9, color: INK }, border: { bottom: ['hair', 'B8C4CF'] }, align: { v: 'top', indent: 1, wrap: true } });
-      const nW = S({ font: { sz: 8, color: GREY }, border: { bottom: ['hair', 'B8C4CF'] }, align: { v: 'top', indent: 1, wrap: true } });
-      put(r, 0, 'NOTES', sec); for (let c = 1; c <= 15; c++) put(r, c, '', sec); merge(r, 0, r, 15); height(r, 18); r++;
+      for (let c = 0; c <= LAST; c++) put(r, c, c ? '' : 'NOTES · ' + info.notes.length, st.chg);
+      height(r, 17); r++;
+      const nW = S({ font: { sz: 8, color: MUTE }, border: { bottom: ['thin', HAIR] }, align: { v: 'top', indent: 1 } });
+      const nC = S({ font: { sz: 9, color: INK }, border: { bottom: ['thin', HAIR] }, align: { v: 'top', indent: 1, wrap: true } });
       info.notes.forEach((n) => {
-        put(r, 0, n.when + ' · ' + n.by, nW); put(r, 1, n.txt, nC); for (let c = 2; c <= 15; c++) put(r, c, '', nC); merge(r, 1, r, 15);
-        height(r, Math.max(16, Math.ceil(String(n.txt).length / 120) * 12 + 6)); r++;
+        put(r, 0, n.when + ' · ' + n.by, nW); cell(r, 1, LAST, n.txt, nC);
+        height(r, Math.max(16, 11.6 * linesOf(n.txt, 9, false, 1, LAST) + 5)); r++;
       });
       r++;
     }
-    put(r, 0, 'Amounts in AED. Every USD amount converts at its own rate (the @ USD column); per-box USD at ' + CO + '. Generated ' + info.at + ' by ' + info.user + ' from ETHIX.', foot); merge(r, 0, r, 15);
-    if (info.unsaved) { r++; put(r, 0, 'DRAFT — this export includes changes that were not saved yet.', S({ font: { sz: 9, b: true, color: 'B42318' }, align: { indent: 1 } })); merge(r, 0, r, 15); }
-    const sheet1 = { cols: [28, 20, 12, 6.5, 1.6, 6, 11, 8.5, 13.5, 1.6, 6, 11, 8.5, 13.5, 1.6, 13.5], rows, merges, tab: true, landscape: true, footer: '&L&8ETHIX · Costing · Job ' + info.job + '&R&8Page &P of &N', noCache: !!opts.noCache };
+    const fine = 'Amounts in AED. Each USD amount converts at the rate in its own @ USD column; per box in USD at ' + CO + '. All figures are live formulas. Generated ' + info.at + ' by ' + info.user + ' from ETHIX.';
+    cell(r, 0, LAST, fine, st.foot);
+    height(r, Math.max(14, 10 * linesOf(fine, 7.5, false, 0, LAST) + 4));
+    if (info.unsaved) { r++; cell(r, 0, LAST, 'DRAFT — this export includes changes that were not saved yet.', S({ font: { sz: 9, b: true, color: RED }, align: { indent: 1 } })); height(r, 16); }
+    let tall = 0; for (let k = 1; k <= r; k++) tall += (rows[k] && rows[k].h) || 15;
+    const sheet1 = { cols: W, rows, merges, tab: true, tabColor: '48BEBF', landscape: true, fitH: tall <= 700 ? 1 : 0, footer: '&L&8ETHIX · Costing · Job ' + info.job + '&R&8Page &P of &N', noCache: !!opts.noCache };
     return XL.book({
-      title: 'ETHIX costing ' + info.job, user: info.user, logo, logoH: 40, titles: "Costing!$12:$13",
+      title: 'ETHIX costing ' + info.job, user: info.user, logo, logoH: 40, titles: 'Costing!$' + G + ':$' + H,
       sheets: [{ name: 'Costing', xml: (d) => XL.sheetXml(Object.assign({}, sheet1, { drawing: d })) }],
       styles: S.xml()
     });
@@ -4022,7 +4057,9 @@
       : C.dirty || D.status === 'NEW' ? 'DRAFT · NOT SAVED' : 'DRAFT' + (D.by ? ' · SAVED BY ' + D.by : '') + (D.at ? ' · ' + stamp(D.at) : '');
     return {
       job: j.jobNo, customer: j.customer, route: j.mode === 'misc' ? (j.against ? 'AGAINST ' + j.against : 'COSTING ONLY') : (j.pol || '—') + ' → ' + (j.pod || '—'), type: j.type + ' · ' + j.typeName, cargo: j.cargo || (j.mode === 'air' ? 'AIR' : j.mode === 'courier' ? 'COURIER' : ''), boxes: boxesOf(j),
-      sales: j.sales, cs: j.cs, status: D.status === 'LOCKED' ? 'LOCKED' : 'DRAFT', statusLine, mode: C.draft.mode, lines, unsaved: C.dirty || D.status === 'NEW', user: state.user, at: fmt(new Date(), true) + ' ' + stampText(new Date()).slice(-5),
+      carrier: j.vendor || '—', carrierLabel: { sea: 'SHIPPING LINE', air: 'AIRLINE', courier: 'COURIER' }[j.mode] || 'VENDOR',
+      datesLabel: j.mode === 'courier' ? 'PICK-UP · DELIVERY' : 'ETD · ETA', dates: (j.etd || j.eta) ? fmt(j.etd, true) + '  →  ' + fmt(j.eta, true) : '—',
+      sales: j.sales, cs: j.cs, status: D.status === 'LOCKED' ? 'LOCKED' : 'DRAFT', statusLine, lines, unsaved: C.dirty || D.status === 'NEW', user: state.user, at: fmt(new Date(), true) + ' ' + stampText(new Date()).slice(-5),
       notes: C.draft.notes.map((t) => ({ when: 'not saved yet', by: state.user, txt: t })).concat((D.notes || []).slice().reverse().map((n) => ({ when: stamp(n.t), by: n.by, txt: n.txt })))
     };
   }
@@ -4359,8 +4396,6 @@
       const qc = e.target.closest('[data-quick-charge]'); if (qc) { addCostLine(j, qc.dataset.quickCharge); return; }
       const un = e.target.closest('[data-unnote]'); if (un) { C.draft.notes.splice(+un.dataset.unnote, 1); C.dirty = C.dirty || true; rerender(); return; }
       if (!costCanEdit(j, C.data)) return;
-      const md = e.target.closest('[data-cost-mode]');
-      if (md) { if (C.draft.mode !== md.dataset.costMode) { C.draft.mode = md.dataset.costMode === 'ALLIN' ? 'ALLIN' : 'ITEM'; C.dirty = true; rerender(); } return; }
       const cur = e.target.closest('[data-cur]');
       if (cur) {
         const row = cur.closest('[data-line]'); const l = C.draft.lines.find((x) => x.id === row.dataset.line); if (!l) return;
@@ -4436,6 +4471,264 @@
     document.addEventListener('focusin', onList, true);
     window.addEventListener('beforeunload', (e) => { if (state.cost && state.cost.dirty) { e.preventDefault(); e.returnValue = ''; } });
     initV27();
+    initV28();
+  }
+
+  // ================================================================ v2.8 — port clocks (office hours where the port is)
+  // [pattern, time zone, country]. Port names come from the tracker as typed (and the remembered PORTS list).
+  const PORT_TZ = [
+    [/KHALIFA BIN SALMAN|BAHRAIN|MANAMA|\bBAH\b/, 'Asia/Bahrain', 'BH'],
+    [/JEBEL ALI|\bJEA\b|DUBAI|\bDXB\b|\bDWC\b|ABU DHABI|\bAUH\b|KHALIFA|MINA ZAYED|KHOR ?FAKKAN|SHARJAH|\bSHJ\b|AJMAN|FUJAIRAH|RAS AL KHAIMAH|\bRAK\b|SAQR|HAMRIYAH|U\.?A\.?E\b|EMIRATES/, 'Asia/Dubai', 'AE'],
+    [/SOHAR|SALALAH|MUSCAT|\bMCT\b|DUQM|SULTAN QABOOS|\bOMAN\b/, 'Asia/Muscat', 'OM'],
+    [/JEDDAH|\bJED\b|DAMMAM|\bDMM\b|RIYADH|\bRUH\b|JUBAIL|KING ABDULLAH|YANBU|SAUDI|\bKSA\b/, 'Asia/Riyadh', 'SA'],
+    [/HAMAD|DOHA|\bDOH\b|QATAR/, 'Asia/Qatar', 'QA'],
+    [/SHUWAIKH|SHUAIBA|KUWAIT|\bKWI\b/, 'Asia/Kuwait', 'KW'],
+    [/UMM QASR|BASRA|BAGHDAD|IRAQ|ERBIL/, 'Asia/Baghdad', 'IQ'],
+    [/BANDAR ABBAS|BUSHEHR|IRAN/, 'Asia/Tehran', 'IR'],
+    [/AQABA|AMMAN|JORDAN/, 'Asia/Amman', 'JO'],
+    [/SOKHNA|PORT SAID|ALEXANDRIA|DAMIETTA|CAIRO|EGYPT/, 'Africa/Cairo', 'EG'],
+    [/\bADEN\b|HODEIDAH|YEMEN/, 'Asia/Aden', 'YE'],
+    [/HAIFA|ASHDOD|ISRAEL/, 'Asia/Jerusalem', 'IL'],
+    [/BEIRUT|LEBANON/, 'Asia/Beirut', 'LB'],
+    [/LIMASSOL|CYPRUS/, 'Asia/Nicosia', 'CY'],
+    [/KARACHI|\bKHI\b|QASIM|LAHORE|\bLHE\b|ISLAMABAD|SIALKOT|FAISALABAD|PAKISTAN/, 'Asia/Karachi', 'PK'],
+    [/NHAVA ?SHEVA|JNPT|MUNDRA|HAZIRA|COCHIN|KOCHI|\bCOK\b|CHENNAI|MADRAS|\bMAA\b|TUTICORIN|VIZAG|VISAKHAPATNAM|KOLKATA|CALCUTTA|\bCCU\b|HALDIA|MUMBAI|BOMBAY|\bBOM\b|PIPAVAV|KANDLA|MANGALORE|DELHI|\bDEL\b|\bICD\b|BANGALORE|BENGALURU|\bBLR\b|HYDERABAD|\bHYD\b|AHMEDABAD|\bAMD\b|PUNE|KATTUPALLI|ENNORE|KRISHNAPATNAM|LUDHIANA|TIRUPUR|INDIA/, 'Asia/Kolkata', 'IN'],
+    [/COLOMBO|\bCMB\b|SRI LANKA/, 'Asia/Colombo', 'LK'],
+    [/CHITTAGONG|CHATTOGRAM|DHAKA|\bDAC\b|BANGLADESH/, 'Asia/Dhaka', 'BD'],
+    [/\bMALE\b|MALDIVES/, 'Indian/Maldives', 'MV'],
+    [/HONG ?KONG|\bHKG\b/, 'Asia/Hong_Kong', 'HK'],
+    [/KAOHSIUNG|KEELUNG|TAIPEI|TAICHUNG|TAIWAN/, 'Asia/Taipei', 'TW'],
+    [/SHANGHAI|\bPVG\b|NINGBO|SHENZHEN|\bSZX\b|SHEKOU|SHOKOU|YANTIAN|CHIWAN|QINGDAO|\bTAO\b|DALIAN|TIANJIN|XINGANG|XIAMEN|GUANGZHOU|\bCAN\b|NANSHA|HUANGPU|WUHAN|CHONGQING|FUZHOU|LIANYUNGANG|NANJING|TAICANG|ZHUHAI|BEIJING|\bPEK\b|SHANTOU|JIANGMEN|FOSHAN|ZHONGSHAN|DONGGUAN|CHINA/, 'Asia/Shanghai', 'CN'],
+    [/BUSAN|PUSAN|INCHEON|\bICN\b|GWANGYANG|KOREA/, 'Asia/Seoul', 'KR'],
+    [/TOKYO|\bNRT\b|\bHND\b|YOKOHAMA|KOBE|OSAKA|NAGOYA|HAKATA|JAPAN/, 'Asia/Tokyo', 'JP'],
+    [/SINGAPORE|\bSIN\b/, 'Asia/Singapore', 'SG'],
+    [/PORT ?KELANG|PORT ?KLANG|\bKELANG\b|PASIR ?GUDANG|TANJUNG PELEPAS|PENANG|KUALA LUMPUR|\bKUL\b|MALAYSIA/, 'Asia/Kuala_Lumpur', 'MY'],
+    [/LAEM CHABANG|BANGKOK|\bBKK\b|LAT KRABANG|THAILAND/, 'Asia/Bangkok', 'TH'],
+    [/HO CHI MINH|HAIPHONG|HAI PHONG|CAT LAI|DA NANG|CAI MEP|VIETNAM/, 'Asia/Ho_Chi_Minh', 'VN'],
+    [/JAKARTA|TANJUNG PRIOK|SURABAYA|SEMARANG|INDONESIA/, 'Asia/Jakarta', 'ID'],
+    [/MANILA|CEBU|PHILIPPINES/, 'Asia/Manila', 'PH'],
+    [/SYDNEY|NEWCASTLE AU/, 'Australia/Sydney', 'AU'], [/MELBOURNE/, 'Australia/Melbourne', 'AU'], [/BRISBANE/, 'Australia/Brisbane', 'AU'], [/FREMANTLE|PERTH/, 'Australia/Perth', 'AU'], [/ADELAIDE/, 'Australia/Adelaide', 'AU'],
+    [/AUCKLAND|TAURANGA|NEW ZEALAND/, 'Pacific/Auckland', 'NZ'],
+    [/DAR ES SALAAM|TANZANIA|ZANZIBAR/, 'Africa/Dar_es_Salaam', 'TZ'],
+    [/MOMBASA|NAIROBI|KENYA/, 'Africa/Nairobi', 'KE'],
+    [/DJIBOUTI/, 'Africa/Djibouti', 'DJ'], [/BERBERA|MOGADISHU|SOMALI/, 'Africa/Mogadishu', 'SO'], [/PORT SUDAN|KHARTOUM|SUDAN/, 'Africa/Khartoum', 'SD'],
+    [/DOUALA|KRIBI|CAMEROON/, 'Africa/Douala', 'CM'], [/\bLOME\b|TOGO/, 'Africa/Lome', 'TG'], [/TIN ?CAN|APAPA|LAGOS|\bONNE\b|NIGERIA/, 'Africa/Lagos', 'NG'],
+    [/\bTEMA\b|TAKORADI|GHANA/, 'Africa/Accra', 'GH'], [/ABIDJAN|IVORY|COTE D/, 'Africa/Abidjan', 'CI'], [/COTONOU|BENIN/, 'Africa/Porto-Novo', 'BJ'],
+    [/DURBAN|CAPE TOWN|JOHANNESBURG|SOUTH AFRICA/, 'Africa/Johannesburg', 'ZA'], [/MAPUTO|BEIRA|MOZAMBIQUE/, 'Africa/Maputo', 'MZ'], [/LUANDA|ANGOLA/, 'Africa/Luanda', 'AO'],
+    [/MISRATA|MISURATA|MISRATAH|TRIPOLI|BENGHAZI|KHOMS|LIBYA/, 'Africa/Tripoli', 'LY'], [/CASABLANCA|TANGER|MOROCCO/, 'Africa/Casablanca', 'MA'], [/ALGIERS|ORAN|ALGERIA/, 'Africa/Algiers', 'DZ'], [/TUNIS|RADES/, 'Africa/Tunis', 'TN'],
+    [/ROTTERDAM|AMSTERDAM|\bAMS\b|NETHERLANDS|HOLLAND/, 'Europe/Amsterdam', 'NL'], [/ANTWERP|ZEEBRUGGE|BELGIUM/, 'Europe/Brussels', 'BE'],
+    [/HAMBURG|BREMERHAVEN|FRANKFURT|\bFRA\b|GERMANY/, 'Europe/Berlin', 'DE'], [/LONDON|FELIXSTOWE|SOUTHAMPTON|TILBURY|LIVERPOOL|\bLHR\b|IMMINGHAM|\bUK\b|UNITED KINGDOM|ENGLAND/, 'Europe/London', 'GB'],
+    [/LE HAVRE|\bFOS\b|MARSEILLE|PARIS|\bCDG\b|FRANCE/, 'Europe/Paris', 'FR'], [/GENOVA|GENOA|LA SPEZIA|LIVORNO|NAPLES|NAPOLI|GIOIA TAURO|TRIESTE|VENICE|MILAN|SALERNO|RAVENNA|ITALY/, 'Europe/Rome', 'IT'],
+    [/VALENCIA|BARCELONA|ALGECIRAS|MADRID|BILBAO|SPAIN/, 'Europe/Madrid', 'ES'], [/PIRAEUS|THESSALONIKI|GREECE/, 'Europe/Athens', 'GR'], [/LISBON|SINES|LEIXOES|PORTUGAL/, 'Europe/Lisbon', 'PT'],
+    [/ISTANBUL|\bIST\b|AMBARLI|MERSIN|IZMIR|GEMLIK|KOCAELI|TURKEY|TURKIYE/, 'Europe/Istanbul', 'TR'], [/CONSTANTA|CONSTANTZA|ROMANIA/, 'Europe/Bucharest', 'RO'], [/VARNA|BURGAS|BULGARIA/, 'Europe/Sofia', 'BG'],
+    [/NOVOROSSIYSK|\bNOVO\b|ST\.? PETERSBURG|SAINT PETERSBURG|MOSCOW|VLADIVOSTOK|RUSSIA/, 'Europe/Moscow', 'RU'], [/ODESSA|ODESA|UKRAINE/, 'Europe/Kyiv', 'UA'], [/POTI|BATUMI|GEORGIA/, 'Asia/Tbilisi', 'GE'],
+    [/HELSINGBORG|GOTHENBURG|GOTEBORG|STOCKHOLM|MALMO|SWEDEN/, 'Europe/Stockholm', 'SE'], [/AARHUS|COPENHAGEN|DENMARK/, 'Europe/Copenhagen', 'DK'], [/\bOSLO\b|NORWAY/, 'Europe/Oslo', 'NO'],
+    [/HELSINKI|KOTKA|FINLAND/, 'Europe/Helsinki', 'FI'], [/GDANSK|GDYNIA|POLAND/, 'Europe/Warsaw', 'PL'], [/KOPER|SLOVENIA/, 'Europe/Ljubljana', 'SI'], [/RIJEKA|CROATIA/, 'Europe/Zagreb', 'HR'],
+    [/\bRIGA\b|LATVIA/, 'Europe/Riga', 'LV'], [/KLAIPEDA|LITHUANIA/, 'Europe/Vilnius', 'LT'], [/TALLINN|MUUGA|ESTONIA/, 'Europe/Tallinn', 'EE'], [/MALTA|MARSAXLOKK|VALLETTA/, 'Europe/Malta', 'MT'],
+    [/NEW YORK|NEWARK|NEW JERSEY|\bJFK\b|\bEWR\b|BALTIMORE|PHILADELPHIA|NORFOLK|CHARLESTON|SAVANNAH|MIAMI|\bMIA\b|JACKSONVILLE|BOSTON|ATLANTA|\bATL\b|WILMINGTON/, 'America/New_York', 'US'],
+    [/HOUSTON|\bIAH\b|NEW ORLEANS|DALLAS|CHICAGO|\bORD\b|MOBILE|MEMPHIS/, 'America/Chicago', 'US'], [/LOS ANGELES|\bLAX\b|LONG BEACH|OAKLAND|SEATTLE|TACOMA|SAN FRANCISCO|PORTLAND/, 'America/Los_Angeles', 'US'],
+    [/HALIFAX/, 'America/Halifax', 'CA'], [/MONTREAL|TORONTO|\bYYZ\b/, 'America/Toronto', 'CA'], [/VANCOUVER|PRINCE RUPERT/, 'America/Vancouver', 'CA'],
+    [/MANZANILLO|VERACRUZ|LAZARO CARDENAS|MEXICO/, 'America/Mexico_City', 'MX'], [/SANTOS|RIO DE JANEIRO|PARANAGUA|SAO PAULO|ITAJAI|BRAZIL/, 'America/Sao_Paulo', 'BR'],
+    [/BUENOS AIRES|ARGENTINA/, 'America/Argentina/Buenos_Aires', 'AR'], [/CALLAO|\bLIMA\b|PERU/, 'America/Lima', 'PE'], [/CARTAGENA|BUENAVENTURA|COLOMBIA/, 'America/Bogota', 'CO'],
+    [/SAN ANTONIO CL|VALPARAISO|CHILE/, 'America/Santiago', 'CL'], [/\bCOLON\b|BALBOA|PANAMA/, 'America/Panama', 'PA'], [/GUAYAQUIL|ECUADOR/, 'America/Guayaquil', 'EC'], [/KINGSTON|JAMAICA/, 'America/Jamaica', 'JM'],
+    [/\bUSA\b|UNITED STATES/, 'America/New_York', 'US'], [/CANADA/, 'America/Toronto', 'CA'], [/AUSTRALIA/, 'Australia/Sydney', 'AU']
+  ];
+  // UN/LOCODE country → zone, for ports typed as codes ("AEJEA", "JEBEL ALI (AEJEA)")
+  const CC_TZ = { AE: 'Asia/Dubai', OM: 'Asia/Muscat', SA: 'Asia/Riyadh', QA: 'Asia/Qatar', KW: 'Asia/Kuwait', BH: 'Asia/Bahrain', IQ: 'Asia/Baghdad', IR: 'Asia/Tehran', JO: 'Asia/Amman', EG: 'Africa/Cairo', YE: 'Asia/Aden',
+    PK: 'Asia/Karachi', IN: 'Asia/Kolkata', LK: 'Asia/Colombo', BD: 'Asia/Dhaka', MV: 'Indian/Maldives', CN: 'Asia/Shanghai', HK: 'Asia/Hong_Kong', TW: 'Asia/Taipei', KR: 'Asia/Seoul', JP: 'Asia/Tokyo', SG: 'Asia/Singapore',
+    MY: 'Asia/Kuala_Lumpur', TH: 'Asia/Bangkok', VN: 'Asia/Ho_Chi_Minh', ID: 'Asia/Jakarta', PH: 'Asia/Manila', TZ: 'Africa/Dar_es_Salaam', KE: 'Africa/Nairobi', NG: 'Africa/Lagos', GH: 'Africa/Accra', CM: 'Africa/Douala',
+    TG: 'Africa/Lome', ZA: 'Africa/Johannesburg', LY: 'Africa/Tripoli', MA: 'Africa/Casablanca', DZ: 'Africa/Algiers', DJ: 'Africa/Djibouti', SD: 'Africa/Khartoum', NL: 'Europe/Amsterdam', BE: 'Europe/Brussels', DE: 'Europe/Berlin',
+    GB: 'Europe/London', FR: 'Europe/Paris', IT: 'Europe/Rome', ES: 'Europe/Madrid', GR: 'Europe/Athens', PT: 'Europe/Lisbon', TR: 'Europe/Istanbul', RO: 'Europe/Bucharest', BG: 'Europe/Sofia', RU: 'Europe/Moscow',
+    UA: 'Europe/Kyiv', SE: 'Europe/Stockholm', DK: 'Europe/Copenhagen', NO: 'Europe/Oslo', FI: 'Europe/Helsinki', PL: 'Europe/Warsaw', US: 'America/New_York', CA: 'America/Toronto', MX: 'America/Mexico_City',
+    BR: 'America/Sao_Paulo', AR: 'America/Argentina/Buenos_Aires', PE: 'America/Lima', CO: 'America/Bogota', CL: 'America/Santiago', PA: 'America/Panama', AU: 'Australia/Sydney', NZ: 'Pacific/Auckland', IL: 'Asia/Jerusalem', LB: 'Asia/Beirut' };
+  const WEEKEND = { SA: [5, 6], KW: [5, 6], QA: [5, 6], BH: [5, 6], OM: [5, 6], JO: [5, 6], EG: [5, 6], IQ: [5, 6], YE: [5, 6], DZ: [5, 6], LY: [5, 6], SD: [5, 6], MV: [5, 6], IL: [5, 6], IR: [5] };
+  const OFFICE = [9 * 60, 18 * 60];                               // 09:00–18:00 local, Monday–Friday (or the country's working week)
+  const HOME_ZONE = { tz: 'Asia/Dubai', cc: 'AE', home: true };
+  const zoneMemo = new Map(), fmtMemo = new Map();
+  function portZone(port) {
+    const s = upq(port);
+    if (!s || s === '—') return null;
+    if (zoneMemo.has(s)) return zoneMemo.get(s);
+    let z = null;
+    for (let i = 0; i < PORT_TZ.length && !z; i++) if (PORT_TZ[i][0].test(s)) z = { tz: PORT_TZ[i][1], cc: PORT_TZ[i][2] };
+    if (!z) { const m = s.match(/(?:^|\(|\s)([A-Z]{2})[A-Z2-9]{3}(?:\)|$|\s)/); if (m && CC_TZ[m[1]]) z = { tz: CC_TZ[m[1]], cc: m[1] }; }
+    zoneMemo.set(s, z);
+    return z;
+  }
+  function zoneNow(tz, now) {
+    let f = fmtMemo.get(tz);
+    if (f === undefined) { try { f = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hourCycle: 'h23', weekday: 'short', hour: '2-digit', minute: '2-digit' }); } catch (e) { f = null; } fmtMemo.set(tz, f); }
+    if (!f) return null;
+    const p = {}; f.formatToParts(now).forEach((x) => { p[x.type] = x.value; });
+    const dow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(p.weekday);
+    return dow < 0 ? null : { dow, h: (+p.hour) % 24, m: +p.minute };
+  }
+  // open now (and minutes to closing), or closed (and minutes to opening, and which day)
+  function officeState(z, now) {
+    const t = zoneNow(z.tz, now || new Date()); if (!t) return null;
+    const off = WEEKEND[z.cc] || [0, 6], work = (d) => !off.includes(d), mins = t.h * 60 + t.m;
+    if (work(t.dow) && mins >= OFFICE[0] && mins < OFFICE[1]) return { open: true, t, toClose: OFFICE[1] - mins };
+    let add, d = t.dow;
+    if (work(d) && mins < OFFICE[0]) add = OFFICE[0] - mins;
+    else { add = 1440 - mins; d = (d + 1) % 7; for (let k = 0; k < 7 && !work(d); k++) { add += 1440; d = (d + 1) % 7; } add += OFFICE[0]; }
+    return { open: false, t, toOpen: add, opensDow: d };
+  }
+  const hhmm = (t) => String(t.h).padStart(2, '0') + ':' + String(t.m).padStart(2, '0');
+  const durTxt = (m) => (m < 60 ? m + ' MIN' : Math.floor(m / 60) + ' H' + (m % 60 && m < 300 ? ' ' + (m % 60) + ' MIN' : ''));
+  const weekTxt = (z) => ((WEEKEND[z.cc] || [0, 6]).join() === '5,6' ? 'Sunday–Thursday' : (WEEKEND[z.cc] || []).join() === '5' ? 'Saturday–Thursday' : 'Monday–Friday');
+  // state: short, on the clock · more: the whole story, for the tooltip
+  function clockBits(z, now) {
+    const o = officeState(z, now); if (!o) return null;
+    if (o.open) return { time: hhmm(o.t), tone: o.toClose <= 60 ? 'amber' : 'open', state: o.toClose <= 60 ? 'CLOSES IN ' + durTxt(o.toClose) : 'OPEN', more: 'open · closes 18:00 (in ' + durTxt(o.toClose).toLowerCase() + ')', o };
+    return { time: hhmm(o.t), tone: 'closed', state: 'CLOSED', more: 'closed · opens ' + (o.toOpen < 1440 && o.opensDow === (o.t.dow + (o.t.h >= 9 ? 1 : 0)) % 7 ? (o.t.h >= 9 ? 'tomorrow' : 'today') : DOW[o.opensDow]) + ' 09:00 (in ' + durTxt(o.toOpen).toLowerCase() + ')', o };
+  }
+  const clockTitle = (port, z, c) => 'Local time at ' + upq(port) + ' — ' + c.more + '. Office hours 09:00–18:00, ' + weekTxt(z) + '.';
+  // The live clock under a port name on the job page (ticks by itself).
+  function portClock(port, where) {
+    const z = portZone(port); if (!z) return '';
+    const c = clockBits(z); if (!c) return '';
+    return '<div class="pclock pc-' + where + ' is-' + c.tone + '" data-clock="' + esc(port) + '" title="' + esc(clockTitle(port, z, c)) + '">' + icon('clock', 12) + '<b>' + c.time + '</b><span>' + esc(c.state) + '</span></div>';
+  }
+  // Follow-ups: the port whose office matters now — origin before sailing, destination after.
+  function clockPort(j, t0) { if (j.mode === 'misc') return ''; return j.atSea || j.arrived || (j.etd && j.etd <= t0) ? j.pod : j.pol; }
+  function rowClock(j, t0) {
+    const p = clockPort(j, t0), z = p && portZone(p); if (!z) return '';
+    const c = clockBits(z); if (!c) return '';
+    return '<span class="pclock pc-mini is-' + c.tone + '" data-clock="' + esc(p) + '" data-mini="1" title="' + esc(clockTitle(p, z, c)) + '"><i></i><b>' + c.time + '</b>' + esc(upq(p)) + '</span>';
+  }
+  // urgent first (cutoff passed / today, free time) — then whose office closes soonest; closed offices by who opens first
+  function dueSort8(t0) {
+    const now = new Date(), memo = new Map();
+    const score = (j) => {
+      if (memo.has(j)) return memo.get(j);
+      const p = clockPort(j, t0), z = (p && portZone(p)) || HOME_ZONE, o = officeState(z, now);
+      const v = !o ? 5000 : o.open ? o.toClose : 1000 + o.toOpen;
+      memo.set(j, v); return v;
+    };
+    const since = (x) => (x.f.since === null ? 1e9 : x.f.since);
+    return (a, b) => ((a.j.next.rank === 0 ? 0 : 1) - (b.j.next.rank === 0 ? 0 : 1)) || score(a.j) - score(b.j) || a.j.next.rank - b.j.next.rank || since(b) - since(a);
+  }
+  function tickClocks() {
+    const els = document.querySelectorAll('[data-clock]'); if (!els.length) return;
+    const now = new Date();
+    els.forEach((el) => {
+      const z = portZone(el.dataset.clock); const c = z && clockBits(z, now); if (!c) return;
+      el.classList.remove('is-open', 'is-amber', 'is-closed'); el.classList.add('is-' + c.tone);
+      const b = el.querySelector('b'); if (b) b.textContent = c.time;
+      const s = el.dataset.mini ? null : el.querySelector('span'); if (s) s.textContent = c.state;
+      el.title = clockTitle(el.dataset.clock, z, c);
+    });
+  }
+
+  // ================================================================ v2.8 — strict dates (the same rules as the server)
+  const DATE_RULE_KEYS = ['etd', 'eta', 'siCut', 'edCut', 'dgCut', 'delivery'];
+  const asDay = (v) => { if (v instanceof Date) return isNaN(v) ? null : dayOf(v); const d = parseDate(v); return d && !isNaN(d) ? dayOf(d) : null; };
+  const dateLabels = (mode) => (mode === 'courier' ? { etd: 'Pick-up', eta: 'Delivery', a: 'is delivered before it is picked up' } : { etd: 'ETD', eta: 'ETA', a: 'cannot arrive before it leaves' });
+  function dateProblem(get, touched, mode) {
+    const on = (ks) => ks.some((k) => touched.includes(k)), L = dateLabels(mode), D = (d) => fmt(d, true);
+    const etd = asDay(get('etd')), eta = asDay(get('eta')), del = asDay(get('delivery'));
+    if (on(['etd', 'eta']) && etd && eta && eta < etd) return { key: 'eta', msg: L.eta + ' ' + D(eta) + ' is before ' + L.etd + ' ' + D(etd) + '. A shipment ' + L.a + '.' };
+    const cuts = [['siCut', 'SI cutoff'], ['edCut', 'ED cutoff'], ['dgCut', 'DG cutoff']];
+    for (let i = 0; i < cuts.length; i++) {
+      const c = asDay(get(cuts[i][0]));
+      if (on([cuts[i][0], 'etd']) && c && etd && c > etd) return { key: cuts[i][0], msg: cuts[i][1] + ' ' + D(c) + ' is after ' + L.etd + ' ' + D(etd) + '. A cutoff comes before sailing.' };
+    }
+    if (on(['delivery', 'eta']) && del && eta && del < eta) return { key: 'delivery', msg: 'Delivery ' + D(del) + ' is before ' + L.eta + ' ' + D(eta) + '.' };
+    return null;
+  }
+  function sameDayOf(get, touched) {
+    if (!touched.some((k) => k === 'etd' || k === 'eta')) return null;
+    const etd = asDay(get('etd')), eta = asDay(get('eta'));
+    return etd && eta && +etd === +eta ? etd : null;
+  }
+  // New job / Edit details: a wrong date stops the form at that field; a same-day arrival asks once
+  // (press the button again to keep it) — the form stays open either way.
+  function formDateCheck8(get, touched, mode, holder) {
+    const fe = $('#formError'); if (fe) { fe.textContent = ''; fe.classList.remove('is-warn'); }
+    const p = dateProblem(get, touched, mode);
+    if (p) { fieldError(p.key, p.msg); const i = $('.field[data-field="' + p.key + '"] input'); if (i) i.focus(); return 'bad'; }
+    const sd = sameDayOf(get, touched);
+    if (sd) {
+      const key = 'same:' + (+sd);
+      if (holder.sameOk8 !== key) {
+        holder.sameOk8 = key;
+        const L = dateLabels(mode);
+        if (fe) { fe.textContent = 'Same-day arrival — correct? ' + L.etd + ' and ' + L.eta + ' are both ' + fmt(sd, true) + ' (fine for a short hop). Press the button again to keep it.'; fe.classList.add('is-warn'); }
+        return 'ask';
+      }
+    }
+    return 'ok';
+  }
+  // Every other save (quick update, a stop, undo): a wrong date is refused before it leaves; same day asks once.
+  function saveDateGate8(before, changes) {
+    const touched = DATE_RULE_KEYS.filter((k) => Object.prototype.hasOwnProperty.call(changes, k));
+    if (!touched.length) return null;
+    const get = (k) => (Object.prototype.hasOwnProperty.call(changes, k) ? changes[k] : before[k]);
+    const p = dateProblem(get, touched, before.mode);
+    if (p) { toast(p.msg, { error: true }); return Promise.resolve(false); }
+    const sd = sameDayOf(get, touched);
+    if (sd && !(before.etd && before.eta && +dayOf(before.etd) === +dayOf(before.eta))) {
+      const L = dateLabels(before.mode);
+      return ask({ title: 'Same-day arrival — correct?', text: L.etd + ' and ' + L.eta + ' are both ' + fmt(sd, true) + ' for ' + before.jobNo + '. That is right for a short hop (a day or a few hours).', yes: 'Yes, same day', no: 'Change it' });
+    }
+    return null;
+  }
+
+  // ================================================================ v2.8 — your jobs only · job transfer
+  function scopedJobs8() { return canEdit() ? state.jobs.filter((j) => j.cs === state.user) : state.jobs; }
+  const unassigned8 = () => (canEdit() ? state.jobs.filter((j) => j.active && !j.cs) : []);
+  function transferBtn(j) { return canEditJob(j) && j.active ? '<button type="button" class="tile-link" data-transfer="' + esc(j.jobNo) + '">' + (j.cs ? 'Transfer' : 'Assign') + '</button>' : ''; }
+  const transferMenu = (no) => () => {
+    const j = findJob(no); if (!j) return '';
+    const T = state.transfer8 && state.transfer8.no === j.jobNo ? state.transfer8 : (state.transfer8 = { no: j.jobNo, to: '', note: '' });
+    const names = csOptions('').filter((n) => n !== j.cs);
+    return '<div class="pop-title">' + (j.cs ? 'Transfer this job' : 'Assign this job') + '</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + (j.cs ? ' · now with ' + esc(nice(j.cs)) : ' · no Customer Service yet') + '</p>' +
+      (names.length ? '<div class="pop-label">To</div><div class="choice-row is-stack tf-names">' + names.map((n) => '<button type="button" class="choice' + (n === T.to ? ' is-on' : '') + '" data-transfer-to="' + esc(n) + '" aria-pressed="' + (n === T.to) + '">' + esc(nice(n)) + (n === state.user ? ' <span class="you">YOU</span>' : '') + '</button>').join('') + '</div>' +
+        '<form class="pop-form" data-transfer-form="' + esc(j.jobNo) + '"><label class="pop-label" for="transferNote">Note (optional)</label><input type="text" id="transferNote" maxlength="200" placeholder="A line for them (optional)" autocomplete="off" value="' + esc(T.note) + '">' +
+        '<button type="submit" class="btn-brutal pop-main" data-primary' + (T.to ? '' : ' disabled') + '>' + (T.to ? (T.to === state.user ? 'TAKE THIS JOB' : 'TRANSFER TO ' + esc(T.to)) : 'CHOOSE WHO') + '</button></form>'
+        : '<p class="pop-text">There is no other Customer Service account yet.</p>') +
+      '<div class="pop-hint">' + (T.to && T.to !== state.user ? esc(nice(T.to)) + ' gets a notification' : 'The new owner gets a notification') + (j.sales ? ', and so does ' + esc(nice(j.sales)) + ' (sales)' : '') + '. The job moves to their lists.</div>';
+  };
+  async function doTransfer8(no, to, note) {
+    const j = findJob(no); if (!j || !to) return;
+    const from = j.cs, k = keyOf(j);
+    closeOverlays(true); state.transfer8 = null;
+    setSaving(1);
+    try {
+      const res = await api.call('ethixJobTransfer', [j.jobNo, to, note || '']);
+      if (res && res.ok) {
+        applyRow6(res.row); state.syncedAt = Date.now();
+        rerender(); updateNav();
+        if (state.stories.has(k)) loadStory(j.jobNo, true);
+        const undo = from && from !== to ? { action: { label: 'Undo', fn: () => doTransfer8(j.jobNo, from, 'undo') } } : {};
+        toast(to === state.user ? 'Job ' + j.jobNo + ' is yours now' : 'Transferred to ' + nice(to) + ' — they were told', undo);
+        return;
+      }
+      toast((res && res.error) || 'The job was not transferred.', { error: true });
+    } catch (e) { if (e.kind !== 'auth') toast(/not available|unknown/i.test(e.message) ? 'Transfer needs the v2.8 Code.gs.' : 'Not transferred: ' + e.message, { error: true }); }
+    finally { setSaving(-1); }
+  }
+  function transferText(a) {
+    const m = String(a || '').match(/^TRANSFERRED THE JOB (?:FROM (.+?) )?TO (.+?)(?: — (.+))?$/);
+    return m ? 'transferred the job ' + (m[1] ? 'from ' + m[1] + ' ' : '') + 'to ' + m[2] + (m[3] ? ' — ' + m[3].toLowerCase() : '') : null;
+  }
+
+  function initV28() {
+    setInterval(tickClocks, 20000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) tickClocks(); });
+    document.addEventListener('click', (e) => {
+      const tb = e.target.closest('[data-transfer]');
+      if (tb && canEdit()) { state.transfer8 = null; openPop(tb, 'CUSTOMER SERVICE', transferMenu(tb.dataset.transfer)); return; }
+      const to = e.target.closest('[data-transfer-to]');
+      if (to && state.transfer8) { const n = $('#transferNote'); if (n) state.transfer8.note = n.value; state.transfer8.to = to.dataset.transferTo; refreshOverlay(); const b = document.querySelector('[data-transfer-form] [data-primary]'); if (b) b.focus(); }
+    });
+    document.addEventListener('submit', (e) => {
+      const f = e.target.closest('[data-transfer-form]'); if (!f) return;
+      e.preventDefault();
+      const T = state.transfer8; if (!T || !T.to) return;
+      const n = $('#transferNote');
+      doTransfer8(f.dataset.transferForm, T.to, n ? n.value.trim() : T.note);
+    });
   }
 
   // ------------------------------------------------------------ lists & menus
@@ -4481,11 +4774,11 @@
     q = q.trim().toUpperCase();
     if (!q) { box.hidden = true; return; }
     const hits = state.jobs.filter((j) => (j.jobNo + ' ' + j.customer + ' ' + j.pol + ' ' + j.pod + ' ' + j.cs + ' ' + j.sales + ' ' + j.type).toUpperCase().includes(q))
-      .sort((a, b) => (b.active - a.active) || ((b.jobNo.toUpperCase().startsWith(q) ? 1 : 0) - (a.jobNo.toUpperCase().startsWith(q) ? 1 : 0)))
+      .sort((a, b) => (b.active - a.active) || (canEdit() ? (b.cs === state.user) - (a.cs === state.user) : 0) || ((b.jobNo.toUpperCase().startsWith(q) ? 1 : 0) - (a.jobNo.toUpperCase().startsWith(q) ? 1 : 0)))
       .slice(0, 8);
     searchIndex = -1;
     box.innerHTML = hits.length ? hits.map((j) =>
-      '<button type="button" class="result" data-job="' + esc(j.jobNo) + '"><span class="result-job">' + esc(j.jobNo) + '</span><span class="result-cust">' + esc(j.customer || '—') + '</span><span class="result-route">' + esc(j.route) + ' · ' + esc(j.type) + (j.active ? '' : ' · ' + esc(j.status)) + '</span></button>'
+      '<button type="button" class="result" data-job="' + esc(j.jobNo) + '"><span class="result-job">' + esc(j.jobNo) + '</span><span class="result-cust">' + esc(j.customer || '—') + '</span><span class="result-route">' + esc(j.route) + ' · ' + esc(j.type) + (j.active ? '' : ' · ' + esc(j.status)) + (canEdit() && j.cs !== state.user ? ' · ' + (j.cs ? 'WITH ' + esc(j.cs) : 'UNASSIGNED') : '') + '</span></button>'
     ).join('') : '<div class="result-empty">No jobs match “' + esc(q) + '”.</div>';
     box.hidden = false;
   }
@@ -4578,8 +4871,6 @@
       if (listBtn) { openList(listBtn.dataset.list, listBtn); return; }
       const weekBtn = e.target.closest('[data-week]');
       if (weekBtn) { state.week = weekBtn.dataset.week; rerender(); return; }
-      const scopeBtn = e.target.closest('[data-scope]');
-      if (scopeBtn && canEdit()) { state.scope = scopeBtn.dataset.scope; store.set('ethix.v2.scope.' + state.user, state.scope); rerender(); }
     });
     view.addEventListener('scroll', (e) => { if (e.target.classList && e.target.classList.contains('tile-body')) markOverflow(); }, true);
     window.addEventListener('resize', () => { if (!$('#shell').hidden) { markOverflow(); fitNames(); } });
