@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, fleet — v2.9)
+   enquiries, follow-ups, delays, close & archive, costing, reminders — v2.9.1)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -346,30 +346,7 @@
 
   function computeHome(jobs, t0) {
     const active = jobs.filter((j) => j.active);
-    const watch = [];
-    active.forEach((j) => {
-      if (j.hold) return;
-      if (j.cat === 'EXPORT' && !(j.etd && j.etd < t0)) {
-        const add = (date, what, pendingFlag) => {
-          if (!date || !pendingFlag) return;
-          const d = days(t0, date);
-          if (d <= 3 && d >= -7) watch.push({ j, what, d, level: d <= 1 ? 'urgent' : 'soon', when: whenText(d) });
-        };
-        add(j.siCut, 'SI CUTOFF', j.sido === '' || PENDING(j.sido));
-        add(j.edCut, 'ED CUTOFF', j.ed === '' || PENDING(j.ed));
-        if (j.dg === 'DG') add(j.dgCut, 'DG CUTOFF', true);
-      }
-      if ((j.cat === 'EXPORT' || j.cat === 'CROSS') && j.etd) {
-        const d = days(t0, j.etd);
-        if (d >= 0 && d <= 3) watch.push({ j, what: j.mode === 'air' ? 'FLIGHT DEPARTS' : 'VESSEL SAILS', d, level: 'calm', when: d === 0 ? 'Today' : d === 1 ? 'Tomorrow' : DOW_UP[j.etd.getDay()] + ' ' + fmt(j.etd) });
-      }
-      if (j.cat === 'IMPORT' && j.arrived && !j.delivery && j.lineFreeEnd) {
-        const d = days(t0, j.lineFreeEnd);
-        if (d <= 2 && d >= -30) watch.push({ j, what: d < 0 ? 'FREE TIME OVER' : 'LINE FREE TIME ENDS', d, level: 'urgent', when: d < 0 ? 'over by ' + (-d) + (d === -1 ? ' day' : ' days') : d === 0 ? 'Today' : 'in ' + d + (d === 1 ? ' day' : ' days'), free: true });
-      }
-    });
-    const rank = { urgent: 0, soon: 1, calm: 2 };
-    watch.sort((a, b) => rank[a.level] - rank[b.level] || a.d - b.d);
+    const watch = watchItems91(active, t0);   // v2.9.1: every open task before sailing, overdue after it, free time
 
     const atSea = active.filter((j) => j.atSea).sort((a, b) => a.eta - b.eta);
     const costing = active.filter(isCostingPending);
@@ -780,7 +757,7 @@
     const h = decodeURIComponent(location.hash || '');
     const m = h.match(/^#\/job\/(.+)$/);
     const mc = h.match(/^#\/costing\/(.+)$/);
-    let r = m ? { name: 'job', jobNo: m[1].trim() } : mc ? { name: 'costjob', jobNo: mc[1].trim() } : h === '#/costing' ? { name: 'costing' } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : h === '#/notifications' ? { name: 'notif' } : h === '#/fleet' ? { name: 'fleet' } : { name: 'home' };
+    let r = m ? { name: 'job', jobNo: m[1].trim() } : mc ? { name: 'costjob', jobNo: mc[1].trim() } : h === '#/costing' ? { name: 'costing' } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : h === '#/notifications' ? { name: 'notif' } : { name: 'home' };
     if (isAdmin()) { if (r.name !== 'activity') r = { name: 'admin' }; }      // admin works with people, not jobs
     else if (r.name === 'admin' || r.name === 'activity' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote()) || ((r.name === 'costing' || r.name === 'costjob') && !canNote())) r = { name: 'home' };
     const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity|round|follow-ups|enquiries|costing)$/.test(h) ? '#/home' : r.name === 'round' && h === '#/round' ? '#/follow-ups' : null;
@@ -806,9 +783,8 @@
     else if (r.name === 'costing') renderCostList(changed || first);
     else if (r.name === 'costjob') renderCostJob(r.jobNo, changed || first);
     else if (r.name === 'notif') renderNotifPage(changed || first);
-    else if (r.name === 'fleet') renderFleet(changed || first);
     else if (r.name === 'job') { if (changed || first) seenOpen9(r.jobNo); renderVoyage(r.jobNo, changed || first); fitNames(); }
-    else { renderHome(changed || first); fitNames(); }
+    else { renderHome(changed || first); fitNames(); fitPorts91(); }
     if (changed) view.scrollTop = 0;
     updateNav();
   }
@@ -842,11 +818,8 @@
     else if (canEdit()) items.push(
       { id: 'round', label: 'Follow-ups', icon: 'check', href: '#/follow-ups', count: roundRows(today0()).due.length + remDueCount() },
       { id: 'enquiries', label: 'Enquiries', icon: 'enq', href: '#/enquiries', count: enqNew().length },
-      { id: 'costing', label: 'Costing', icon: 'costing', href: '#/costing', count: costRows().open },
-      { id: 'fleet', label: 'Fleet', icon: 'fleet', href: '#/fleet' });
-    else items.push({ id: 'fleet', label: 'Fleet', icon: 'fleet', href: '#/fleet' });
+      { id: 'costing', label: 'Costing', icon: 'costing', href: '#/costing', count: costRows().open });
     if (isSales()) items.splice(items.length - 1, 0, { id: 'costing', label: 'Costing', icon: 'costing', href: '#/costing', count: costRows().open });
-    if (isSales()) items.push({ id: 'fleet', label: 'Fleet', icon: 'fleet', href: '#/fleet' });   // sales: their own shipments too
     return items;
   }
   function renderChrome() {
@@ -1000,9 +973,9 @@
           '<div class="search-wrap"><label class="search">' + icon('search') + '<input id="searchInput" type="search" placeholder="Job no, customer, port…" aria-label="Search jobs" autocomplete="off" value="' + esc(searchVal) + '"><kbd>/</kbd></label><div class="search-results glass" id="searchResults" hidden></div></div>' +
           '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' +
         '</div>' +
-      '</header>' + (canNote() ? todayRibbon(t0, anim) : '') +
+      '</header>' + (canNote() ? portOffices(anim) : '') +
       '<div class="bento">' +
-        watchTile(m, anim) + kpiTiles(m, anim) + seaTile(m, anim) + holdTile(m, anim) + weekTile(m, anim) + (canNote() ? myDayTile(anim) : activityTile(anim)) +
+        kpiTiles91(m, anim) + watchTile91(m, anim) + weekTile91(m, anim) + (canNote() ? myDayTile(anim) : activityTile(anim)) +
       '</div>' +
       '</div>';
     requestAnimationFrame(markOverflow);
@@ -1053,7 +1026,7 @@
       '<span class="jr-job">' + changedDot(j) + esc(j.jobNo) + '</span>' +
       '<span class="jr-type"><span class="badge">' + esc(j.type || '—') + '</span><span class="jr-typename">' + esc(j.typeName) + '</span></span>' +
       '<span class="jr-cust"><span class="jr-name">' + esc(j.customer || '—') + '</span><span class="jr-route">' + esc(j.mode === 'misc' ? (j.against ? 'AGAINST ' + j.against : 'COSTING ONLY') : j.route) + '</span></span>' +
-      '<span class="jr-track">' + miniTrack(j, 26) + stepStrip(j) + '</span>' +
+      '<span class="jr-track">' + miniTrack(j, 26) + '</span>' +
       '<span class="jr-next">' + toneChip(rowNext(j)) + cutChips(j) + '</span>' +
       '<span class="jr-etd"><span class="jr-k">ETD</span>' + esc(j.etd ? fmt(j.etd) : '—') + '</span>' +
       '<span class="jr-eta"><span class="jr-k">ETA</span>' + esc(j.eta ? fmt(j.eta) : '—') + (delayInfo(j) ? '<span class="jr-delay" title="Delayed">+' + delayInfo(j).total + 'D</span>' : '') + '</span>' +
@@ -1076,6 +1049,7 @@
         '<div class="head-main"><div class="meta-line"><span>' + active.length + ' ACTIVE · ' + active.filter((j) => j.hold).length + ' ON HOLD · ' + active.filter((j) => j.atSea).length + ' AT SEA' + (unassigned8().length ? ' · ' + unassigned8().length + ' UNASSIGNED' : '') + '</span></div><h1 class="greeting">' + (isSales() || canEdit() ? 'My jobs' : 'Jobs') + '</h1></div>' +
         '<div class="head-actions">' +
           '<label class="search">' + icon('search') + '<input id="jobsSearch" type="search" placeholder="Job no, customer, port…" aria-label="Search jobs" autocomplete="off" value="' + esc(keepQ) + '"></label>' +
+          '<button type="button" class="btn-ghost jobs-word" data-act="jobs-word" title="Your active jobs by sales person, as a Word file">' + icon('download', 16) + '<span class="btn-label">Word</span></button>' +
           (canEdit() ? '<button type="button" class="btn-brutal btn-icon" data-act="new-job">' + icon('plus', 16) + '<span>NEW JOB</span></button>' : '') +
         '</div>' +
       '</header>' +
@@ -2010,8 +1984,8 @@
   // ---------- my account ----------
   function accountPanel() {
     const go2 = (href, ic, label, n) => '<button type="button" class="acct-go" data-href="' + href + '">' + icon(ic, 18) + '<span>' + label + '</span>' + (n ? '<b>' + n + '</b>' : '') + '</button>';
-    const shortcuts = canEdit() ? go2('#/follow-ups', 'check', 'Follow-ups', roundRows(today0()).due.length + remDueCount()) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length) + go2('#/costing', 'costing', 'Costing', costRows().open) + go2('#/fleet', 'fleet', 'Fleet', 0)
-      : isSales() ? go2('#/enquiries', 'enq', 'My enquiries', enqOpen().length) + go2('#/costing', 'costing', 'Costing', costRows().open) + go2('#/fleet', 'fleet', 'Fleet', 0) : '';
+    const shortcuts = canEdit() ? go2('#/follow-ups', 'check', 'Follow-ups', roundRows(today0()).due.length + remDueCount()) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length) + go2('#/costing', 'costing', 'Costing', costRows().open)
+      : isSales() ? go2('#/enquiries', 'enq', 'My enquiries', enqOpen().length) + go2('#/costing', 'costing', 'Costing', costRows().open) : '';
     return (shortcuts ? '<div class="acct-shortcuts">' + shortcuts + '</div>' : '') + '<div class="acct"><span class="avatar">' + esc(initials(state.user)) + '</span><div><div class="acct-name" id="drawerTitle">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(ROLE_NAMES[state.role] || state.role) + '</div></div></div>' +
       '<form class="tile pw-form" id="pwForm" novalidate><h3 class="tile-title">CHANGE PASSWORD</h3>' +
         '<input type="text" name="username" autocomplete="username" value="' + esc(state.user) + '" class="sr-only" tabindex="-1" aria-hidden="true" readonly>' +
@@ -2421,7 +2395,7 @@
     const j = x.j, f = x.f;
     return '<li class="rr' + (f.today ? ' is-done' : '') + (f.mineToday ? ' is-mine' : '') + (f.due ? ' is-due' : '') + '">' +
       '<button type="button" class="rr-main" data-job="' + esc(j.jobNo) + '"><span class="rr-job">' + changedDot(j) + esc(j.jobNo) + '<span class="badge">' + esc(j.type) + '</span></span>' +
-        '<span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span>' + stepStrip(j) + '</button>' +
+        '<span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span></button>' +
       '<span class="rr-next">' + toneChip(rowNext(j)) + cutChips(j) + rowClock(j, t0) + '</span>' +
       '<span class="rr-last"><span>' + esc(lastCheckText(f, t0)) + '</span>' + ((lr) => (lr ? '<span class="rr-remark">“' + esc(lr.text) + '”' + (lr.n > 1 ? ' <b>+' + (lr.n - 1) + '</b>' : '') + '</span>' : ''))(lastRemark(f)) + '</span>' +
       '<span class="rr-strip">' + dotStrip(j, t0, 14) + '</span>' +
@@ -2458,7 +2432,7 @@
           '<div class="rp-chips"><span>' + R.later.length + ' not due today</span><span>' + R.paused.length + ' paused</span><span>Tap the circle once you’ve followed a job up · set how often per job</span></div></div>' +
       '</section>' +
       remSection(anim) +
-      section('due', 'DUE NOW', dueRows.filter(match), 'Urgent first · then the office that closes soonest', dueRows.filter((x) => x.f.due && match(x)).length) +
+      section('due', 'DUE NOW', dueRows.filter(match), '', dueRows.filter((x) => x.f.due && match(x)).length) +
       section('done', 'CHECKED TODAY', doneRows.filter(match)) +
       section('later', 'NOT DUE TODAY', R.later.filter(match), 'By their own pace') +
       section('paused', 'PAUSED', R.paused.filter(match)) +
@@ -3116,8 +3090,9 @@
   // Costing (a full page per job + the Costing menu), Excel made in the browser,
   // remembered lists, duplicate job, stay signed in after a refresh.
   // v2.7: every USD amount has its own rate, charges that fill themselves. v2.8: all-in only, one line per
-  // charge on laptops, per-box figures in the bar, the statement-style Excel. v2.9: Fleet, step strips, reminders,
-  // the today ribbon and "changed since you looked" (at the end of this module).
+  // charge on laptops, per-box figures in the bar, the statement-style Excel. v2.9: reminders and "changed since you
+  // looked". v2.9.1: POD office hours, Home counters that open the side panel, Today's watch for every open task,
+  // This week as an agenda; Fleet removed (at the end of this module).
   const BASIS = [['SHIP', 'Per shipment'], ['BOX', 'Per box'], ['B20', 'Per 20′'], ['B40', 'Per 40′'], ['DOC', 'Per document'], ['UNIT', 'Per unit']];
   const BASIS_SHORT = { SHIP: 'Per shipment', BOX: 'Per box', B20: 'Per 20′', B40: 'Per 40′', DOC: 'Per document', UNIT: 'Per unit' };
   const ABBR = new Set(['THC', 'OTHC', 'DPC', 'ISPS', 'VGM', 'BL', 'DG', 'DO', 'ED', 'TLUC', 'ITT', 'FOB', 'VAT', 'MECRC', 'IMCO', 'AWB', 'LCL', 'FCL']);
@@ -3688,16 +3663,20 @@
     const t0 = today0();
     const base = mineJobs().filter((j) => j.active);                // your own jobs only (Customer Service: the jobs you own)
     const all = base.map((j) => ({ j, st: costState(j), s: costSum(j) })).filter((x) => x.st !== 'none');
-    const due = (j) => (j.etd && j.etd < t0) || j.arrived;
+    const due = (j) => costDue91(j, t0);
     const pending = all.filter((x) => x.st === 'pending').sort((a, b) => (due(b.j) - due(a.j)) || ((a.j.etd ? +a.j.etd : 9e15) - (b.j.etd ? +b.j.etd : 9e15)) || (a.j.jobNo < b.j.jobNo ? -1 : 1));
     const draft = all.filter((x) => x.st === 'draft').sort((a, b) => ((b.s && b.s[5]) || 0) - ((a.s && a.s[5]) || 0));
     const done = all.filter((x) => x.st === 'done').sort((a, b) => ((b.s && b.s[5]) || 0) - ((a.s && a.s[5]) || 0));
     return { all, pending, draft, done, dueN: pending.filter((x) => due(x.j)).length, open: pending.length + draft.length };
   }
+  // costing is due once an export has sailed, and once an import (or a clearance job) has arrived
+  const costByArrival91 = (j) => j.cat === 'IMPORT' || j.type === 'CND';
+  const costDue91 = (j, t0) => (costByArrival91(j) ? !!j.arrived : !!((j.etd && j.etd < t0) || j.arrived));
   function costListRow(x, t0) {
     const j = x.j, s = x.s;
     const when = x.st === 'pending'
-      ? ((j.etd && j.etd < t0) || j.arrived ? '<span class="chip chip-soon">' + (j.arrived ? 'ARRIVED' : (j.mode === 'air' ? 'DEPARTED ' : j.mode === 'courier' ? 'PICKED UP ' : 'SAILED ') + fmt(j.etd)) + '</span>' : '<span class="chip chip-calm">' + (j.etd ? (j.mode === 'courier' ? 'PICK-UP ' : 'ETD ') + fmt(j.etd) : j.mode === 'misc' ? 'COSTING ONLY' : 'DATES TO CONFIRM') + '</span>')
+      ? (costDue91(j, t0) ? '<span class="chip chip-soon">' + (j.arrived ? 'ARRIVED' : (j.mode === 'air' ? 'DEPARTED ' : j.mode === 'courier' ? 'PICKED UP ' : 'SAILED ') + fmt(j.etd)) + '</span>'
+        : '<span class="chip chip-calm">' + (costByArrival91(j) && j.eta ? 'ETA ' + fmt(j.eta) : j.etd ? (j.mode === 'courier' ? 'PICK-UP ' : 'ETD ') + fmt(j.etd) : j.mode === 'misc' ? 'COSTING ONLY' : 'DATES TO CONFIRM') + '</span>')
       : x.st === 'draft' ? '<span class="chip chip-done">DRAFT · V' + (s ? s[4] : 1) + '</span>' : '<span class="chip chip-hold">' + icon('lock', 12) + 'DONE</span>';
     const who = s ? (x.st === 'done' && s[7] ? 'Locked by ' + nice(s[7]) : s[6] ? nice(s[6]) + ' · ' + ago(s[5]) : '') : '';
     const fig = (k, v, cls) => '<span class="cl-fig' + (cls ? ' ' + cls : '') + '"><span class="cl-k">' + k + '</span><b>' + money(v) + '</b></span>';
@@ -3761,7 +3740,7 @@
     const enc = new TextEncoder();
     const X = (s) => String(s == null ? '' : s).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]/g, '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const N = (v) => { const n = Math.round(Number(v) * 1e8) / 1e8; return isFinite(n) ? String(n) : '0'; };
-    function zip(files) {
+    function zip(files, type) {
       const parts = [], central = []; let off = 0;
       const d = new Date();
       const dt = ((d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1)) & 0xFFFF, dd = (((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate()) & 0xFFFF;
@@ -3780,7 +3759,7 @@
       const size = central.reduce((a, b) => a + b.length, 0);
       const e = new DataView(new ArrayBuffer(22));
       e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true); e.setUint32(12, size, true); e.setUint32(16, off, true);
-      return new Blob(parts.concat(central, [new Uint8Array(e.buffer)]), { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      return new Blob(parts.concat(central, [new Uint8Array(e.buffer)]), { type: type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     }
     const col = (i) => { let s = ''; i++; while (i > 0) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; };
     function Styles() {
@@ -3868,7 +3847,7 @@
       }
       return zip(files);
     }
-    return { Styles, sheetXml, book, col };
+    return { Styles, sheetXml, book, col, zip, X, pngSize };
   })();
 
   // The costing workbook (v2.8). info: { job, customer, route, type, cargo, boxes, carrier, carrierLabel, dates, datesLabel,
@@ -4034,7 +4013,7 @@
       });
       r++;
     }
-    const fine = 'Amounts in AED. Each USD amount converts at the rate in its own @ USD column; per box in USD at ' + CO + '. All figures are live formulas. Generated ' + info.at + ' by ' + info.user + ' from ETHIX.';
+    const fine = 'Generated ' + info.at + ' by ' + info.user + ' from ETHIX.';
     cell(r, 0, LAST, fine, st.foot);
     height(r, Math.max(14, 10 * linesOf(fine, 7.5, false, 0, LAST) + 4));
     if (info.unsaved) { r++; cell(r, 0, LAST, 'DRAFT — this export includes changes that were not saved yet.', S({ font: { sz: 9, b: true, color: RED }, align: { indent: 1 } })); height(r, 16); }
@@ -4375,8 +4354,6 @@
     // costing stop, its MARK DONE, the Home "COSTING DUE" tile → the costing page
     view.addEventListener('click', (e) => {
       const r = state.route;
-      const kpi = e.target.closest('[data-list="costing"]');
-      if (kpi && r && r.name === 'home') { e.stopImmediatePropagation(); go('#/costing'); return; }
       const st = e.target.closest('[data-stop="costing"]');
       if (st && r && r.name === 'job') { const j = findJob(r.jobNo); if (j && canCostSee(j)) { e.stopImmediatePropagation(); go('#/costing/' + encodeURIComponent(j.jobNo)); } }
     }, true);
@@ -4482,7 +4459,7 @@
     window.addEventListener('beforeunload', (e) => { if (state.cost && state.cost.dirty) { e.preventDefault(); e.returnValue = ''; } });
     initV27();
     initV28();
-    initV29();
+    initV291();
   }
 
   // ================================================================ v2.8 — port clocks (office hours where the port is)
@@ -4780,159 +4757,12 @@
         : '<p class="pop-text">Nothing changed since you last looked.</p>');
   };
 
-  // ================================================================ v2.9 — the step strip: a job's journey in one thin bar
-  function stepStrip(j, cls) {
-    const jr = j.journey; if (!jr || !jr.all) return '';
-    const st = jr.all.filter((s) => s.kind !== 'info' && s.kind !== 'status');
-    if (!st.length) return '';
-    const done = st.filter((s) => s.state === 'done' || s.state === 'skip').length;
-    const tone = (s) => (s.state === 'done' ? 'done' : s.state === 'skip' ? 'skip' : s.state === 'late' || s.cutTone === 'red' ? 'late' : s.cutTone === 'amber' ? 'amber' : s.state === 'current' ? 'cur' : jr.next && jr.next.id === s.id ? 'next' : 'todo');
-    return '<span class="sstrip' + (cls ? ' ' + cls : '') + '" role="img" aria-label="' + esc(done + ' of ' + st.length + ' steps done' + (jr.next ? '; next: ' + jr.next.name : '')) + '">' +
-      st.map((s) => '<i class="ss-' + tone(s) + '" title="' + esc(s.name + (s.sub ? ' · ' + s.sub : '')) + '"></i>').join('') + '</span>';
-  }
-
-  // ================================================================ v2.9 — Fleet: every live shipment on one timeline
-  const FLEET_ZOOM = { '2w': [3, 11, '2 weeks'], '6w': [7, 35, '6 weeks'], '3m': [14, 76, '3 months'] };
-  const FLEET_STAGES = [['before', 'BEFORE SAILING'], ['sea', 'AT SEA / IN TRANSIT'], ['arrived', 'ARRIVED / CLEARING'], ['nodate', 'DATES TO CONFIRM']];
-  function fleetUi() {
-    if (!state.fleetUi) state.fleetUi = { zoom: window.innerWidth < 760 ? '2w' : '6w', mode: 'all', type: 'all', port: 'all', cust: 'all', q: '' };
-    return state.fleetUi;
-  }
-  function fleetStage(j, t0) { if (!j.etd && !j.eta) return 'nodate'; if (j.eta && j.eta <= t0) return 'arrived'; if (j.etd && j.etd <= t0) return 'sea'; return 'before'; }
-  function fleetJobs() { return scoped().filter((j) => j.active && j.mode !== 'misc'); }
-  function fleetFiltered(list) {
-    const U = fleetUi(), q = U.q.trim().toUpperCase();
-    return list.filter((j) => (U.mode === 'all' || j.mode === U.mode) && (U.type === 'all' || j.type === U.type) && (U.port === 'all' || j.pol === U.port || j.pod === U.port) &&
-      (U.cust === 'all' || j.customer === U.cust) && (!q || (j.jobNo + ' ' + j.customer + ' ' + j.pol + ' ' + j.pod + ' ' + j.vendor + ' ' + j.type).toUpperCase().includes(q)));
-  }
-  function fleetWin(t0) {
-    const z = FLEET_ZOOM[fleetUi().zoom] || FLEET_ZOOM['6w'];
-    const start = addDays(t0, -z[0]), n = z[0] + z[1] + 1;
-    return { start, end: addDays(start, n), n, ms: n * DAY };
-  }
-  const fpos = (W, d) => ((+d - +W.start) / W.ms) * 100;
-  // the timeline's width in px (the label column and the menu taken away) — to choose what fits
-  function fleetTrackW() { const vw = window.innerWidth; return vw < 760 ? vw - 56 : vw - 272 - 70 - (vw <= 1180 ? 200 : 236) - 48; }
-  // the bar's dates: in full when they fit, shorter when not ("26–30 OCT"), else beside the bar
-  function fleetBarText(W, a, b, px) {
-    const full = fmt(a) + ' → ' + fmt(b), sm = +a && +b && a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear();
-    const short = sm ? a.getDate() + '–' + fmt(b) : fmt(a) + '–' + fmt(b).replace(/^0/, '');
-    const need = (t) => t.length * 5.6 + 16;
-    if (px >= need(full)) return { inside: full };
-    if (px >= need(short)) return { inside: short };
-    return { outside: sm ? short : full };
-  }
-  // a piece of a bar between two days (clipped to the window; cut edges marked)
-  function fseg(W, a, b, tag, cls, attrs, inner) {
-    let l = fpos(W, a), r = fpos(W, b);
-    if (r <= 0 || l >= 100) return '';
-    const cl = l < 0, cr = r > 100;
-    l = Math.max(0, l); r = Math.min(100, r);
-    return '<' + tag + ' class="' + cls + (cl ? ' cut-l' : '') + (cr ? ' cut-r' : '') + '" style="left:' + l.toFixed(3) + '%;width:' + Math.max(0.35, r - l).toFixed(3) + '%"' + (attrs || '') + '>' + (inner || '') + '</' + tag + '>';
-  }
-  function fleetTrack(j, W, t0) {
-    const st = fleetStage(j, t0), a = j.etd, b = j.eta, di = delayInfo(j), no = esc(j.jobNo);
-    const L = j.mode === 'courier' ? ['PICK-UP', 'DELIVERY'] : ['ETD', 'ETA'];
-    let h = '';
-    if (di && (di.etd || di.eta)) {                                      // the plan before the delays: a faint outline
-      const ga = di.etd ? di.etd.from : a, gb = di.eta ? di.eta.from : b;
-      if (ga && gb) h += fseg(W, ga, +gb > +ga ? gb : addDays(ga, 1), 'span', 'fl-ghost', ' title="' + esc('Planned ' + fmt(ga) + ' → ' + fmt(gb)) + '"');
-    }
-    if (a && b) {
-      const end = +b > +a ? b : new Date(+a + DAY / 2);
-      const prog = st === 'arrived' ? 100 : st === 'sea' ? Math.round(Math.min(1, (Date.now() - a) / Math.max(1, end - a)) * 100) : 0;
-      const slip = di && di.eta && +di.eta.from < +b, l = Math.max(0, fpos(W, a)), r = Math.min(100, fpos(W, end));
-      const seen = Math.max(0, (slip ? Math.min(r, fpos(W, di.eta.from)) : r) - l), bt = fleetBarText(W, a, b, seen / 100 * fleetTrackW());   // the slip tail covers the bar's end
-      const tail = slip || (j.cat === 'IMPORT' && j.lineFreeEnd && !j.delivery && +j.lineFreeEnd > +b);
-      h += fseg(W, a, end, 'button', 'fl-bar is-' + st, ' type="button" data-fleet-card="' + no + '" title="' + esc(L[0] + ' ' + fmt(a, true) + ' → ' + L[1] + ' ' + fmt(b, true)) + '"',
-        '<span class="fl-prog" style="width:' + prog + '%"></span>' + (bt.inside ? '<span class="fl-bt">' + esc(bt.inside) + '</span>' : ''));
-      if (bt.outside && !tail && r > 0 && r < 84) h += '<span class="fl-bo" style="left:' + r.toFixed(3) + '%" aria-hidden="true">' + esc(bt.outside) + '</span>';
-    } else if (a || b) {
-      const d = a || b, p = fpos(W, d) + 50 / W.n;
-      if (p >= 0 && p <= 100) h += '<button type="button" class="fl-pin is-' + st + '" style="left:' + p.toFixed(3) + '%" data-fleet-card="' + no + '" title="' + esc((a ? L[0] : L[1]) + ' ' + fmt(d, true) + ' · ' + (a ? L[1] : L[0]) + ' to confirm') + '"></button>';
-    }
-    if (di && di.eta && b && +di.eta.from < +b) h += fseg(W, di.eta.from, b, 'span', 'fl-slip', ' title="' + esc('Delayed +' + di.total + (di.total === 1 ? ' day' : ' days') + ' (was ' + fmt(di.eta.from) + ')') + '"', '<b>+' + di.total + 'D</b>');
-    if (j.cat === 'IMPORT' && b && j.lineFreeEnd && !j.delivery && +j.lineFreeEnd > +b) {   // line free time after arrival
-      const left = days(t0, j.lineFreeEnd), tone = !j.arrived ? 'calm' : left < 0 ? 'red' : left <= 2 ? 'amber' : 'ok';
-      h += fseg(W, b, j.lineFreeEnd, 'span', 'fl-free is-' + tone, ' title="' + esc('Line free time until ' + fmt(j.lineFreeEnd, true) + (j.arrived ? (left < 0 ? ' — over by ' + (-left) + (left === -1 ? ' day' : ' days') : ' — ' + left + (left === 1 ? ' day' : ' days') + ' left') : '')) + '"', '<b>' + days(b, j.lineFreeEnd) + 'd</b>');
-      if (j.arrived && left < 0) h += fseg(W, j.lineFreeEnd, addDays(t0, 1), 'span', 'fl-free is-over', ' title="Demurrage running"');
-    }
-    // cutoffs: one marker each — or one shared marker when they sit too close to read (SI·ED)
-    const near = { '2w': 0, '6w': 1, '3m': 3 }[fleetUi().zoom] || 0, rankT = { red: 0, amber: 1, calm: 2 }, packs = [];
-    cutsFor(j, t0).sort((x, y) => x.date - y.date).forEach((c) => { const last = packs[packs.length - 1]; if (last && days(last[0].date, c.date) <= near) last.push(c); else packs.push([c]); });
-    packs.forEach((pk) => {
-      const p = fpos(W, pk[0].date) + 50 / W.n, tone = pk.slice().sort((x, y) => rankT[x.tone] - rankT[y.tone])[0].tone;
-      if (p >= 0 && p <= 100) h += '<span class="fl-cut is-' + tone + '" style="left:' + p.toFixed(3) + '%" title="' + esc(pk.map((c) => c.label + ' ' + fmt(c.date, true) + ' · ' + cutWhen(c.d, c.date).toLowerCase()).join('\n')) + '"><b>' + pk.map((c) => c.k).join('·') + '</b></span>';
-    });
-    return h;
-  }
-  function fleetRow(j, W, t0) {
-    const no = esc(j.jobNo);
-    return '<div class="fl-row' + (j.hold ? ' is-hold' : '') + (isChanged(j) ? ' is-changed' : '') + '" data-fl="' + no + '">' +
-      '<button type="button" class="fl-label" data-fleet-card="' + no + '"><span class="fl-l1"><span class="fl-job">' + changedDot(j) + no + '<span class="badge">' + esc(j.type) + '</span>' + (j.hold ? '<span class="fl-hold">' + icon('anchor', 11) + 'HOLD</span>' : '') + '</span>' + stepStrip(j) + '</span>' +
-        '<span class="fl-cust">' + esc(j.customer || '—') + '</span><span class="fl-route">' + esc(j.route) + '</span></button>' +
-      '<div class="fl-track">' + fleetTrack(j, W, t0) + '</div></div>';
-  }
-  function fleetScale(W) {
-    const z = fleetUi().zoom; let ticks = '', bg = '', mon = 0;
-    const trackW = fleetTrackW();
-    const step = Math.max(1, Math.ceil(48 / (7 * Math.max(1, trackW) / W.n)));     // Mondays per label, so labels never overlap
-    for (let i = 0; i < W.n; i++) {
-      const d = addDays(W.start, i), l = (i / W.n * 100).toFixed(3), w = (100 / W.n).toFixed(3);
-      if (d.getDay() === 0 || d.getDay() === 6) bg += '<i class="fl-wk" style="left:' + l + '%;width:' + w + '%"></i>';
-      const first = d.getDate() === 1;
-      if (first && i) bg += '<i class="fl-mo" style="left:' + l + '%"></i>';
-      if (z === '2w') ticks += '<span class="fl-tick is-day" style="left:' + l + '%;width:' + w + '%"><b>' + DOW_UP[d.getDay()].slice(0, 2) + '</b>' + d.getDate() + '</span>';
-      else if (d.getDay() === 1 && (mon++ % step === 0)) ticks += '<span class="fl-tick' + (first ? ' is-month' : '') + '" style="left:' + l + '%">' + fmt(d) + '</span>';
-    }
-    return { ticks, bg, now: ((Date.now() - W.start) / W.ms * 100) };
-  }
-  function renderFleet(first) {
-    const t0 = today0(), U = fleetUi(), W = fleetWin(t0), anim = first ? ' reveal' : '';
-    const all = fleetJobs(), list = fleetFiltered(all);
-    const by = { before: [], sea: [], arrived: [], nodate: [] };
-    list.forEach((j) => by[fleetStage(j, t0)].push(j));
-    const tm = (d) => (d ? +d : 9e15);
-    by.before.sort((a, b) => tm(a.etd) - tm(b.etd)); by.sea.sort((a, b) => tm(a.eta) - tm(b.eta));
-    by.arrived.sort((a, b) => tm(a.lineFreeEnd || a.eta) - tm(b.lineFreeEnd || b.eta)); by.nodate.sort((a, b) => String(a.jobNo).localeCompare(String(b.jobNo)));
-    const sc = fleetScale(W);
-    const opt = (id, label, all, vals, cur) => '<label class="select-pill"><span>' + label + '</span><select id="' + id + '" aria-label="' + label + '"><option value="all">' + all + '</option>' + vals.map((v) => '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(v) + '</option>').join('') + '</select></label>';
-    const uniq = (f) => Array.from(new Set(all.map(f).filter(Boolean))).sort();
-    const modes = [['all', 'All'], ['sea', 'Sea'], ['air', 'Air'], ['courier', 'Courier']].filter(([m]) => m === 'all' || all.some((j) => j.mode === m));
-    const groups = FLEET_STAGES.filter(([id]) => by[id].length).map(([id, label]) =>
-      '<div class="fl-group is-' + id + '"><div class="fl-gh"><span>' + label + '</span><b>' + by[id].length + '</b></div>' + by[id].map((j) => fleetRow(j, W, t0)).join('') + '</div>').join('');
-    const nowLbl = 'TODAY ' + fmt(t0);
-    $('#view').innerHTML = '<div class="wrap fleet-page no-seg">' +
-      '<header class="page-head' + anim + '"><div class="head-main"><div class="meta-line"><span>' + (isSales() ? 'YOUR JOBS · ' : 'YOUR JOBS · ') + by.before.length + ' BEFORE SAILING · ' + by.sea.length + ' AT SEA · ' + by.arrived.length + ' ARRIVED</span>' +
-        '<span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div><h1 class="greeting">Fleet</h1></div>' +
-        '<div class="head-actions"><label class="search">' + icon('search') + '<input id="fleetSearch" type="search" placeholder="Job no, customer, port…" aria-label="Filter the fleet" autocomplete="off" value="' + esc(U.q) + '"></label>' +
-          '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button></div></header>' +
-      '<div class="fl-filters' + anim + '" style="--d:40ms"><div class="fl-f1"><div class="chips-row" role="group" aria-label="Mode">' + modes.map(([m, l]) => '<button type="button" class="fchip" data-fl-mode="' + m + '" aria-pressed="' + (U.mode === m) + '">' + l + '</button>').join('') + '</div>' +
-          '<div class="seg seg-mini fl-zoom" role="group" aria-label="Time span">' + Object.keys(FLEET_ZOOM).map((k) => '<button type="button" data-fl-zoom="' + k + '" aria-pressed="' + (U.zoom === k) + '"><span class="l-full">' + FLEET_ZOOM[k][2] + '</span><span class="l-short">' + k.toUpperCase() + '</span></button>').join('') + '</div></div>' +
-        '<div class="filter-tools">' + opt('flType', 'Type', 'All types', uniq((j) => j.type), U.type) + opt('flPort', 'Port', 'All ports', uniq((j) => j.pol).concat(uniq((j) => j.pod)).filter((v, i, a) => a.indexOf(v) === i).sort(), U.port) + opt('flCust', 'Customer', 'All customers', uniq((j) => j.customer), U.cust) + '</div></div>' +
-      '<section class="fl-card' + anim + '" style="--d:80ms" aria-label="Shipments on a timeline">' +
-        '<div class="fl-head"><div class="fl-hl">' + list.length + (list.length === 1 ? ' SHIPMENT' : ' SHIPMENTS') + '</div><div class="fl-scale">' + sc.ticks +
-          (sc.now >= 0 && sc.now <= 100 ? '<span class="fl-today" style="left:' + sc.now.toFixed(3) + '%">' + nowLbl + '</span>' : '') + '</div></div>' +
-        '<div class="fl-body"><div class="fl-bg" aria-hidden="true">' + sc.bg + (sc.now >= 0 && sc.now <= 100 ? '<i class="fl-now" style="left:' + sc.now.toFixed(3) + '%"></i>' : '') + '</div>' +
-          (groups || '<div class="fl-empty">' + empty('fleet', all.length ? 'No shipment matches these filters.' : 'No live shipments right now.') + (all.length ? '<button type="button" class="btn-ghost" data-act="fl-clear">Clear filters</button>' : '') + '</div>') + '</div>' +
-        '<div class="fl-legend"><span><i class="lg-bar"></i>ETD → ETA</span><span><i class="lg-prog"></i>Travelled</span><span><i class="lg-ghost"></i>Plan before a delay</span><span><i class="lg-slip"></i>Delay</span><span><i class="lg-free"></i>Free time (imports)</span><span><i class="lg-cut"></i>Cutoff</span><span><i class="chg-dot"></i>Changed since you looked</span></div>' +
-      '</section></div>';
-    if (state.flFocus) { const s = $('#fleetSearch'); if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }
-  }
-  const fleetCard = (no) => () => {
-    const j = findJob(no); if (!j) return '';
-    const t0 = today0(), di = delayInfo(j), c = changeOf(j);
-    const L = j.mode === 'courier' ? ['Pick-up', 'Delivery'] : ['ETD', 'ETA'];
-    const kv = (k, v) => '<div class="kv"><span class="kv-k">' + k + '</span><span class="kv-v">' + v + '</span></div>';
-    const was = (x) => (x ? ' <s>' + esc(fmt(x.from)) + '</s>' : '');
-    const free = j.cat === 'IMPORT' && j.lineFreeEnd && !j.delivery ? ((left) => kv('Line free time', esc(fmt(j.lineFreeEnd, true)) + (j.arrived ? ' · ' + (left < 0 ? 'over by ' + (-left) + 'd' : left + 'd left') : '')))(days(t0, j.lineFreeEnd)) : '';
-    return '<div class="pop-title">' + esc(j.jobNo) + ' <span class="badge">' + esc(j.type) + '</span></div><p class="pop-text">' + esc(j.customer || '—') + ' · ' + esc(j.route) + '</p>' +
-      stepStrip(j, 'is-wide') + '<div class="fc-next">' + toneChip(rowNext(j)) + cutChips(j) + '</div>' +
-      kv(L[0], esc(fmt(j.etd, true)) + was(di && di.etd)) + kv(L[1], esc(fmt(j.eta, true)) + was(di && di.eta)) + (di && di.total ? kv('Delays', '+' + di.total + (di.total === 1 ? ' day' : ' days')) : '') + free +
-      kv('Customer Service · Sales', esc((j.cs || '—') + ' · ' + (j.sales || '—'))) +
-      (c ? '<div class="fc-chg"><span class="chg-dot"></span>' + esc(changeText(c)) + '</div>' : '') +
-      '<div class="fc-act"><button type="button" class="btn-brutal" data-fl-open="' + esc(j.jobNo) + '" data-primary>OPEN JOB</button>' + (canNote() ? '<button type="button" class="btn-ghost" data-href="#/costing/' + encodeURIComponent(j.jobNo) + '">' + icon('costing', 15) + '<span>Costing</span></button>' : '') + '</div>';
-  };
+  // ================================================================ v2.9.1 — where a shipment is (before sailing · at sea · arrived)
+  const STAGES91 = [['before', 'BEFORE SAILING'], ['sea', 'AT SEA'], ['arrived', 'ARRIVED'], ['nodate', 'DATES TO CONFIRM']];
+  const MON91 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  function stageOf91(j, t0) { if (!j.etd && !j.eta) return 'nodate'; if (j.eta && j.eta <= t0) return 'arrived'; if (j.etd && j.etd <= t0) return 'sea'; return 'before'; }
+  function liveJobs91() { return scoped().filter((j) => j.active && j.mode !== 'misc'); }
+  const portName91 = (p) => nice(p).replace(/\(([^)]+)\)/g, (x, a) => '(' + a.toUpperCase() + ')');
 
   // ================================================================ v2.9 — reminders: your own to-dos (with or without a job)
   const REPEAT_NAME = { '': 'Once', DAILY: 'Daily', WEEKLY: 'Weekly', MONTHLY: 'Monthly' };
@@ -5049,7 +4879,7 @@
       '<button type="button" class="btn-ghost rm-add" data-act="rem-add" data-rem-job="' + esc(j.jobNo) + '">' + icon('clock', 15) + '<span>Remind me</span></button></div>';
   }
 
-  // ================================================================ v2.9 — Home: MY DAY (what came in · what to remember) and the TODAY ribbon
+  // ================================================================ v2.9 — Home: MY DAY (what came in · what to remember)
   function myDayTile(anim) {
     const ch = changedJobs(), un = notifUnread(), late = remOpen().filter((r) => r.due < isoOf(today0())).length;
     const line = (attrs, ic, txt, n, cls, tip) => '<button type="button" class="md-line' + (cls ? ' ' + cls : '') + '" ' + attrs + ' title="' + esc(tip) + '">' + icon(ic, 13) + '<b>' + n + '</b><span>' + txt + '</span></button>';
@@ -5062,96 +4892,321 @@
       '<div class="tile-body">' + (brief ? '<div class="md-brief">' + brief + '</div>' : '<div class="md-brief is-calm">' + icon('check', 15) + '<span>All caught up — nothing new since you looked.</span></div>') +
         (body || '<p class="rm-empty">No reminders. Add one for anything that is not a booking — a call, a payment, a rate to check.</p>') + '</div></section>';
   }
-  // office hours of a zone today, in minutes of YOUR day (0–1440): [[from, to, openNow]]
-  const partsMemo = new Map();
-  function zoneParts(tz, now) {
-    let f = partsMemo.get(tz);
-    if (f === undefined) { try { f = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { f = null; } partsMemo.set(tz, f); }
-    if (!f) return null;
-    const p = {}; f.formatToParts(now).forEach((x) => { p[x.type] = x.value; });
-    return { y: +p.year, mo: +p.month, d: +p.day, h: (+p.hour) % 24, mi: +p.minute };
-  }
-  function officeBands(z, now) {
-    const t = +now, p = zoneParts(z.tz, new Date(t)); if (!p) return [];
-    const off = Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi) - Math.floor(t / 60000) * 60000;   // the zone's clock minus UTC
-    const mid = new Date(t); mid.setHours(0, 0, 0, 0);
-    const wk = WEEKEND[z.cc] || [0, 6], out = [];
-    for (let k = -1; k <= 1; k++) {
-      const zd = new Date(Date.UTC(p.y, p.mo - 1, p.d + k));
-      if (wk.includes(zd.getUTCDay())) continue;
-      const o = Date.UTC(zd.getUTCFullYear(), zd.getUTCMonth(), zd.getUTCDate(), OFFICE[0] / 60, 0) - off, c = Date.UTC(zd.getUTCFullYear(), zd.getUTCMonth(), zd.getUTCDate(), OFFICE[1] / 60, 0) - off;
-      const a = (o - mid) / 60000, b = (c - mid) / 60000;
-      if (b <= 0 || a >= 1440) continue;
-      out.push([Math.max(0, a), Math.min(1440, b), t >= o && t < c]);
-    }
-    return out;
-  }
-  function ribbonZones(t0) {
-    const g = new Map();
-    fleetJobs().forEach((j) => {
-      const p = clockPort(j, t0), z = p && portZone(p); if (!z) return;
-      const key = z.tz + '|' + z.cc, e = g.get(key) || { z, ports: new Map(), n: 0 };
-      e.n++; e.ports.set(upq(p), (e.ports.get(upq(p)) || 0) + 1); g.set(key, e);
+  // ================================================================ v2.9.1 — TODAY'S WATCH: what still has to happen, and by when
+  // Before sailing: SI, ED and BL confirmation — by their cutoff, or by the sailing date when there is no cutoff
+  // (plus the DG cutoff). Still open after the ship sailed = overdue. Imports: the line free time ending or over.
+  function watchItems91(active, t0) {
+    const out = [];
+    const cutW = (d) => (d < 0 ? (-d) + (d === -1 ? ' day' : ' days') + ' overdue' : d === 0 ? 'cutoff today' : d === 1 ? 'cutoff tomorrow' : 'cutoff in ' + d + ' days');
+    const add = (j, what, say, d, when, extra) => out.push(Object.assign({ j, what, say, d, when, level: d <= 1 ? 'urgent' : 'soon' }, extra || {}));
+    active.forEach((j) => {
+      if (j.hold || j.mode === 'misc') return;
+      if ((j.cat === 'EXPORT' || j.cat === 'CROSS') && j.type !== 'CRR') {
+        const air = j.mode === 'air', sd = j.etd ? days(t0, j.etd) : null;
+        const verb = air ? 'departs' : 'sails', past = air ? 'departed ' : 'sailed ';
+        const task = (open, cut, what, say) => {
+          if (!open) return;
+          if (sd !== null && sd < 0) { if (sd >= -21) add(j, what, say, sd, past + (sd === -1 ? 'yesterday' : (-sd) + ' days ago')); return; }
+          if (cut) { const dc = days(t0, cut); if (dc <= 3) add(j, what, say, dc, cutW(dc)); return; }
+          if (sd !== null && sd <= 3) add(j, what, say, sd, sd === 0 ? verb + ' today' : sd === 1 ? verb + ' tomorrow' : verb + ' in ' + sd + ' days');
+        };
+        task(!j.sido || j.sido === 'PENDING', j.siCut, 'SI NOT SUBMITTED', 'SI not submitted');
+        if (j.cat === 'EXPORT') task(!j.ed || j.ed === 'PENDING', j.edCut, 'ED NOT PASSED', 'ED not passed');
+        task(j.bl !== NA && !BL_OK.includes(j.bl), null, air ? 'AWB NOT CONFIRMED' : 'BL NOT CONFIRMED', air ? 'AWB not confirmed' : 'BL not confirmed');
+        if (j.cat === 'EXPORT' && j.dg === 'DG' && j.dgCut && !(sd !== null && sd < 0)) { const dc = days(t0, j.dgCut); if (dc >= -1 && dc <= 3) add(j, 'DG CUTOFF', 'DG cutoff', dc, dc < 0 ? 'passed yesterday' : dc === 0 ? 'today' : dc === 1 ? 'tomorrow' : 'in ' + dc + ' days'); }
+      }
+      if (j.cat === 'IMPORT' && j.arrived && !j.delivery && j.lineFreeEnd) {
+        const d = days(t0, j.lineFreeEnd);
+        if (d <= 2 && d >= -30) add(j, d < 0 ? 'FREE TIME OVER' : 'FREE TIME ENDS', d < 0 ? 'Free time over' : 'Free time ends', d, d < 0 ? 'over by ' + (-d) + (d === -1 ? ' day' : ' days') : d === 0 ? 'ends today' : d === 1 ? 'ends tomorrow' : 'ends in 2 days', { free: true });
+      }
     });
-    return Array.from(g.values()).sort((a, b) => b.n - a.n).slice(0, 4);
+    return out.sort((a, b) => a.d - b.d || (a.level === b.level ? 0 : a.level === 'urgent' ? -1 : 1));
   }
-  function todayItems(t0) {
-    const J = fleetJobs(), same = (d) => d && +dayOf(d) === +t0;
-    return {
-      cut: J.filter((j) => cutsFor(j, t0).some((c) => c.d === 0)),
-      sail: J.filter((j) => same(j.etd)),
-      arrive: J.filter((j) => same(j.eta)),
-      free: J.filter((j) => j.cat === 'IMPORT' && j.arrived && !j.delivery && same(j.lineFreeEnd)),
-      rem: remDue()
-    };
+
+  // ================================================================ v2.9.1 — Home: five counters (each opens the side panel)
+  function kpiTiles91(m, anim) {
+    const t0 = today0(), wk = addDays(t0, 6);
+    const k = (id, label, n, sub, urgent, d) => '<button type="button" class="kpi' + (urgent ? ' is-urgent' : '') + anim + '" style="--d:' + d + 'ms" data-list="' + id + '">' +
+      '<span class="kpi-label">' + label + '</span><span class="kpi-num">' + n + '</span><span class="kpi-sub">' + esc(sub) + '</span></button>';
+    const holdSoon = m.hold.filter((j) => j.etd && j.etd >= t0 && j.etd <= wk).length;
+    return '<div class="kpis is-5">' +
+      k('active', 'ACTIVE JOBS', m.active.length, m.atSea.length + ' at sea now', false, 100) +
+      k('costing', 'COSTING DUE', m.costing.length, m.costing.filter((j) => costDue91(j, t0)).length + ' sailed or arrived', false, 130) +
+      k('sied', 'SI / ED DUE', m.sied.length, m.cut24 + (m.cut24 === 1 ? ' cutoff' : ' cutoffs') + ' in 24 h', false, 160) +
+      k('free', 'FREE TIME', m.freeJobs.length, m.freeJobs.length ? 'ending in ≤ 2 days' : 'all clear', m.freeJobs.length > 0, 190) +
+      k('hold', 'ON HOLD', m.hold.length, !m.hold.length ? 'all jobs moving' : holdSoon ? holdSoon + ' due to sail this week' : 'none due to sail this week', false, 220) +
+      '</div>';
   }
-  function todayRibbon(t0, anim) {
-    const now = new Date(), mins = now.getHours() * 60 + now.getMinutes(), pc = (m) => (m / 1440 * 100).toFixed(3);
-    const Z = ribbonZones(t0), T = todayItems(t0);
-    const chip = (k, n, label, cls) => (n ? '<button type="button" class="rb-chip' + (cls ? ' ' + cls : '') + '" data-rb="' + k + '"><b>' + n + '</b>' + label + '</button>' : '');
-    const chips = chip('cut', T.cut.length, T.cut.length === 1 ? 'cutoff today' : 'cutoffs today', 'is-red') + chip('sail', T.sail.length, T.sail.length === 1 ? 'sails' : 'sail') + chip('arrive', T.arrive.length, T.arrive.length === 1 ? 'arrives' : 'arrive') +
-      chip('free', T.free.length, 'free time ends', 'is-amber') + chip('rem', T.rem.length, T.rem.length === 1 ? 'reminder' : 'reminders', 'is-teal');
-    const lanes = Z.map((e) => {
-      const ports = Array.from(e.ports.entries()).sort((a, b) => b[1] - a[1]), c = clockBits(e.z, now), bands = officeBands(e.z, now);
-      return '<div class="rb-lane"><span class="rb-l" title="' + esc(ports.map(([p, n]) => p + ' (' + n + ')').join(', ') + ' — office hours 09:00–18:00 local, ' + weekTxt(e.z)) + '"><b>' + esc(ports[0][0]) + '</b>' + (ports.length > 1 ? '<em>+' + (ports.length - 1) + '</em>' : '') +
-        (c ? '<i class="is-' + c.tone + '" data-clock="' + esc(ports[0][0]) + '" data-mini="1"><b>' + c.time + '</b></i>' : '') + '</span>' +
-        '<span class="rb-t">' + (bands.length ? bands.map(([a, b, open]) => '<i class="rb-band' + (open ? ' is-open' : '') + '" style="left:' + pc(a) + '%;width:' + pc(b - a) + '%"></i>').join('') : '<em class="rb-off">closed today</em>') + '</span></div>';
-    }).join('');
-    const remAt = remOpen().filter((r) => r.due === isoOf(t0) && r.time).map((r) => [+r.time.slice(0, 2) * 60 + +r.time.slice(3), r]);
-    const timed = remAt.map(([m, r]) => '<i class="rb-rem" style="left:' + pc(m) + '%" title="' + esc(r.time + ' · ' + r.text) + '"></i>').join('');
-    const near = (h) => Math.abs(h * 60 + 10 - mins) < 95 || remAt.some(([m]) => m >= h * 60 - 20 && m <= h * 60 + 100);   // an hour label steps aside for the now chip or a reminder dot
-    const hhmm2 = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
-    return '<section class="ribbon glass' + (anim || '') + '" id="todayRibbon" aria-label="Today: your ports and deadlines" style="--d:20ms">' +
-      '<div class="rb-head"><span class="rb-k">TODAY · YOUR PORTS</span><span class="rb-chips">' + (chips || '<span class="rb-quiet">No cutoffs, sailings or arrivals today</span>') + '</span></div>' +
-      '<div class="rb-grid">' +
-        '<div class="rb-axis"><span class="rb-l"></span><span class="rb-t">' + [0, 3, 6, 9, 12, 15, 18, 21].map((h) => '<i' + (near(h) ? ' class="is-near"' : '') + ' style="left:' + pc(h * 60) + '%">' + String(h).padStart(2, '0') + '</i>').join('') + timed + '</span></div>' +
-        (lanes || '<div class="rb-lane"><span class="rb-l"></span><span class="rb-t"><em class="rb-off">No port clocks yet — your jobs have no known ports</em></span></div>') +
-        '<div class="rb-nowline"><span class="rb-l"></span><span class="rb-t"><i style="left:' + pc(mins) + '%"><b>' + hhmm2 + '</b></i></span></div>' +
-      '</div></section>';
+
+  // ================================================================ v2.9.1 — Home: four tall tiles, each made for its job
+  function watchTile91(m, anim) {
+    const chip = (w) => (w.level === 'urgent' ? 'chip chip-urgent' : 'chip chip-amber-dark');
+    const item = (w, more) => '<button type="button" class="wt li' + (more ? ' is-more' : '') + '" data-job="' + esc(w.j.jobNo) + '">' +
+      '<span class="wt-top"><span class="wt-job">' + changedDot(w.j) + esc(w.j.jobNo) + '</span><span class="' + chip(w) + '">' + (w.level === 'urgent' ? icon('alert', 12) : '') + esc(w.when) + '</span></span>' +
+      '<span class="wt-what">' + esc(w.what) + '</span><span class="wt-cust">' + esc(w.j.customer || '—') + ' · ' + esc(nice(w.j.route)) + '</span></button>';
+    const G = [['over', 'OVERDUE', (w) => w.d < 0], ['today', 'TODAY', (w) => w.d === 0], ['soon', 'NEXT 3 DAYS', (w) => w.d > 0]];
+    let n = 0;
+    const body = G.map(([id, label, f]) => { const L = m.watch.filter(f).slice(0, LIST_MAX); if (!L.length) return ''; const head = '<div class="wt-gh is-' + id + (n >= 6 ? ' is-more' : '') + '">' + label + '<b>' + L.length + '</b></div>'; return head + L.map((w) => item(w, n++ >= 6)).join(''); }).join('');
+    return '<section class="tile tile-ink t-watch' + anim + '" style="--d:250ms" aria-labelledby="watchTitle">' +
+      '<div class="tile-head"><h2 class="tile-title" id="watchTitle">TODAY’S WATCH</h2><span class="watch-sub">' + (m.watch.length ? m.watch.length + ' to do' : 'All clear') + '</span></div>' +
+      '<div class="tile-body">' + (body || empty('check', 'Nothing due in the next 3 days.')) + '</div>' + seeAll('watch', m.watch.length, true) + '</section>';
   }
-  const ribbonList = (k) => () => {
-    const t0 = today0(), T = todayItems(t0);
-    if (k === 'rem') return '<div class="pop-title">Reminders due</div>' + (T.rem.length ? '<ul class="rm-list">' + T.rem.map((r) => remItem(r)).join('') + '</ul>' : '<p class="pop-text">Nothing due.</p>');
-    const title = { cut: 'Cutoffs today', sail: 'Sailing today', arrive: 'Arriving today', free: 'Free time ends today' }[k];
-    const list = T[k] || [];
-    return '<div class="pop-title">' + title + '</div><ul class="chg-list">' + list.map((j) => '<li><button type="button" data-fl-open="' + esc(j.jobNo) + '">' + changedDot(j) + '<b>' + esc(j.jobNo) + '</b><span class="chg-who">' + esc(j.customer || '—') + '</span><span class="chg-what">' + esc(j.route) + (k === 'cut' ? ' · ' + cutsFor(j, t0).filter((c) => c.d === 0).map((c) => c.k).join(' · ') + ' cutoff' : '') + '</span></button></li>').join('') + '</ul>';
+  // the week as an agenda: a strip of seven days (how much sails and arrives each day), then day by day
+  function weekTile91(m, anim) {
+    const t0 = today0(), ev = [];
+    m.arriving.forEach((j) => ev.push({ j, d: j.eta, k: 'arr' }));
+    m.departing.forEach((j) => ev.push({ j, d: j.etd, k: 'dep' }));
+    ev.sort((a, b) => a.d - b.d || (a.k === b.k ? 0 : a.k === 'dep' ? -1 : 1));
+    const nA = m.arriving.length, nD = m.departing.length;
+    const strip = '<div class="wk-strip" aria-hidden="true">' + Array.from({ length: 7 }, (_, i) => addDays(t0, i)).map((d, i) => {
+      const e = ev.filter((x) => +dayOf(x.d) === +d), a = e.filter((x) => x.k === 'arr').length, s = e.length - a;
+      return '<span class="wk-day' + (i === 0 ? ' is-today' : '') + (e.length ? '' : ' is-none') + '"><em>' + DOW_UP[d.getDay()] + '</em><b>' + d.getDate() + '</b><span class="wk-n">' + (s ? '<i class="is-dep">' + s + '</i>' : '') + (a ? '<i class="is-arr">' + a + '</i>' : '') + '</span></span>';
+    }).join('') + '</div>';
+    const tag = (e) => (e.k === 'arr' ? (e.j.mode === 'courier' ? 'DELIVERY' : 'ARRIVES') : e.j.mode === 'air' ? 'DEPARTS' : e.j.mode === 'courier' ? 'PICK-UP' : 'SAILS');
+    let last = -1, list = '';
+    ev.slice(0, LIST_MAX).forEach((e, i) => {
+      const n = days(t0, e.d);
+      if (n !== last) { last = n; list += '<div class="wk-gh' + (i >= 6 ? ' is-more' : '') + '">' + (n === 0 ? 'TODAY' : n === 1 ? 'TOMORROW' : DOW_UP[e.d.getDay()]) + ' · ' + e.d.getDate() + ' ' + MON91[e.d.getMonth()].toUpperCase() + '</div>'; }
+      list += '<button type="button" class="wk-row li' + (i >= 6 ? ' is-more' : '') + '" data-job="' + esc(e.j.jobNo) + '"><span class="wk-tag is-' + e.k + '">' + tag(e) + '</span><span class="li-main"><span class="li-job">' + changedDot(e.j) + esc(e.j.jobNo) + '</span><span class="li-sub">' + esc(nice(e.j.route)) + (e.j.cargo ? ' · ' + esc(e.j.cargo) : '') + '</span></span></button>';
+    });
+    return '<section class="tile t-week' + anim + '" style="--d:280ms" aria-labelledby="weekTitle">' +
+      '<div class="tile-head"><h2 class="tile-title" id="weekTitle">THIS WEEK</h2><span class="tile-count">' + ev.length + '</span></div>' +
+      strip + '<div class="wk-legend"><span><i class="is-dep"></i>Sailing ' + nD + '</span><span><i class="is-arr"></i>Arriving ' + nA + '</span></div><div class="tile-body">' + (list || empty('calendar', 'Nothing sails or arrives in the next 7 days.')) + '</div>' + seeAll('week', ev.length) + '</section>';
+  }
+  // ================================================================ v2.9.1 — Home: POD OFFICE HOURS (times in your time)
+  // The destination port of each of your jobs, by name: teal = open, amber = closing within the hour, grey = closed.
+  // Open ones by who closes first, then who opens first.
+  function portList91(t0) {
+    const now = new Date(), map = new Map();
+    liveJobs91().forEach((j) => {
+      const p = j.pod, z = p && portZone(p); if (!z) return;
+      const k = upq(p), e = map.get(k) || { port: k, z, jobs: [] }; e.jobs.push(j); map.set(k, e);
+    });
+    return Array.from(map.values()).map((e) => Object.assign(e, { o: officeState(e.z, now) })).filter((e) => e.o)
+      .sort((a, b) => (a.o.open !== b.o.open ? (a.o.open ? -1 : 1) : a.o.open ? a.o.toClose - b.o.toClose : a.o.toOpen - b.o.toOpen) || b.jobs.length - a.jobs.length);
+  }
+  const yourTime91 = (d) => String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  function portState91(o, now) {
+    if (o.open) return o.toClose <= 60 ? { tone: 'amber', txt: 'closes in ' + o.toClose + ' min' } : { tone: 'open', txt: 'closes ' + yourTime91(new Date(+now + o.toClose * 60000)) };
+    const at = new Date(+now + o.toOpen * 60000), dd = days(dayOf(now), dayOf(at));
+    return { tone: 'closed', txt: 'opens ' + (dd === 0 ? '' : dd === 1 ? 'tomorrow ' : DOW[at.getDay()] + ' ') + yourTime91(at) };
+  }
+  function portChip91(e, now) {
+    const c = portState91(e.o, now);
+    return '<button type="button" class="po-chip is-' + c.tone + '" data-port91="' + esc(e.port) + '" title="' + esc(portName91(e.port) + ' — local time ' + hhmm(e.o.t) + ' · office 09:00–18:00, ' + weekTxt(e.z) + ' · ' + e.jobs.length + (e.jobs.length === 1 ? ' job' : ' jobs')) + '">' +
+      '<i></i><b>' + esc(portName91(e.port)) + '</b><span>' + esc(c.txt) + '</span></button>';
+  }
+  function portOffices(anim) {
+    const t0 = today0(), now = new Date(), L = portList91(t0);
+    return '<section class="ports glass' + (anim || '') + '" id="portOffices" aria-labelledby="poTitle" style="--d:20ms">' +
+      '<div class="po-head"><h2 class="po-k" id="poTitle">POD OFFICE HOURS</h2><span class="po-now">YOUR TIME <b>' + yourTime91(now) + '</b></span></div>' +
+      (L.length ? '<div class="po-chips">' + L.map((e) => portChip91(e, now)).join('') + '<button type="button" class="po-chip is-more" data-act="ports-all" hidden>+0 more</button></div>'
+        : '<p class="po-none">The ports of your jobs show here, with their office hours in your time.</p>') + '</section>';
+  }
+  // keep the chips to two rows (three on the phone); the rest are counted in "+N more"
+  function fitPorts91() {
+    const box = $('#portOffices .po-chips'); if (!box) return;
+    const chips = Array.from(box.querySelectorAll('.po-chip[data-port91]')), more = box.querySelector('.po-chip.is-more');
+    if (!more || !chips.length) return;
+    chips.forEach((c) => { c.hidden = false; }); more.hidden = true;
+    const rows = window.innerWidth < 760 ? 3 : 2, top0 = chips[0].offsetTop, rowH = chips[0].offsetHeight + 6;
+    const fits = (el) => Math.round((el.offsetTop - top0) / rowH) < rows;
+    let n = chips.findIndex((c) => !fits(c)); if (n < 0) return;
+    for (let k = n; k < chips.length; k++) chips[k].hidden = true;
+    const say = () => { more.textContent = '+' + (chips.length - n) + ' more'; };
+    more.hidden = false; say();
+    while (n > 0 && !fits(more)) { n--; chips[n].hidden = true; say(); }
+  }
+  const portsPop91 = () => () => { const now = new Date(); return '<div class="pop-title">POD office hours</div><div class="po-chips is-all">' + portList91(today0()).map((e) => portChip91(e, now)).join('') + '</div>'; };
+  const portJobsPop91 = (port) => () => {
+    const e = portList91(today0()).find((x) => x.port === port); if (!e) return '<p class="pop-text">No jobs.</p>';
+    const c = portState91(e.o, new Date());
+    return '<div class="pop-title">' + esc(portName91(port)) + '</div><p class="pop-text">Local time ' + hhmm(e.o.t) + ' · ' + esc(c.txt) + ' (your time)</p>' +
+      '<ul class="chg-list">' + e.jobs.map((j) => '<li><button type="button" data-fl-open="' + esc(j.jobNo) + '">' + changedDot(j) + '<b>' + esc(j.jobNo) + '</b><span class="chg-who">' + esc(j.customer || '—') + '</span><span class="chg-what">' + esc(j.route) + ' · ' + esc(rowNext(j).text) + '</span></button></li>').join('') + '</ul>';
   };
 
-  function initV29() {
-    // the ribbon's "now" line and office bands move with the clock
-    setInterval(() => { const rb = $('#todayRibbon'); if (rb && state.route && state.route.name === 'home') rb.outerHTML = todayRibbon(today0(), ''); }, 60000);
+  // ================================================================ v2.9.1 — the side panel: each list made for what it counts
+  const rel91 = (d, t0) => { if (!d) return 'to confirm'; const n = days(t0, d); return n === 0 ? 'today' : n === 1 ? 'tomorrow' : n === -1 ? 'yesterday' : n > 0 ? 'in ' + n + ' days' : (-n) + ' days ago'; };
+  function drawerList91(kind, list, m) {
+    const t0 = today0();
+    const main = (j, below) => '<span class="dr-main"><span class="dr-job">' + changedDot(j) + esc(j.jobNo) + '<span class="badge">' + esc(j.type) + '</span></span>' +
+      '<span class="dr-cust">' + esc(j.customer || '—') + '</span><span class="dr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span>' + (below || '') + '</span>';
+    const side = (k, d, sub, tone, extra) => '<span class="dr-side' + (tone ? ' is-' + tone : '') + '"><span class="dr-k">' + k + '</span><b>' + (d ? esc(fmt(d)) : '—') + '</b>' + (sub ? '<span class="dr-s">' + esc(sub) + '</span>' : '') + (extra || '') + '</span>';
+    const row = (j, below, right, attr) => '<button type="button" class="dr-row" ' + (attr || 'data-job="' + esc(j.jobNo) + '"') + '>' + main(j, below) + right + '</button>';
+    const group = (label, rows, tone) => (rows.length ? '<div class="dr-gh' + (tone ? ' is-' + tone : '') + '"><span>' + label + '</span><b>' + rows.length + '</b></div>' + rows.join('') : '');
+    const tm = (d) => (d ? +d : 9e15);
+    const when = (j) => {
+      const st = j.mode === 'misc' ? 'nodate' : stageOf91(j, t0);
+      return st === 'before' ? side(j.mode === 'courier' ? 'PICK-UP' : 'ETD', j.etd, j.etd ? rel91(j.etd, t0) : 'to confirm')
+        : st === 'sea' ? side('ETA', j.eta, rel91(j.eta, t0)) : st === 'arrived' ? side('ARRIVED', j.eta, rel91(j.eta, t0)) : side('DATES', null, j.mode === 'misc' ? 'costing only' : 'to confirm');
+    };
+    const next = (j) => '<span class="dr-next">' + toneChip(rowNext(j)) + '</span>';
+    let html = '';
+    if (kind === 'active') {
+      const by = { before: [], sea: [], arrived: [], nodate: [] };
+      list.forEach((j) => by[j.mode === 'misc' ? 'nodate' : stageOf91(j, t0)].push(j));
+      by.before.sort((a, b) => tm(a.etd) - tm(b.etd)); by.sea.sort((a, b) => tm(a.eta) - tm(b.eta)); by.arrived.sort((a, b) => tm(b.eta) - tm(a.eta));
+      html = STAGES91.map(([id, label]) => group(id === 'nodate' ? 'NO DATES YET' : label, by[id].map((j) => row(j, next(j), when(j))))).join('');
+    } else if (kind === 'costing') {
+      const due = (j) => costDue91(j, t0);
+      const tag = (j) => { const s = costState(j); return '<span class="dr-tag is-' + s + '">' + (s === 'draft' ? 'Draft' : 'Pending') + '</span>'; };
+      const r = (j) => row(j, '', due(j) ? side(j.arrived ? 'ARRIVED' : j.mode === 'air' ? 'DEPARTED' : 'SAILED', j.arrived ? j.eta : j.etd, rel91(j.arrived ? j.eta : j.etd, t0), 'red', tag(j)) : (costByArrival91(j) && j.eta ? side('ETA', j.eta, rel91(j.eta, t0), '', tag(j)) : side('ETD', j.etd, j.etd ? rel91(j.etd, t0) : j.mode === 'misc' ? 'costing only' : 'to confirm', '', tag(j))), 'data-cost="' + esc(j.jobNo) + '"');
+      const at = (j) => tm(costByArrival91(j) ? j.eta : j.etd);
+      html = group('SAILED OR ARRIVED', list.filter(due).sort((a, b) => at(a) - at(b)).map(r), 'red') + group('NOT DUE YET', list.filter((j) => !due(j)).sort((a, b) => at(a) - at(b)).map(r));
+    } else if (kind === 'sied') {
+      const item = (j) => {
+        const sailed = !!(j.etd && j.etd < t0), C = cutsFor(j, t0);
+        const one = (k, v, show) => {
+          if (!show || v === NA) return { h: '', d: 99 };
+          if (v && v !== 'PENDING') return { h: '<span class="cut-chip is-done"><b>' + k + '</b>✓</span>', d: 99 };
+          if (sailed) return { h: '<span class="cut-chip is-red"><b>' + k + '</b>SAILED</span>', d: -99 };
+          const c = C.find((x) => x.k === k);
+          return c ? { h: '<span class="cut-chip is-' + c.tone + '"><b>' + k + '</b>' + esc(cutWhen(c.d, c.date)) + '</span>', d: c.d } : { h: '<span class="cut-chip is-calm"><b>' + k + '</b>NO CUTOFF</span>', d: 50 };
+        };
+        const si = one('SI', j.sido, true), ed = one('ED', j.ed, j.cat === 'EXPORT'), d = Math.min(si.d, ed.d);
+        return { j, d, h: row(j, '', '<span class="dr-side is-cuts">' + si.h + ed.h + '</span>') };
+      };
+      const L = list.map(item).sort((a, b) => a.d - b.d);
+      html = group('OVERDUE OR WITHIN 24 H', L.filter((x) => x.d <= 1).map((x) => x.h), 'red') + group('NEXT 3 DAYS', L.filter((x) => x.d > 1 && x.d <= 3).map((x) => x.h), 'amber') + group('LATER', L.filter((x) => x.d > 3).map((x) => x.h));
+    } else if (kind === 'free') {
+      html = list.slice().sort((a, b) => tm(a.lineFreeEnd) - tm(b.lineFreeEnd)).map((j) => {
+        const d = days(t0, j.lineFreeEnd);
+        return row(j, '<span class="dr-note">Arrived ' + esc(fmt(j.eta)) + ' · ' + esc(rel91(j.eta, t0)) + '</span>',
+          '<span class="dr-side is-' + (d <= 1 ? 'red' : 'amber') + '"><span class="dr-k">LINE FREE TIME</span><b>' + (d < 0 ? 'over ' + (-d) + (d === -1 ? ' day' : ' days') : d === 0 ? 'ends today' : d + (d === 1 ? ' day left' : ' days left')) + '</b><span class="dr-s">until ' + esc(fmt(j.lineFreeEnd)) + '</span></span>');
+      }).join('');
+    } else if (kind === 'hold') {
+      html = list.slice().sort((a, b) => tm(a.etd) - tm(b.etd)).map((j) => row(j, j.remarks ? '<span class="dr-note">“' + esc(j.remarks) + '”</span>' : '', when(j))).join('');
+    } else if (kind === 'watch') {
+      html = m.watch.map((w) => row(w.j, '<span class="dr-next"><span class="dr-what">' + esc(w.say) + '</span></span>', '<span class="dr-side is-' + (w.level === 'urgent' ? 'red' : 'amber') + '"><b>' + esc(w.when) + '</b></span>')).join('');
+    } else if (kind === 'week') {
+      const ev = m.departing.map((j) => ({ j, d: j.etd, k: 'dep' })).concat(m.arriving.map((j) => ({ j, d: j.eta, k: 'arr' }))).sort((a, b) => a.d - b.d);
+      html = ev.map((e) => row(e.j, '', side(e.k === 'arr' ? 'ARRIVES' : e.j.mode === 'air' ? 'DEPARTS' : 'SAILS', e.d, rel91(e.d, t0), e.k === 'arr' ? 'teal' : ''))).join('');
+    } else if (kind === 'atsea') {
+      html = list.map((j) => row(j, '<span class="dr-note">Day ' + j.dayN + ' of ' + j.dayT + '</span>', side('ETA', j.eta, rel91(j.eta, t0)))).join('');
+    } else {
+      html = list.map((j) => row(j, next(j), when(j))).join('');
+    }
+    return html ? '<div class="dr-list">' + html + '</div>' : '<div class="tile-empty">Nothing here right now.</div>';
+  }
+  // ================================================================ v2.9.1 — Word: your active jobs, by sales person
+  // A4 landscape. The logo and the title on every page; one table per sales person (S.No · Job no. · Customer ·
+  // Containers · POL → POD · Current status), its heading row repeated when a table runs onto the next page;
+  // a job never splits across pages. Status = where the shipment is · BL (AWB) · costing.
+  function jobStatus91(j, t0) {
+    const air = j.mode === 'air', cr = j.mode === 'courier';
+    const d = (x) => x.getDate() + ' ' + MON91[x.getMonth()];
+    let where;
+    if (j.mode === 'misc') where = 'Costing only';
+    else if (j.eta && j.eta <= t0) where = (cr ? 'Delivered ' : 'Arrived ') + d(j.eta);
+    else if (j.etd && j.etd <= t0) where = (air ? 'Departed ' : cr ? 'Picked up ' : 'Sailed ') + d(j.etd);
+    else if (j.etd) where = (air ? 'Departs ' : cr ? 'Pick-up ' : 'Sails ') + d(j.etd);
+    else where = (cr ? 'Pick-up' : 'ETD') + ' to confirm';
+    const k = air ? 'AWB' : cr ? 'Tracking' : 'BL', v = j.bl;
+    const bl = j.mode === 'misc' || v === NA ? '' : !v || v === 'BL PENDING' ? k + ' pending' : v === 'CONFIRMATION PENDING' ? k + ' to confirm'
+      : /^CONFIRMED/.test(v) ? (air || cr ? k + ' confirmed' : v.slice(10) + ' confirmed') : /ISSUED$/.test(v) ? (air || cr ? k + ' issued' : v.slice(0, 3) + ' issued') : nice(v);
+    const cs = costState(j), cost = cs === 'none' ? '' : 'Costing ' + (cs === 'draft' ? 'draft' : cs === 'done' ? 'done' : 'pending');
+    return { hold: j.hold, where, rest: [bl, cost].filter(Boolean) };
+  }
+  async function jobsWord91() {
+    const t0 = today0(), X = XL.X, jobs = scoped().filter((j) => j.active);
+    if (!jobs.length) { toast('No active jobs to put in the file'); return; }
+    const groups = new Map();
+    jobs.slice().sort((a, b) => String(a.jobNo).localeCompare(String(b.jobNo), 'en', { numeric: true })).forEach((j) => { const k = j.sales || ''; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(j); });
+    const names = Array.from(groups.keys()).sort((a, b) => (!a) - (!b) || a.localeCompare(b));
+    const logo = await costLogo(), sz = logo ? XL.pngSize(logo) : null;
+    const day = t0.getDate() + ' ' + MON91[t0.getMonth()] + ' ' + t0.getFullYear();
+    const NAVY = '1C5179', INK = '0B1B2B', INK2 = '3E4C5E', MUTE = '6B7A8A', HAIR = 'DFE6ED', FOG = 'F3F6F9', TEAL = '0E7C7B', RED = 'B42318';
+    const W = 15138, COLS = [600, 1650, 3900, 1700, 3200, 4088];
+    const rPr = (o) => '<w:rPr>' + (o.b ? '<w:b/><w:bCs/>' : '') + (o.caps ? '<w:caps/>' : '') + '<w:color w:val="' + (o.c || INK) + '"/>' + (o.sp ? '<w:spacing w:val="' + o.sp + '"/>' : '') + '<w:sz w:val="' + (o.sz || 18) + '"/><w:szCs w:val="' + (o.sz || 18) + '"/></w:rPr>';
+    const run = (t, o) => '<w:r>' + rPr(o || {}) + '<w:t xml:space="preserve">' + X(t) + '</w:t></w:r>';
+    const para = (runs, o) => { o = o || {}; return '<w:p><w:pPr>' + (o.keep ? '<w:keepNext/>' : '') + '<w:spacing w:before="' + (o.before || 0) + '" w:after="' + (o.after || 0) + '" w:line="' + (o.line || 252) + '" w:lineRule="auto"/>' + (o.jc ? '<w:jc w:val="' + o.jc + '"/>' : '') + '</w:pPr>' + runs + '</w:p>'; };
+    const cell = (w, content, o) => { o = o || {}; return '<w:tc><w:tcPr><w:tcW w:w="' + w + '" w:type="dxa"/>' + (o.border ? '<w:tcBorders><w:bottom w:val="single" w:sz="8" w:space="0" w:color="' + NAVY + '"/></w:tcBorders>' : '') + (o.fill ? '<w:shd w:val="clear" w:color="auto" w:fill="' + o.fill + '"/>' : '') + '<w:vAlign w:val="' + (o.v || 'top') + '"/></w:tcPr>' + content + '</w:tc>'; };
+    const head = ['S.NO', 'JOB NO.', 'CUSTOMER', 'CONTAINERS', 'POL → POD', 'CURRENT STATUS'];
+    const headRow = '<w:tr><w:trPr><w:cantSplit/><w:tblHeader/></w:trPr>' + head.map((h, i) => cell(COLS[i], para(run(h, { b: true, c: INK2, sz: 14, sp: 10 }), { jc: i === 0 ? 'center' : 'left' }), { fill: FOG, border: true, v: 'bottom' })).join('') + '</w:tr>';
+    const jobRow = (j, n) => {
+      const st = jobStatus91(j, t0);
+      const status = (st.hold ? run('On hold', { b: true, c: RED }) + run(' · ', { c: MUTE }) : '') + run(st.where, { b: true, c: NAVY }) + st.rest.map((x) => run(' · ', { c: MUTE }) + run(x, { c: INK2 })).join('');
+      const route = j.mode === 'misc' ? 'Costing only' : !j.pol && !j.pod ? '—' : (j.pol ? portName91(j.pol) : '—') + ' → ' + (j.pod ? portName91(j.pod) : '—');
+      return '<w:tr><w:trPr><w:cantSplit/></w:trPr>' +
+        cell(COLS[0], para(run(String(n), { c: MUTE }), { jc: 'center' })) + cell(COLS[1], para(run(j.jobNo, { b: true }))) +
+        cell(COLS[2], para(run(j.customer || '—'))) + cell(COLS[3], para(run(j.cargo || (j.mode === 'air' ? 'Air' : j.mode === 'courier' ? 'Courier' : '—'), { c: INK2 }))) +
+        cell(COLS[4], para(run(route, { c: INK2 }))) + cell(COLS[5], para(status)) + '</w:tr>';
+    };
+    const table = (list) => '<w:tbl><w:tblPr><w:tblW w:w="' + W + '" w:type="dxa"/><w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="' + HAIR + '"/><w:right w:val="nil"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="' + HAIR + '"/><w:insideV w:val="nil"/></w:tblBorders>' +
+      '<w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="70" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="70" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="0420" w:firstRow="1" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/></w:tblPr>' +
+      '<w:tblGrid>' + COLS.map((c) => '<w:gridCol w:w="' + c + '"/>').join('') + '</w:tblGrid>' + headRow + list.map((j, i) => jobRow(j, i + 1)).join('') + '</w:tbl>';
+    const who = isSales() ? 'Sales · ' + nice(state.user) : 'Customer Service · ' + nice(state.user);
+    let body = para(run(jobs.length + (jobs.length === 1 ? ' active job' : ' active jobs'), { b: true, sz: 20 }) + run('   ·   ' + names.length + (names.length === 1 ? ' sales person' : ' sales persons') + '   ·   ' + who, { c: MUTE, sz: 18 }), { after: 60 });
+    names.forEach((k, gi) => {
+      const list = groups.get(k);
+      body += para(run(k ? nice(k) : 'No sales person', { b: true, c: NAVY, sz: 24 }) + run('   ' + list.length + (list.length === 1 ? ' job' : ' jobs'), { c: MUTE, sz: 17 }), { keep: true, before: gi ? 360 : 240, after: 100 }) + table(list);
+    });
+    const sect = '<w:sectPr><w:headerReference w:type="default" r:id="rIdH"/><w:footerReference w:type="default" r:id="rIdF"/><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/><w:pgMar w:top="1300" w:right="850" w:bottom="1000" w:left="850" w:header="420" w:footer="420" w:gutter="0"/><w:cols w:space="720"/></w:sectPr>';
+    const NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const DNS = NS + ' xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"';
+    const XMLH = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+    const doc = XMLH + '<w:document ' + NS + '><w:body>' + body + para('') + sect + '</w:body></w:document>';   // Word wants a paragraph after the last table
+    const E = 360000, lh = Math.round(0.95 * E), lw = sz ? Math.round(lh * sz[0] / sz[1]) : 0;
+    const pic = sz ? '<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="' + lw + '" cy="' + lh + '"/><wp:docPr id="1" name="ETHIX logo"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>' +
+      '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="logo.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdLogo"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>' +
+      '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + lw + '" cy="' + lh + '"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>' : run('ETHIX SHIPPING', { b: true, c: NAVY, sz: 22 });
+    const hcell = (w, content, jc) => '<w:tc><w:tcPr><w:tcW w:w="' + w + '" w:type="dxa"/><w:vAlign w:val="bottom"/></w:tcPr>' + content + '</w:tc>';
+    const header = XMLH + '<w:hdr ' + DNS + '><w:tbl><w:tblPr><w:tblW w:w="' + W + '" w:type="dxa"/><w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="single" w:sz="8" w:space="0" w:color="' + NAVY + '"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/><w:bottom w:w="90" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="0000" w:firstRow="0" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/></w:tblPr>' +
+      '<w:tblGrid><w:gridCol w:w="' + (W / 2) + '"/><w:gridCol w:w="' + (W / 2) + '"/></w:tblGrid><w:tr>' +
+      hcell(W / 2, para(pic)) + hcell(W / 2, para(run('ACTIVE JOBS', { b: true, c: INK, sz: 26, sp: 20 }), { jc: 'right' }) + para(run(day.toUpperCase() + ' · BY SALES PERSON', { b: true, c: TEAL, sz: 15, sp: 10 }), { jc: 'right' })) +
+      '</w:tr></w:tbl><w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p></w:hdr>';
+    const fld = (code) => '<w:fldSimple w:instr=" ' + code + ' "><w:r>' + rPr({ c: MUTE, sz: 15 }) + '<w:t>1</w:t></w:r></w:fldSimple>';
+    const footer = XMLH + '<w:ftr ' + NS + '><w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:space="6" w:color="' + HAIR + '"/></w:pBdr><w:tabs><w:tab w:val="right" w:pos="' + W + '"/></w:tabs><w:spacing w:before="0" w:after="0"/></w:pPr>' +
+      run('ETHIX · Active jobs · ' + day + ' · ' + who, { c: MUTE, sz: 15 }) + '<w:r>' + rPr({ c: MUTE, sz: 15 }) + '<w:tab/></w:r>' + run('Page ', { c: MUTE, sz: 15 }) + fld('PAGE') + run(' of ', { c: MUTE, sz: 15 }) + fld('NUMPAGES') + '</w:p></w:ftr>';
+    const styles = XMLH + '<w:styles ' + NS + '><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/><w:color w:val="' + INK + '"/><w:sz w:val="18"/><w:szCs w:val="18"/><w:lang w:val="en-GB"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="0" w:line="252" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>' +
+      '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style><w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:uiPriority w:val="99"/><w:semiHidden/><w:tblPr><w:tblInd w:w="0" w:type="dxa"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style></w:styles>';
+    const settings = XMLH + '<w:settings ' + NS + '><w:defaultTabStop w:val="720"/><w:characterSpacingControl w:val="doNotCompress"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>';
+    const rel = (id, type, target) => '<Relationship Id="' + id + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/' + type + '" Target="' + target + '"/>';
+    const RELS = (inner) => XMLH + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + inner + '</Relationships>';
+    const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const files = [
+      { name: '[Content_Types].xml', data: XMLH + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>' + (sz ? '<Default Extension="png" ContentType="image/png"/>' : '') +
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>' +
+        '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>' +
+        '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>' },
+      { name: '_rels/.rels', data: RELS('<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>') },
+      { name: 'docProps/core.xml', data: XMLH + '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>ETHIX active jobs ' + X(day) + '</dc:title><dc:creator>' + X(state.user) + '</dc:creator><cp:lastModifiedBy>' + X(state.user) + '</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">' + now + '</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">' + now + '</dcterms:modified></cp:coreProperties>' },
+      { name: 'docProps/app.xml', data: XMLH + '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>ETHIX</Application></Properties>' },
+      { name: 'word/document.xml', data: doc },
+      { name: 'word/styles.xml', data: styles },
+      { name: 'word/settings.xml', data: settings },
+      { name: 'word/header1.xml', data: header },
+      { name: 'word/footer1.xml', data: footer },
+      { name: 'word/_rels/document.xml.rels', data: RELS(rel('rIdS', 'styles', 'styles.xml') + rel('rIdT', 'settings', 'settings.xml') + rel('rIdH', 'header', 'header1.xml') + rel('rIdF', 'footer', 'footer1.xml')) }
+    ];
+    if (sz) { files.push({ name: 'word/_rels/header1.xml.rels', data: RELS(rel('rIdLogo', 'image', 'media/logo.png')) }); files.push({ name: 'word/media/logo.png', data: logo }); }
+    try {
+      const blob = XL.zip(files, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      const name = 'ETHIX_Active_jobs_' + day.replace(/ /g, '-') + '.docx';
+      const url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = url; a.download = name; document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 4000);
+      toast('Word file ready · ' + name);
+    } catch (e) { toast('The Word file could not be made: ' + e.message, { error: true }); }
+  }
+
+  function initV291() {
+    // the port offices move with the clock
+    setInterval(() => { const po = $('#portOffices'); if (po && state.route && state.route.name === 'home') { po.outerHTML = portOffices(''); fitPorts91(); } }, 60000);
+    window.addEventListener('resize', () => { if (state.route && state.route.name === 'home') fitPorts91(); });
     document.addEventListener('click', (e) => {
       if (!state.signedIn) return;
       const op = e.target.closest('[data-fl-open]'); if (op) { closeOverlays(true); openJob(op.dataset.flOpen); return; }
-      const fc = e.target.closest('[data-fleet-card]'); if (fc) { openPop(fc, 'JOB', fleetCard(fc.dataset.fleetCard)); return; }
+      const pc = e.target.closest('[data-port91]'); if (pc) { openPop(pc, 'POD OFFICE', portJobsPop91(pc.dataset.port91)); return; }
+      const pa = e.target.closest('[data-act="ports-all"]'); if (pa) { openPop(pa, 'POD OFFICE HOURS', portsPop91()); return; }
       if (e.target.closest('[data-act="changed"]')) { openPop(e.target.closest('[data-act="changed"]'), 'MY DAY', changedMenu()); return; }
       if (e.target.closest('[data-act="seen-all"]')) {
         const keep = state.seen; state.seen = { _base: Date.now() }; closeOverlays(true); rerender();
         api.call('ethixSeenAll').then((r) => { if (r && r.seen) state.seen = r.seen; }).catch(() => { state.seen = keep; rerender(); });
         toast('All marked as seen'); return;
       }
-      const rb = e.target.closest('[data-rb]'); if (rb) { openPop(rb, 'TODAY', ribbonList(rb.dataset.rb)); return; }
       if (e.target.closest('[data-act="rem-late"]')) { go('#/follow-ups'); return; }
+      if (e.target.closest('[data-act="jobs-word"]')) { jobsWord91(); return; }
       const ra = e.target.closest('[data-act="rem-add"]'); if (ra && canNote()) { remOpenForm(ra, null, ra.dataset.remJob || ''); return; }
       const rd = e.target.closest('[data-rem-done]'); if (rd) { const r = (state.reminders || []).find((x) => x.id === rd.dataset.remDone); if (r) remDone(r.id, r.status !== 'DONE'); return; }
       const re = e.target.closest('[data-rem-edit]'); if (re) { const r = (state.reminders || []).find((x) => x.id === re.dataset.remEdit); if (r) remOpenForm(re, r); return; }
@@ -5159,21 +5214,10 @@
       const rrep = e.target.closest('[data-rem-rep]'); if (rrep && state.remForm) { state.remForm.repeat = rrep.dataset.remRep; refreshOverlay(); return; }
       const rsz = e.target.closest('[data-rem-snooze]'); if (rsz && state.remForm) { const d = addDays(today0(), +rsz.dataset.remSnooze); const F = Object.assign({}, state.remForm, { due: isoOf(d) }); remSave(F, 'Snoozed'); return; }
       const rdl = e.target.closest('[data-rem-del]'); if (rdl) { remDelete(rdl.dataset.remDel); return; }
-      // fleet controls
-      if (!state.route || state.route.name !== 'fleet') return;
-      const U = fleetUi();
-      const m = e.target.closest('[data-fl-mode]'); if (m) { U.mode = m.dataset.flMode; rerender(); return; }
-      const z = e.target.closest('[data-fl-zoom]'); if (z) { U.zoom = z.dataset.flZoom; rerender(); return; }
-      if (e.target.closest('[data-act="fl-clear"]')) { Object.assign(U, { mode: 'all', type: 'all', port: 'all', cust: 'all', q: '' }); rerender(); }
     });
     document.addEventListener('input', (e) => {
       const F = state.remForm, id = e.target.id;
-      if (F && ['remText', 'remDue', 'remTime', 'remJob'].includes(id)) { F[{ remText: 'text', remDue: 'due', remTime: 'time', remJob: 'job' }[id]] = e.target.value; if (id === 'remDue') refreshOverlay(); return; }
-      if (id === 'fleetSearch') { fleetUi().q = e.target.value; clearTimeout(state.flTimer); state.flTimer = setTimeout(() => { state.flFocus = true; rerender(); state.flFocus = false; }, 140); }
-    });
-    document.addEventListener('change', (e) => {
-      const map = { flType: 'type', flPort: 'port', flCust: 'cust' };
-      if (map[e.target.id]) { fleetUi()[map[e.target.id]] = e.target.value; rerender(); }
+      if (F && ['remText', 'remDue', 'remTime', 'remJob'].includes(id)) { F[{ remText: 'text', remDue: 'due', remTime: 'time', remJob: 'job' }[id]] = e.target.value; if (id === 'remDue') refreshOverlay(); }
     });
     document.addEventListener('submit', (e) => {
       const f = e.target.closest('[data-rem-form]'); if (!f) return;
@@ -5188,18 +5232,14 @@
     const map = {
       active: ['ACTIVE JOBS', m.active], costing: ['COSTING DUE', m.costing], sied: ['SI / ED DUE', m.sied],
       free: ['FREE TIME ENDING ≤ 2 DAYS', m.freeJobs], atsea: ['AT SEA NOW', m.atSea], arriving: ['ARRIVING THIS WEEK', m.arriving],
-      departing: ['DEPARTING THIS WEEK', m.departing], hold: ['ON HOLD', m.hold], watch: ['TODAY’S WATCH', m.watch.map((w) => w.j)],
+      departing: ['DEPARTING THIS WEEK', m.departing], hold: ['ON HOLD', m.hold], watch: ['TODAY’S WATCH', m.watch.map((w) => w.j)], week: ['THIS WEEK', m.departing.concat(m.arriving)],
       behind: ['NOT FOLLOWED UP YET', isSales() ? behindList() : []]
     };
     const entry = map[kind]; if (!entry) return;
     const list = Array.from(new Set(entry[1]));
     closeOverlays(true);
-    $('#drawerKicker').textContent = list.length + (list.length === 1 ? ' JOB' : ' JOBS');
-    $('#drawerBody').innerHTML = '<h2 class="peek-job list-title" id="drawerTitle">' + esc(entry[0]) + '</h2>' +
-      (list.length ? '<div>' + list.map((j) =>
-        '<button type="button" class="list-row" data-job="' + esc(j.jobNo) + '"><span class="lr-main"><span class="li-job">' + changedDot(j) + esc(j.jobNo) + ' · ' + esc(j.type) + '</span>' +
-        '<span class="lr-cust">' + esc(j.customer || '—') + '</span><span class="li-sub">' + esc(j.route) + '</span></span>' + toneChip(j.next) + '</button>'
-      ).join('') + '</div>' : '<div class="tile-empty">Nothing here right now.</div>');
+    $('#drawerKicker').textContent = (kind === 'watch' ? m.watch.length + (m.watch.length === 1 ? ' TASK' : ' TASKS') : list.length + (list.length === 1 ? ' JOB' : ' JOBS'));
+    $('#drawerBody').innerHTML = '<h2 class="peek-job list-title" id="drawerTitle">' + esc(entry[0]) + '</h2>' + drawerList91(kind, list, m);
     showDrawer(opener);
     state.overlay = 'drawer';
   }
