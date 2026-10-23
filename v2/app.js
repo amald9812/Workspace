@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing — v2.8)
+   enquiries, follow-ups, delays, close & archive, costing, fleet — v2.9)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -724,6 +724,7 @@
     if (boot.delays) state.delays = boot.delays;
     if (Array.isArray(boot.enquiries)) state.enquiries = boot.enquiries;
     state.costing = boot.costing || {};
+    applyBoot9(boot);   // v2.9: reminders, what changed, what you opened
     if (boot.rate) state.rate = boot.rate;
     state.followHist = {};
     state.syncedAt = Date.now();
@@ -779,7 +780,7 @@
     const h = decodeURIComponent(location.hash || '');
     const m = h.match(/^#\/job\/(.+)$/);
     const mc = h.match(/^#\/costing\/(.+)$/);
-    let r = m ? { name: 'job', jobNo: m[1].trim() } : mc ? { name: 'costjob', jobNo: mc[1].trim() } : h === '#/costing' ? { name: 'costing' } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : h === '#/notifications' ? { name: 'notif' } : { name: 'home' };
+    let r = m ? { name: 'job', jobNo: m[1].trim() } : mc ? { name: 'costjob', jobNo: mc[1].trim() } : h === '#/costing' ? { name: 'costing' } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : h === '#/notifications' ? { name: 'notif' } : h === '#/fleet' ? { name: 'fleet' } : { name: 'home' };
     if (isAdmin()) { if (r.name !== 'activity') r = { name: 'admin' }; }      // admin works with people, not jobs
     else if (r.name === 'admin' || r.name === 'activity' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote()) || ((r.name === 'costing' || r.name === 'costjob') && !canNote())) r = { name: 'home' };
     const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity|round|follow-ups|enquiries|costing)$/.test(h) ? '#/home' : r.name === 'round' && h === '#/round' ? '#/follow-ups' : null;
@@ -805,8 +806,9 @@
     else if (r.name === 'costing') renderCostList(changed || first);
     else if (r.name === 'costjob') renderCostJob(r.jobNo, changed || first);
     else if (r.name === 'notif') renderNotifPage(changed || first);
-    else if (r.name === 'job') { renderVoyage(r.jobNo, changed || first); fitNames(); }
-    else renderHome(changed || first);
+    else if (r.name === 'fleet') renderFleet(changed || first);
+    else if (r.name === 'job') { if (changed || first) seenOpen9(r.jobNo); renderVoyage(r.jobNo, changed || first); fitNames(); }
+    else { renderHome(changed || first); fitNames(); }
     if (changed) view.scrollTop = 0;
     updateNav();
   }
@@ -826,7 +828,7 @@
 
   // ------------------------------------------------------------ chrome
   function navItems() {
-    const active = state.jobs.filter((j) => j.active).length;
+    const active = scoped().filter((j) => j.active).length;
     if (isAdmin()) return [
       { id: 'admin', label: 'People', icon: 'users', href: '#/admin', count: state.admin ? state.admin.users.length : 0 },
       { id: 'activity', label: 'Activity', icon: 'clock', href: '#/activity' }
@@ -838,12 +840,13 @@
     ];
     if (isSales()) items.push({ id: 'enquiries', label: 'My enquiries', icon: 'enq', href: '#/enquiries', count: enqOpen().length });
     else if (canEdit()) items.push(
-      { id: 'round', label: 'Follow-ups', icon: 'check', href: '#/follow-ups', count: roundRows(today0()).due.length },
+      { id: 'round', label: 'Follow-ups', icon: 'check', href: '#/follow-ups', count: roundRows(today0()).due.length + remDueCount() },
       { id: 'enquiries', label: 'Enquiries', icon: 'enq', href: '#/enquiries', count: enqNew().length },
       { id: 'costing', label: 'Costing', icon: 'costing', href: '#/costing', count: costRows().open },
-      { id: 'fleet', label: 'Fleet', icon: 'fleet', soon: true }, { id: 'analysis', label: 'Analysis', icon: 'analysis', soon: true });
-    else items.push({ id: 'fleet', label: 'Fleet', icon: 'fleet', soon: true });
+      { id: 'fleet', label: 'Fleet', icon: 'fleet', href: '#/fleet' });
+    else items.push({ id: 'fleet', label: 'Fleet', icon: 'fleet', href: '#/fleet' });
     if (isSales()) items.splice(items.length - 1, 0, { id: 'costing', label: 'Costing', icon: 'costing', href: '#/costing', count: costRows().open });
+    if (isSales()) items.push({ id: 'fleet', label: 'Fleet', icon: 'fleet', href: '#/fleet' });   // sales: their own shipments too
     return items;
   }
   function renderChrome() {
@@ -873,7 +876,7 @@
     const c = $('#navList [data-nav="jobs"] .count'); if (c) c.textContent = scoped().filter((j) => j.active).length;   // v2.8: your own jobs
     const p = $('#navList [data-nav="admin"] .count'); if (p && state.admin) p.textContent = state.admin.users.length;
     const setCount = (id, n) => { const el = $('#navList [data-nav="' + id + '"] .count'); if (el) { el.textContent = n; el.hidden = !n; } };
-    if (canEdit()) { setCount('round', roundRows(today0()).due.length); setCount('enquiries', enqNew().length); }
+    if (canEdit()) { setCount('round', roundRows(today0()).due.length + remDueCount()); setCount('enquiries', enqNew().length); }
     if (isSales()) setCount('enquiries', enqOpen().length);
     if (canNote()) setCount('costing', costRows().open);
     drawBadges();
@@ -908,7 +911,7 @@
       '<div class="tile-body">' +
       (m.watch.length ? m.watch.slice(0, LIST_MAX).map((w) =>
         '<button type="button" class="watch-item li" data-job="' + esc(w.j.jobNo) + '">' +
-        '<span class="watch-job">' + esc(w.j.jobNo) + '</span>' +
+        '<span class="watch-job">' + changedDot(w.j) + esc(w.j.jobNo) + '</span>' +
         '<span class="watch-text"><span class="watch-what">' + esc(w.what) + '</span><span class="watch-cust">' + esc(w.j.customer || '—') + ' · ' + esc(nice(w.j.route)) + '</span></span>' +
         '<span class="' + chip(w) + '">' + (w.level === 'urgent' ? icon('alert', 13) : '') + esc(w.when) + '</span></button>'
       ).join('') : empty('check', 'No cutoffs, sailings or free-time deadlines in the next 3 days.')) +
@@ -932,7 +935,7 @@
       '<div class="tile-head"><h2 class="tile-title" id="seaTitle">AT SEA NOW</h2><span class="tile-count">' + m.atSea.length + '</span></div>' +
       '<div class="tile-body">' +
       (m.atSea.length ? m.atSea.slice(0, LIST_MAX).map((j) =>
-        '<button type="button" class="sea-item li" data-job="' + esc(j.jobNo) + '"><span class="sea-job">' + esc(j.jobNo) + '</span><span class="sea-route">' + esc(j.route) + '</span>' + track(j, 30) +
+        '<button type="button" class="sea-item li" data-job="' + esc(j.jobNo) + '"><span class="sea-job">' + changedDot(j) + esc(j.jobNo) + '</span><span class="sea-route">' + esc(j.route) + '</span>' + track(j, 30) +
         '<span class="sea-day">DAY ' + j.dayN + '/' + j.dayT + '</span></button>'
       ).join('') : empty('anchor', 'Nothing at sea or in the air right now.')) +
       '</div>' + seeAll('atsea', m.atSea.length) + '</section>';
@@ -943,7 +946,7 @@
       '<div class="tile-head"><h2 class="tile-title" id="holdTitle">ON HOLD</h2><span class="chip chip-hold">' + m.hold.length + '</span></div>' +
       '<div class="tile-body">' +
       (m.hold.length ? m.hold.slice(0, LIST_MAX).map((j) =>
-        '<button type="button" class="list-item li" data-job="' + esc(j.jobNo) + '"><span class="li-main"><span class="li-job">' + esc(j.jobNo) + ' · ' + esc(j.type) + '</span><span class="li-sub">' + esc(j.customer || '—') + ' · ' + esc(nice(j.route)) + '</span>' +
+        '<button type="button" class="list-item li" data-job="' + esc(j.jobNo) + '"><span class="li-main"><span class="li-job">' + changedDot(j) + esc(j.jobNo) + ' · ' + esc(j.type) + '</span><span class="li-sub">' + esc(j.customer || '—') + ' · ' + esc(nice(j.route)) + '</span>' +
         (j.remarks ? '<span class="li-sub li-note">“' + esc(j.remarks) + '”</span>' : '') + '</span></button>'
       ).join('') : empty('check', 'No jobs on hold.')) +
       '</div>' + seeAll('hold', m.hold.length) + '</section>';
@@ -959,7 +962,7 @@
       '<div class="tile-body">' +
       (list.length ? list.slice(0, LIST_MAX).map((j) =>
         '<button type="button" class="list-item li" data-job="' + esc(j.jobNo) + '"><span class="date-chip' + (dep ? ' is-dark' : '') + '"><span class="dow">' + DOW_UP[j[field].getDay()] + '</span><span class="day">' + j[field].getDate() + '</span></span>' +
-        '<span class="li-main"><span class="li-job">' + esc(j.jobNo) + '</span><span class="li-sub">' + esc(nice(j.route)) + (j.cargo ? ' · ' + esc(j.cargo) : '') + '</span></span></button>'
+        '<span class="li-main"><span class="li-job">' + changedDot(j) + esc(j.jobNo) + '</span><span class="li-sub">' + esc(nice(j.route)) + (j.cargo ? ' · ' + esc(j.cargo) : '') + '</span></span></button>'
       ).join('') : empty('calendar', dep ? 'Nothing departing in the next 7 days.' : 'Nothing arriving in the next 7 days.')) +
       '</div>' + seeAll(dep ? 'departing' : 'arriving', list.length) + '</section>';
   }
@@ -997,9 +1000,9 @@
           '<div class="search-wrap"><label class="search">' + icon('search') + '<input id="searchInput" type="search" placeholder="Job no, customer, port…" aria-label="Search jobs" autocomplete="off" value="' + esc(searchVal) + '"><kbd>/</kbd></label><div class="search-results glass" id="searchResults" hidden></div></div>' +
           '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' +
         '</div>' +
-      '</header>' +
+      '</header>' + (canNote() ? todayRibbon(t0, anim) : '') +
       '<div class="bento">' +
-        watchTile(m, anim) + kpiTiles(m, anim) + seaTile(m, anim) + holdTile(m, anim) + weekTile(m, anim) + activityTile(anim) +
+        watchTile(m, anim) + kpiTiles(m, anim) + seaTile(m, anim) + holdTile(m, anim) + weekTile(m, anim) + (canNote() ? myDayTile(anim) : activityTile(anim)) +
       '</div>' +
       '</div>';
     requestAnimationFrame(markOverflow);
@@ -1046,11 +1049,11 @@
   }
 
   function jobRow(j) {
-    return '<li><button type="button" class="job-row" data-job="' + esc(j.jobNo) + '">' +
-      '<span class="jr-job">' + esc(j.jobNo) + '</span>' +
+    return '<li><button type="button" class="job-row' + (isChanged(j) ? ' is-changed' : '') + '" data-job="' + esc(j.jobNo) + '">' +
+      '<span class="jr-job">' + changedDot(j) + esc(j.jobNo) + '</span>' +
       '<span class="jr-type"><span class="badge">' + esc(j.type || '—') + '</span><span class="jr-typename">' + esc(j.typeName) + '</span></span>' +
       '<span class="jr-cust"><span class="jr-name">' + esc(j.customer || '—') + '</span><span class="jr-route">' + esc(j.mode === 'misc' ? (j.against ? 'AGAINST ' + j.against : 'COSTING ONLY') : j.route) + '</span></span>' +
-      '<span class="jr-track">' + miniTrack(j, 26) + '</span>' +
+      '<span class="jr-track">' + miniTrack(j, 26) + stepStrip(j) + '</span>' +
       '<span class="jr-next">' + toneChip(rowNext(j)) + cutChips(j) + '</span>' +
       '<span class="jr-etd"><span class="jr-k">ETD</span>' + esc(j.etd ? fmt(j.etd) : '—') + '</span>' +
       '<span class="jr-eta"><span class="jr-k">ETA</span>' + esc(j.eta ? fmt(j.eta) : '—') + (delayInfo(j) ? '<span class="jr-delay" title="Delayed">+' + delayInfo(j).total + 'D</span>' : '') + '</span>' +
@@ -1379,7 +1382,7 @@
       '<button type="button" class="btn-brutal" data-stop="' + n.id + '" data-quick="1">' + (n.id === 'costing' ? 'OPEN COSTING' : n.kind === 'field' ? 'MARK DONE' : n.kind === 'date' ? 'SET DATE' : n.kind === 'status' ? 'CLOSE JOB' : 'UPDATE') + '</button></div>' : '';
     view.innerHTML =
       '<div class="wrap voyage-page' + (jr.next && canEditJob(j) ? ' has-nextbar' : '') + '">' +
-      '<div class="crumbs' + anim + '"><button type="button" class="back-btn" data-act="back" aria-label="Back">' + icon('back', 18) + '</button><button type="button" class="link-btn" data-href="#/jobs">JOBS</button><span>/ ' + esc(j.jobNo) + '</span>' +
+      '<div class="crumbs' + anim + '"><button type="button" class="back-btn" data-act="back" aria-label="Back">' + icon('back', 18) + '</button><button type="button" class="link-btn" data-href="#/jobs">JOBS</button><span>/ ' + esc(j.jobNo) + '</span>' + changedChip9(j) +
         (canEditJob(j) ? '<button type="button" class="status-pill tone-' + tone + '" data-act="status" aria-label="Job status: ' + sw + '. Change">' + esc(sw) + icon('chevron', 14) + '</button>' : '<span class="status-pill tone-' + tone + '">' + esc(sw) + '</span>') + '</div>' +
       '<header class="vhead' + anim + '" style="--d:30ms">' +
         '<div class="vh-titles"><div class="vh-idrow"><h1 class="vh-job">' + esc(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + delayChip(j) + readyChip(j) + '</div>' +
@@ -2007,8 +2010,8 @@
   // ---------- my account ----------
   function accountPanel() {
     const go2 = (href, ic, label, n) => '<button type="button" class="acct-go" data-href="' + href + '">' + icon(ic, 18) + '<span>' + label + '</span>' + (n ? '<b>' + n + '</b>' : '') + '</button>';
-    const shortcuts = canEdit() ? go2('#/follow-ups', 'check', 'Follow-ups', roundRows(today0()).due.length) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length) + go2('#/costing', 'costing', 'Costing', costRows().open)
-      : isSales() ? go2('#/enquiries', 'enq', 'My enquiries', enqOpen().length) + go2('#/costing', 'costing', 'Costing', costRows().open) : '';
+    const shortcuts = canEdit() ? go2('#/follow-ups', 'check', 'Follow-ups', roundRows(today0()).due.length + remDueCount()) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length) + go2('#/costing', 'costing', 'Costing', costRows().open) + go2('#/fleet', 'fleet', 'Fleet', 0)
+      : isSales() ? go2('#/enquiries', 'enq', 'My enquiries', enqOpen().length) + go2('#/costing', 'costing', 'Costing', costRows().open) + go2('#/fleet', 'fleet', 'Fleet', 0) : '';
     return (shortcuts ? '<div class="acct-shortcuts">' + shortcuts + '</div>' : '') + '<div class="acct"><span class="avatar">' + esc(initials(state.user)) + '</span><div><div class="acct-name" id="drawerTitle">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(ROLE_NAMES[state.role] || state.role) + '</div></div></div>' +
       '<form class="tile pw-form" id="pwForm" novalidate><h3 class="tile-title">CHANGE PASSWORD</h3>' +
         '<input type="text" name="username" autocomplete="username" value="' + esc(state.user) + '" class="sr-only" tabindex="-1" aria-hidden="true" readonly>' +
@@ -2018,8 +2021,7 @@
         '<div class="pop-hint">8+ characters, letters and numbers, not your name. Your other devices will be signed out.</div>' +
         '<div class="pin-msg" id="pwMsg" role="alert"></div>' +
         '<button type="submit" class="btn-brutal" id="pwSave">CHANGE PASSWORD</button></form>' +
-      '<button type="button" class="btn-ghost acct-logout" data-act="logout">' + icon('logout', 16) + 'Log out</button>' +
-      (canEdit() ? '<div class="peek-card"><h3>COMING SOON</h3>' + ['Fleet timeline', 'Analysis'].map((t) => '<div class="kv"><span class="kv-k">' + esc(t) + '</span><span class="kv-v">SOON</span></div>').join('') + '</div>' : '');
+      '<button type="button" class="btn-ghost acct-logout" data-act="logout">' + icon('logout', 16) + 'Log out</button>';
   }
   function openAccount(opener) {
     closeOverlays(true);
@@ -2405,7 +2407,7 @@
       '<div class="fu-status">' + status + '</div>' + remark +
       (canEditJob(j) && j.active ? (f.mineToday ? '<button type="button" class="btn-ghost fu-btn" data-check-menu="' + esc(j.jobNo) + '">' + icon('edit', 15) + 'Add remark or undo</button>'
         : '<button type="button" class="btn-brutal fu-btn" data-check="' + esc(j.jobNo) + '">' + icon('check', 16) + 'CHECKED TODAY</button>') : '') +
-      followCalendar(j) + '</section>';
+      jobReminders(j) + followCalendar(j) + '</section>';
   }
 
   // ---------- the Follow-ups page ----------
@@ -2418,8 +2420,8 @@
   function roundRow(x, t0) {
     const j = x.j, f = x.f;
     return '<li class="rr' + (f.today ? ' is-done' : '') + (f.mineToday ? ' is-mine' : '') + (f.due ? ' is-due' : '') + '">' +
-      '<button type="button" class="rr-main" data-job="' + esc(j.jobNo) + '"><span class="rr-job">' + esc(j.jobNo) + '<span class="badge">' + esc(j.type) + '</span></span>' +
-        '<span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span></button>' +
+      '<button type="button" class="rr-main" data-job="' + esc(j.jobNo) + '"><span class="rr-job">' + changedDot(j) + esc(j.jobNo) + '<span class="badge">' + esc(j.type) + '</span></span>' +
+        '<span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span>' + stepStrip(j) + '</button>' +
       '<span class="rr-next">' + toneChip(rowNext(j)) + cutChips(j) + rowClock(j, t0) + '</span>' +
       '<span class="rr-last"><span>' + esc(lastCheckText(f, t0)) + '</span>' + ((lr) => (lr ? '<span class="rr-remark">“' + esc(lr.text) + '”' + (lr.n > 1 ? ' <b>+' + (lr.n - 1) + '</b>' : '') + '</span>' : ''))(lastRemark(f)) + '</span>' +
       '<span class="rr-strip">' + dotStrip(j, t0, 14) + '</span>' +
@@ -2455,6 +2457,7 @@
           '<div class="rp-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '"><i style="width:' + pct + '%"></i></div>' +
           '<div class="rp-chips"><span>' + R.later.length + ' not due today</span><span>' + R.paused.length + ' paused</span><span>Tap the circle once you’ve followed a job up · set how often per job</span></div></div>' +
       '</section>' +
+      remSection(anim) +
       section('due', 'DUE NOW', dueRows.filter(match), 'Urgent first · then the office that closes soonest', dueRows.filter((x) => x.f.due && match(x)).length) +
       section('done', 'CHECKED TODAY', doneRows.filter(match)) +
       section('later', 'NOT DUE TODAY', R.later.filter(match), 'By their own pace') +
@@ -2879,6 +2882,12 @@
 
   // Long port names (DAR ES SALAAM, PORT KLANG…) step down in size to fit the voyage header instead of being cut off.
   function fitNames() {
+    $$('.home .greeting').forEach((el) => {
+      el.style.fontSize = '';
+      let fs = parseFloat(getComputedStyle(el).fontSize);
+      while (el.scrollWidth > el.clientWidth + 1 && fs > 20) { fs -= 1; el.style.fontSize = fs + 'px'; }
+      el.title = el.scrollWidth > el.clientWidth + 1 ? el.textContent : '';
+    });
     $$('.vh-port .vh-name').forEach((el) => {
       el.style.fontSize = '';
       let fs = parseFloat(getComputedStyle(el).fontSize);
@@ -3107,7 +3116,8 @@
   // Costing (a full page per job + the Costing menu), Excel made in the browser,
   // remembered lists, duplicate job, stay signed in after a refresh.
   // v2.7: every USD amount has its own rate, charges that fill themselves. v2.8: all-in only, one line per
-  // charge on laptops, per-box figures in the bar, the statement-style Excel.
+  // charge on laptops, per-box figures in the bar, the statement-style Excel. v2.9: Fleet, step strips, reminders,
+  // the today ribbon and "changed since you looked" (at the end of this module).
   const BASIS = [['SHIP', 'Per shipment'], ['BOX', 'Per box'], ['B20', 'Per 20′'], ['B40', 'Per 40′'], ['DOC', 'Per document'], ['UNIT', 'Per unit']];
   const BASIS_SHORT = { SHIP: 'Per shipment', BOX: 'Per box', B20: 'Per 20′', B40: 'Per 40′', DOC: 'Per document', UNIT: 'Per unit' };
   const ABBR = new Set(['THC', 'OTHC', 'DPC', 'ISPS', 'VGM', 'BL', 'DG', 'DO', 'ED', 'TLUC', 'ITT', 'FOB', 'VAT', 'MECRC', 'IMCO', 'AWB', 'LCL', 'FCL']);
@@ -4472,6 +4482,7 @@
     window.addEventListener('beforeunload', (e) => { if (state.cost && state.cost.dirty) { e.preventDefault(); e.returnValue = ''; } });
     initV27();
     initV28();
+    initV29();
   }
 
   // ================================================================ v2.8 — port clocks (office hours where the port is)
@@ -4731,6 +4742,446 @@
     });
   }
 
+  // ================================================================ v2.9 — changed since you looked
+  // touch[job] = [time, who, what]: the newest change by someone else; seen[job] = when you last opened it.
+  function applyBoot9(boot) {
+    if (Array.isArray(boot.reminders)) state.reminders = boot.reminders;
+    if (boot.seen && typeof boot.seen === 'object') state.seen = boot.seen;
+    if (boot.touch && typeof boot.touch === 'object') state.touch = boot.touch;
+  }
+  function changeOf(j) {
+    const k = keyOf(j), t = state.touch && state.touch[k];
+    if (!t) return null;
+    const seen = (state.seen && (state.seen[k] || state.seen._base)) || 0;
+    return t[0] > seen ? { t: t[0], who: t[1], what: friendly(t[2]) } : null;
+  }
+  const isChanged = (j) => !!changeOf(j);
+  const changeText = (c) => nice(c.who) + ' · ' + ago(c.t) + ' — ' + c.what;
+  function changedDot(j) { const c = changeOf(j); return c ? '<span class="chg-dot" title="' + esc('Changed by ' + changeText(c)) + '" aria-label="Changed since you looked"></span>' : ''; }
+  function changedJobs() { return scoped().filter((j) => j.active && isChanged(j)).sort((a, b) => changeOf(b).t - changeOf(a).t); }
+  // Opening a job marks it seen (here at once, on the server in the background). The page says what changed.
+  function seenOpen9(no) {
+    const j = findJob(no); if (!j || !state.seen) { state.justSeen9 = null; return; }
+    const c = changeOf(j);
+    state.justSeen9 = c ? { k: keyOf(j), c } : null;
+    if (!c) return;
+    state.seen[keyOf(j)] = Date.now();
+    api.call('ethixSeen', [j.jobNo]).then((r) => { if (r && r.seen) state.seen = Object.assign({}, r.seen, state.seen); }).catch(() => {});
+  }
+  function changedChip9(j) {
+    const s = state.justSeen9;
+    return s && s.k === keyOf(j) ? '<span class="chg-chip" title="Changed since you last opened it">' + icon('refresh', 12) + '<span>' + esc(changeText(s.c)) + '</span></span>' : '';
+  }
+  const changedMenu = () => () => {
+    const list = changedJobs();
+    return '<div class="pop-title">Changed since you looked</div>' +
+      (list.length ? '<ul class="chg-list">' + list.slice(0, 30).map((j) => { const c = changeOf(j); return '<li><button type="button" data-fl-open="' + esc(j.jobNo) + '"><span class="chg-dot"></span><b>' + esc(j.jobNo) + '</b><span class="chg-who">' + esc(nice(c.who) + ' · ' + ago(c.t)) + '</span><span class="chg-what">' + esc(c.what) + '</span></button></li>'; }).join('') + '</ul>' +
+        '<button type="button" class="btn-ghost pop-wide" data-act="seen-all">Mark all as seen</button>'
+        : '<p class="pop-text">Nothing changed since you last looked.</p>');
+  };
+
+  // ================================================================ v2.9 — the step strip: a job's journey in one thin bar
+  function stepStrip(j, cls) {
+    const jr = j.journey; if (!jr || !jr.all) return '';
+    const st = jr.all.filter((s) => s.kind !== 'info' && s.kind !== 'status');
+    if (!st.length) return '';
+    const done = st.filter((s) => s.state === 'done' || s.state === 'skip').length;
+    const tone = (s) => (s.state === 'done' ? 'done' : s.state === 'skip' ? 'skip' : s.state === 'late' || s.cutTone === 'red' ? 'late' : s.cutTone === 'amber' ? 'amber' : s.state === 'current' ? 'cur' : jr.next && jr.next.id === s.id ? 'next' : 'todo');
+    return '<span class="sstrip' + (cls ? ' ' + cls : '') + '" role="img" aria-label="' + esc(done + ' of ' + st.length + ' steps done' + (jr.next ? '; next: ' + jr.next.name : '')) + '">' +
+      st.map((s) => '<i class="ss-' + tone(s) + '" title="' + esc(s.name + (s.sub ? ' · ' + s.sub : '')) + '"></i>').join('') + '</span>';
+  }
+
+  // ================================================================ v2.9 — Fleet: every live shipment on one timeline
+  const FLEET_ZOOM = { '2w': [3, 11, '2 weeks'], '6w': [7, 35, '6 weeks'], '3m': [14, 76, '3 months'] };
+  const FLEET_STAGES = [['before', 'BEFORE SAILING'], ['sea', 'AT SEA / IN TRANSIT'], ['arrived', 'ARRIVED / CLEARING'], ['nodate', 'DATES TO CONFIRM']];
+  function fleetUi() {
+    if (!state.fleetUi) state.fleetUi = { zoom: window.innerWidth < 760 ? '2w' : '6w', mode: 'all', type: 'all', port: 'all', cust: 'all', q: '' };
+    return state.fleetUi;
+  }
+  function fleetStage(j, t0) { if (!j.etd && !j.eta) return 'nodate'; if (j.eta && j.eta <= t0) return 'arrived'; if (j.etd && j.etd <= t0) return 'sea'; return 'before'; }
+  function fleetJobs() { return scoped().filter((j) => j.active && j.mode !== 'misc'); }
+  function fleetFiltered(list) {
+    const U = fleetUi(), q = U.q.trim().toUpperCase();
+    return list.filter((j) => (U.mode === 'all' || j.mode === U.mode) && (U.type === 'all' || j.type === U.type) && (U.port === 'all' || j.pol === U.port || j.pod === U.port) &&
+      (U.cust === 'all' || j.customer === U.cust) && (!q || (j.jobNo + ' ' + j.customer + ' ' + j.pol + ' ' + j.pod + ' ' + j.vendor + ' ' + j.type).toUpperCase().includes(q)));
+  }
+  function fleetWin(t0) {
+    const z = FLEET_ZOOM[fleetUi().zoom] || FLEET_ZOOM['6w'];
+    const start = addDays(t0, -z[0]), n = z[0] + z[1] + 1;
+    return { start, end: addDays(start, n), n, ms: n * DAY };
+  }
+  const fpos = (W, d) => ((+d - +W.start) / W.ms) * 100;
+  // the timeline's width in px (the label column and the menu taken away) — to choose what fits
+  function fleetTrackW() { const vw = window.innerWidth; return vw < 760 ? vw - 56 : vw - 272 - 70 - (vw <= 1180 ? 200 : 236) - 48; }
+  // the bar's dates: in full when they fit, shorter when not ("26–30 OCT"), else beside the bar
+  function fleetBarText(W, a, b, px) {
+    const full = fmt(a) + ' → ' + fmt(b), sm = +a && +b && a.getMonth() === b.getMonth() && a.getFullYear() === b.getFullYear();
+    const short = sm ? a.getDate() + '–' + fmt(b) : fmt(a) + '–' + fmt(b).replace(/^0/, '');
+    const need = (t) => t.length * 5.6 + 16;
+    if (px >= need(full)) return { inside: full };
+    if (px >= need(short)) return { inside: short };
+    return { outside: sm ? short : full };
+  }
+  // a piece of a bar between two days (clipped to the window; cut edges marked)
+  function fseg(W, a, b, tag, cls, attrs, inner) {
+    let l = fpos(W, a), r = fpos(W, b);
+    if (r <= 0 || l >= 100) return '';
+    const cl = l < 0, cr = r > 100;
+    l = Math.max(0, l); r = Math.min(100, r);
+    return '<' + tag + ' class="' + cls + (cl ? ' cut-l' : '') + (cr ? ' cut-r' : '') + '" style="left:' + l.toFixed(3) + '%;width:' + Math.max(0.35, r - l).toFixed(3) + '%"' + (attrs || '') + '>' + (inner || '') + '</' + tag + '>';
+  }
+  function fleetTrack(j, W, t0) {
+    const st = fleetStage(j, t0), a = j.etd, b = j.eta, di = delayInfo(j), no = esc(j.jobNo);
+    const L = j.mode === 'courier' ? ['PICK-UP', 'DELIVERY'] : ['ETD', 'ETA'];
+    let h = '';
+    if (di && (di.etd || di.eta)) {                                      // the plan before the delays: a faint outline
+      const ga = di.etd ? di.etd.from : a, gb = di.eta ? di.eta.from : b;
+      if (ga && gb) h += fseg(W, ga, +gb > +ga ? gb : addDays(ga, 1), 'span', 'fl-ghost', ' title="' + esc('Planned ' + fmt(ga) + ' → ' + fmt(gb)) + '"');
+    }
+    if (a && b) {
+      const end = +b > +a ? b : new Date(+a + DAY / 2);
+      const prog = st === 'arrived' ? 100 : st === 'sea' ? Math.round(Math.min(1, (Date.now() - a) / Math.max(1, end - a)) * 100) : 0;
+      const slip = di && di.eta && +di.eta.from < +b, l = Math.max(0, fpos(W, a)), r = Math.min(100, fpos(W, end));
+      const seen = Math.max(0, (slip ? Math.min(r, fpos(W, di.eta.from)) : r) - l), bt = fleetBarText(W, a, b, seen / 100 * fleetTrackW());   // the slip tail covers the bar's end
+      const tail = slip || (j.cat === 'IMPORT' && j.lineFreeEnd && !j.delivery && +j.lineFreeEnd > +b);
+      h += fseg(W, a, end, 'button', 'fl-bar is-' + st, ' type="button" data-fleet-card="' + no + '" title="' + esc(L[0] + ' ' + fmt(a, true) + ' → ' + L[1] + ' ' + fmt(b, true)) + '"',
+        '<span class="fl-prog" style="width:' + prog + '%"></span>' + (bt.inside ? '<span class="fl-bt">' + esc(bt.inside) + '</span>' : ''));
+      if (bt.outside && !tail && r > 0 && r < 84) h += '<span class="fl-bo" style="left:' + r.toFixed(3) + '%" aria-hidden="true">' + esc(bt.outside) + '</span>';
+    } else if (a || b) {
+      const d = a || b, p = fpos(W, d) + 50 / W.n;
+      if (p >= 0 && p <= 100) h += '<button type="button" class="fl-pin is-' + st + '" style="left:' + p.toFixed(3) + '%" data-fleet-card="' + no + '" title="' + esc((a ? L[0] : L[1]) + ' ' + fmt(d, true) + ' · ' + (a ? L[1] : L[0]) + ' to confirm') + '"></button>';
+    }
+    if (di && di.eta && b && +di.eta.from < +b) h += fseg(W, di.eta.from, b, 'span', 'fl-slip', ' title="' + esc('Delayed +' + di.total + (di.total === 1 ? ' day' : ' days') + ' (was ' + fmt(di.eta.from) + ')') + '"', '<b>+' + di.total + 'D</b>');
+    if (j.cat === 'IMPORT' && b && j.lineFreeEnd && !j.delivery && +j.lineFreeEnd > +b) {   // line free time after arrival
+      const left = days(t0, j.lineFreeEnd), tone = !j.arrived ? 'calm' : left < 0 ? 'red' : left <= 2 ? 'amber' : 'ok';
+      h += fseg(W, b, j.lineFreeEnd, 'span', 'fl-free is-' + tone, ' title="' + esc('Line free time until ' + fmt(j.lineFreeEnd, true) + (j.arrived ? (left < 0 ? ' — over by ' + (-left) + (left === -1 ? ' day' : ' days') : ' — ' + left + (left === 1 ? ' day' : ' days') + ' left') : '')) + '"', '<b>' + days(b, j.lineFreeEnd) + 'd</b>');
+      if (j.arrived && left < 0) h += fseg(W, j.lineFreeEnd, addDays(t0, 1), 'span', 'fl-free is-over', ' title="Demurrage running"');
+    }
+    // cutoffs: one marker each — or one shared marker when they sit too close to read (SI·ED)
+    const near = { '2w': 0, '6w': 1, '3m': 3 }[fleetUi().zoom] || 0, rankT = { red: 0, amber: 1, calm: 2 }, packs = [];
+    cutsFor(j, t0).sort((x, y) => x.date - y.date).forEach((c) => { const last = packs[packs.length - 1]; if (last && days(last[0].date, c.date) <= near) last.push(c); else packs.push([c]); });
+    packs.forEach((pk) => {
+      const p = fpos(W, pk[0].date) + 50 / W.n, tone = pk.slice().sort((x, y) => rankT[x.tone] - rankT[y.tone])[0].tone;
+      if (p >= 0 && p <= 100) h += '<span class="fl-cut is-' + tone + '" style="left:' + p.toFixed(3) + '%" title="' + esc(pk.map((c) => c.label + ' ' + fmt(c.date, true) + ' · ' + cutWhen(c.d, c.date).toLowerCase()).join('\n')) + '"><b>' + pk.map((c) => c.k).join('·') + '</b></span>';
+    });
+    return h;
+  }
+  function fleetRow(j, W, t0) {
+    const no = esc(j.jobNo);
+    return '<div class="fl-row' + (j.hold ? ' is-hold' : '') + (isChanged(j) ? ' is-changed' : '') + '" data-fl="' + no + '">' +
+      '<button type="button" class="fl-label" data-fleet-card="' + no + '"><span class="fl-l1"><span class="fl-job">' + changedDot(j) + no + '<span class="badge">' + esc(j.type) + '</span>' + (j.hold ? '<span class="fl-hold">' + icon('anchor', 11) + 'HOLD</span>' : '') + '</span>' + stepStrip(j) + '</span>' +
+        '<span class="fl-cust">' + esc(j.customer || '—') + '</span><span class="fl-route">' + esc(j.route) + '</span></button>' +
+      '<div class="fl-track">' + fleetTrack(j, W, t0) + '</div></div>';
+  }
+  function fleetScale(W) {
+    const z = fleetUi().zoom; let ticks = '', bg = '', mon = 0;
+    const trackW = fleetTrackW();
+    const step = Math.max(1, Math.ceil(48 / (7 * Math.max(1, trackW) / W.n)));     // Mondays per label, so labels never overlap
+    for (let i = 0; i < W.n; i++) {
+      const d = addDays(W.start, i), l = (i / W.n * 100).toFixed(3), w = (100 / W.n).toFixed(3);
+      if (d.getDay() === 0 || d.getDay() === 6) bg += '<i class="fl-wk" style="left:' + l + '%;width:' + w + '%"></i>';
+      const first = d.getDate() === 1;
+      if (first && i) bg += '<i class="fl-mo" style="left:' + l + '%"></i>';
+      if (z === '2w') ticks += '<span class="fl-tick is-day" style="left:' + l + '%;width:' + w + '%"><b>' + DOW_UP[d.getDay()].slice(0, 2) + '</b>' + d.getDate() + '</span>';
+      else if (d.getDay() === 1 && (mon++ % step === 0)) ticks += '<span class="fl-tick' + (first ? ' is-month' : '') + '" style="left:' + l + '%">' + fmt(d) + '</span>';
+    }
+    return { ticks, bg, now: ((Date.now() - W.start) / W.ms * 100) };
+  }
+  function renderFleet(first) {
+    const t0 = today0(), U = fleetUi(), W = fleetWin(t0), anim = first ? ' reveal' : '';
+    const all = fleetJobs(), list = fleetFiltered(all);
+    const by = { before: [], sea: [], arrived: [], nodate: [] };
+    list.forEach((j) => by[fleetStage(j, t0)].push(j));
+    const tm = (d) => (d ? +d : 9e15);
+    by.before.sort((a, b) => tm(a.etd) - tm(b.etd)); by.sea.sort((a, b) => tm(a.eta) - tm(b.eta));
+    by.arrived.sort((a, b) => tm(a.lineFreeEnd || a.eta) - tm(b.lineFreeEnd || b.eta)); by.nodate.sort((a, b) => String(a.jobNo).localeCompare(String(b.jobNo)));
+    const sc = fleetScale(W);
+    const opt = (id, label, all, vals, cur) => '<label class="select-pill"><span>' + label + '</span><select id="' + id + '" aria-label="' + label + '"><option value="all">' + all + '</option>' + vals.map((v) => '<option value="' + esc(v) + '"' + (v === cur ? ' selected' : '') + '>' + esc(v) + '</option>').join('') + '</select></label>';
+    const uniq = (f) => Array.from(new Set(all.map(f).filter(Boolean))).sort();
+    const modes = [['all', 'All'], ['sea', 'Sea'], ['air', 'Air'], ['courier', 'Courier']].filter(([m]) => m === 'all' || all.some((j) => j.mode === m));
+    const groups = FLEET_STAGES.filter(([id]) => by[id].length).map(([id, label]) =>
+      '<div class="fl-group is-' + id + '"><div class="fl-gh"><span>' + label + '</span><b>' + by[id].length + '</b></div>' + by[id].map((j) => fleetRow(j, W, t0)).join('') + '</div>').join('');
+    const nowLbl = 'TODAY ' + fmt(t0);
+    $('#view').innerHTML = '<div class="wrap fleet-page no-seg">' +
+      '<header class="page-head' + anim + '"><div class="head-main"><div class="meta-line"><span>' + (isSales() ? 'YOUR JOBS · ' : 'YOUR JOBS · ') + by.before.length + ' BEFORE SAILING · ' + by.sea.length + ' AT SEA · ' + by.arrived.length + ' ARRIVED</span>' +
+        '<span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span></div><h1 class="greeting">Fleet</h1></div>' +
+        '<div class="head-actions"><label class="search">' + icon('search') + '<input id="fleetSearch" type="search" placeholder="Job no, customer, port…" aria-label="Filter the fleet" autocomplete="off" value="' + esc(U.q) + '"></label>' +
+          '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button></div></header>' +
+      '<div class="fl-filters' + anim + '" style="--d:40ms"><div class="fl-f1"><div class="chips-row" role="group" aria-label="Mode">' + modes.map(([m, l]) => '<button type="button" class="fchip" data-fl-mode="' + m + '" aria-pressed="' + (U.mode === m) + '">' + l + '</button>').join('') + '</div>' +
+          '<div class="seg seg-mini fl-zoom" role="group" aria-label="Time span">' + Object.keys(FLEET_ZOOM).map((k) => '<button type="button" data-fl-zoom="' + k + '" aria-pressed="' + (U.zoom === k) + '"><span class="l-full">' + FLEET_ZOOM[k][2] + '</span><span class="l-short">' + k.toUpperCase() + '</span></button>').join('') + '</div></div>' +
+        '<div class="filter-tools">' + opt('flType', 'Type', 'All types', uniq((j) => j.type), U.type) + opt('flPort', 'Port', 'All ports', uniq((j) => j.pol).concat(uniq((j) => j.pod)).filter((v, i, a) => a.indexOf(v) === i).sort(), U.port) + opt('flCust', 'Customer', 'All customers', uniq((j) => j.customer), U.cust) + '</div></div>' +
+      '<section class="fl-card' + anim + '" style="--d:80ms" aria-label="Shipments on a timeline">' +
+        '<div class="fl-head"><div class="fl-hl">' + list.length + (list.length === 1 ? ' SHIPMENT' : ' SHIPMENTS') + '</div><div class="fl-scale">' + sc.ticks +
+          (sc.now >= 0 && sc.now <= 100 ? '<span class="fl-today" style="left:' + sc.now.toFixed(3) + '%">' + nowLbl + '</span>' : '') + '</div></div>' +
+        '<div class="fl-body"><div class="fl-bg" aria-hidden="true">' + sc.bg + (sc.now >= 0 && sc.now <= 100 ? '<i class="fl-now" style="left:' + sc.now.toFixed(3) + '%"></i>' : '') + '</div>' +
+          (groups || '<div class="fl-empty">' + empty('fleet', all.length ? 'No shipment matches these filters.' : 'No live shipments right now.') + (all.length ? '<button type="button" class="btn-ghost" data-act="fl-clear">Clear filters</button>' : '') + '</div>') + '</div>' +
+        '<div class="fl-legend"><span><i class="lg-bar"></i>ETD → ETA</span><span><i class="lg-prog"></i>Travelled</span><span><i class="lg-ghost"></i>Plan before a delay</span><span><i class="lg-slip"></i>Delay</span><span><i class="lg-free"></i>Free time (imports)</span><span><i class="lg-cut"></i>Cutoff</span><span><i class="chg-dot"></i>Changed since you looked</span></div>' +
+      '</section></div>';
+    if (state.flFocus) { const s = $('#fleetSearch'); if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); } }
+  }
+  const fleetCard = (no) => () => {
+    const j = findJob(no); if (!j) return '';
+    const t0 = today0(), di = delayInfo(j), c = changeOf(j);
+    const L = j.mode === 'courier' ? ['Pick-up', 'Delivery'] : ['ETD', 'ETA'];
+    const kv = (k, v) => '<div class="kv"><span class="kv-k">' + k + '</span><span class="kv-v">' + v + '</span></div>';
+    const was = (x) => (x ? ' <s>' + esc(fmt(x.from)) + '</s>' : '');
+    const free = j.cat === 'IMPORT' && j.lineFreeEnd && !j.delivery ? ((left) => kv('Line free time', esc(fmt(j.lineFreeEnd, true)) + (j.arrived ? ' · ' + (left < 0 ? 'over by ' + (-left) + 'd' : left + 'd left') : '')))(days(t0, j.lineFreeEnd)) : '';
+    return '<div class="pop-title">' + esc(j.jobNo) + ' <span class="badge">' + esc(j.type) + '</span></div><p class="pop-text">' + esc(j.customer || '—') + ' · ' + esc(j.route) + '</p>' +
+      stepStrip(j, 'is-wide') + '<div class="fc-next">' + toneChip(rowNext(j)) + cutChips(j) + '</div>' +
+      kv(L[0], esc(fmt(j.etd, true)) + was(di && di.etd)) + kv(L[1], esc(fmt(j.eta, true)) + was(di && di.eta)) + (di && di.total ? kv('Delays', '+' + di.total + (di.total === 1 ? ' day' : ' days')) : '') + free +
+      kv('Customer Service · Sales', esc((j.cs || '—') + ' · ' + (j.sales || '—'))) +
+      (c ? '<div class="fc-chg"><span class="chg-dot"></span>' + esc(changeText(c)) + '</div>' : '') +
+      '<div class="fc-act"><button type="button" class="btn-brutal" data-fl-open="' + esc(j.jobNo) + '" data-primary>OPEN JOB</button>' + (canNote() ? '<button type="button" class="btn-ghost" data-href="#/costing/' + encodeURIComponent(j.jobNo) + '">' + icon('costing', 15) + '<span>Costing</span></button>' : '') + '</div>';
+  };
+
+  // ================================================================ v2.9 — reminders: your own to-dos (with or without a job)
+  const REPEAT_NAME = { '': 'Once', DAILY: 'Daily', WEEKLY: 'Weekly', MONTHLY: 'Monthly' };
+  const isoOf = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const remOpen = () => (state.reminders || []).filter((r) => r.status !== 'DONE');
+  const remDue = () => { const t = isoOf(today0()); return remOpen().filter((r) => r.due <= t); };
+  const remDueCount = () => (canNote() ? remDue().length : 0);
+  function remWhen(r) {
+    const d = parseDate(r.due), t0 = today0(), n = d ? days(t0, d) : 0;
+    const w = !d ? '—' : n < 0 ? (n === -1 ? 'Yesterday' : (-n) + ' days late') : n === 0 ? 'Today' : n === 1 ? 'Tomorrow' : n < 7 ? DOW[d.getDay()] + ' ' + fmt(d) : fmt(d, d.getFullYear() !== t0.getFullYear());
+    return w + (r.time ? ' · ' + r.time : '');
+  }
+  function remItem(r, noJob) {
+    const done = r.status === 'DONE', d = parseDate(r.due), n = d ? days(today0(), d) : 0;
+    const tone = done ? 'done' : n < 0 ? 'late' : n === 0 ? 'today' : 'later';
+    return '<li class="rm is-' + tone + '"><button type="button" class="rm-tick' + (done ? ' is-on' : '') + '" data-rem-done="' + esc(r.id) + '" aria-label="' + esc((done ? 'Done — tap to put back: ' : 'Mark done: ') + r.text) + '">' + TICK + '</button>' +
+      '<button type="button" class="rm-main" data-rem-edit="' + esc(r.id) + '" aria-label="' + esc('Edit or snooze: ' + r.text) + '"><span class="rm-text">' + esc(r.text) + '</span><span class="rm-meta"><span class="rm-when">' + esc(remWhen(r)) + '</span>' +
+        (r.repeat ? '<span class="rm-rep">' + icon('refresh', 11) + REPEAT_NAME[r.repeat] + '</span>' : '') + '</span></button>' +
+      (r.job && !noJob ? '<button type="button" class="rm-job" data-job="' + esc(r.job) + '">' + esc(r.job) + '</button>' : '') + '</li>';
+  }
+  // grouped: late · today · tomorrow · later (next 14 days) · done today
+  function remGroups(list, max) {
+    const t0 = today0(), T = isoOf(t0), M = isoOf(addDays(t0, 1)), H = isoOf(addDays(t0, 14));
+    const open = list.filter((r) => r.status !== 'DONE');
+    const g = [['LATE', open.filter((r) => r.due < T)], ['TODAY', open.filter((r) => r.due === T)], ['TOMORROW', open.filter((r) => r.due === M)], ['NEXT TWO WEEKS', open.filter((r) => r.due > M && r.due <= H)],
+      ['DONE TODAY', list.filter((r) => r.status === 'DONE' && r.doneAt >= +t0)]];
+    let shown = 0;
+    return g.filter(([, l]) => l.length).map(([label, l]) => { const part = max ? l.slice(0, Math.max(0, max - shown)) : l; shown += part.length; return part.length ? '<div class="rm-gh is-' + label.split(' ')[0].toLowerCase() + '">' + label + '</div><ul class="rm-list">' + part.map((r) => remItem(r)).join('') + '</ul>' : ''; }).join('');
+  }
+  function remStart(r, job) {
+    state.remForm = r ? { id: r.id, text: r.text, due: r.due, time: r.time, job: r.job, repeat: r.repeat || '' } : { id: '', text: '', due: isoOf(today0()), time: '', job: job || '', repeat: '' };
+  }
+  const remForm = () => () => {
+    const F = state.remForm || {}, t0 = today0();
+    const mon = addDays(t0, ((8 - t0.getDay()) % 7) || 7);
+    const dayBtn = (d, label) => { const v = isoOf(d); return '<button type="button" class="choice' + (F.due === v ? ' is-on' : '') + '" data-rem-day="' + v + '" aria-pressed="' + (F.due === v) + '">' + label + '</button>'; };
+    const myJobs = scoped().filter((j) => j.active);
+    return '<div class="pop-title">' + (F.id ? 'Reminder' : 'New reminder') + '</div>' +
+      '<form class="pop-form rm-form" data-rem-form novalidate>' +
+        '<label class="pop-label" for="remText">What to remember</label><input type="text" id="remText" maxlength="200" autocomplete="off" value="' + esc(F.text) + '" placeholder="Write it in a few words">' +
+        '<div class="pop-label">Day</div><div class="choice-row rm-days">' + dayBtn(t0, 'Today') + dayBtn(addDays(t0, 1), 'Tomorrow') + dayBtn(mon, DOW[mon.getDay()] + ' ' + fmt(mon)) +
+          '<input type="date" id="remDue" value="' + esc(F.due) + '" aria-label="Pick a day"></div>' +
+        '<div class="rm-two"><label><span class="pop-label">Time (optional)</span><input type="time" id="remTime" value="' + esc(F.time) + '"></label>' +
+          '<label><span class="pop-label">Job (optional)</span><input type="text" id="remJob" list="dlMyJobs" autocomplete="off" spellcheck="false" value="' + esc(F.job) + '" placeholder="Job number"></label></div>' +
+        '<div class="pop-label">Repeat</div><div class="seg seg-mini rm-rep-seg" role="group" aria-label="Repeat">' + Object.keys(REPEAT_NAME).map((k) => '<button type="button" data-rem-rep="' + k + '" aria-pressed="' + ((F.repeat || '') === k) + '">' + REPEAT_NAME[k] + '</button>').join('') + '</div>' +
+        '<div class="form-error" id="remErr" role="alert"></div>' +
+        '<button type="submit" class="btn-brutal pop-main" data-primary>' + (F.id ? 'SAVE' : 'ADD REMINDER') + '</button>' +
+        (F.id ? '<div class="rm-snooze"><span class="pop-label">Snooze to</span><div class="choice-row">' + [[1, 'Tomorrow'], [3, 'In 3 days'], [((8 - t0.getDay()) % 7) || 7, 'Next ' + DOW[mon.getDay()]]].map(([n, l]) => '<button type="button" class="choice" data-rem-snooze="' + n + '">' + l + '</button>').join('') + '</div></div>' +
+          '<button type="button" class="link-btn quiet rm-del" data-rem-del="' + esc(F.id) + '">Delete this reminder</button>' : '') +
+      '</form><datalist id="dlMyJobs">' + myJobs.map((j) => '<option value="' + esc(j.jobNo) + '">' + esc(j.customer || '') + '</option>').join('') + '</datalist>';
+  };
+  function remOpenForm(anchor, r, job) { remStart(r, job); openPop(anchor, 'REMINDER', remForm()); }
+  function remPaint() { rerender(); updateNav(); refreshOverlay(); }
+  async function remSave(F, note) {
+    const err = $('#remErr');
+    if (!String(F.text || '').trim()) { if (err) err.textContent = 'Write what to remember.'; const t = $('#remText'); if (t) t.focus(); return false; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(F.due || '')) { if (err) err.textContent = 'Choose a day.'; return false; }
+    setSaving(1);
+    try {
+      const res = await api.call('ethixReminderSave', [{ id: F.id || '', text: F.text, due: F.due, time: F.time || '', job: String(F.job || '').trim().toUpperCase(), repeat: F.repeat || '' }]);
+      if (res && res.ok) {
+        state.reminders = res.reminders || state.reminders; closeOverlays(true); state.remForm = null; remPaint();
+        const r = (state.reminders || []).find((x) => x.id === (F.id || res.id));
+        toast((note || (F.id ? 'Reminder saved' : 'Reminder added')) + (r ? ' · ' + remWhen(r) : ''));
+        return true;
+      }
+      if (res && res.reminders) state.reminders = res.reminders;
+      if (err) err.textContent = (res && res.error) || 'Not saved. Please try again.'; else toast((res && res.error) || 'Not saved.', { error: true });
+    } catch (e) { if (e.kind !== 'auth') { if (err) err.textContent = /not available|unknown/i.test(e.message) ? 'Reminders need the v2.9 Code.gs.' : 'Not saved: ' + e.message; else toast('Not saved: ' + e.message, { error: true }); } }
+    finally { setSaving(-1); }
+    return false;
+  }
+  async function remDone(id, done) {
+    const r = (state.reminders || []).find((x) => x.id === id); if (!r) return;
+    const before = JSON.stringify(state.reminders);
+    if (!r.repeat) { r.status = done ? 'DONE' : 'OPEN'; r.doneAt = done ? Date.now() : 0; remPaint(); }
+    setSaving(1);
+    try {
+      const res = await api.call('ethixReminderDone', [id, done]);
+      if (res && res.ok) {
+        state.reminders = res.reminders || state.reminders; remPaint();
+        const nx = res.next ? parseDate(res.next) : null;
+        toast(done ? (nx ? 'Done · next ' + DOW[nx.getDay()] + ' ' + fmt(nx) : 'Done') : 'Back on your list', done ? { action: { label: 'Undo', fn: () => remDone(id, false) } } : {});
+        return;
+      }
+      state.reminders = (res && res.reminders) || JSON.parse(before); remPaint(); toast((res && res.error) || 'Not saved.', { error: true });
+    } catch (e) { state.reminders = JSON.parse(before); remPaint(); if (e.kind !== 'auth') toast('Not saved: ' + e.message, { error: true }); }
+    finally { setSaving(-1); }
+  }
+  async function remDelete(id) {
+    const r = (state.reminders || []).find((x) => x.id === id); if (!r) return;
+    closeOverlays(true); state.remForm = null;
+    setSaving(1);
+    try {
+      const res = await api.call('ethixReminderDelete', [id]);
+      if (res && res.ok) { state.reminders = res.reminders || []; remPaint(); toast('Reminder deleted', { action: { label: 'Undo', fn: () => remSave({ text: r.text, due: r.due, time: r.time, job: r.job, repeat: r.repeat }, 'Reminder back') } }); }
+    } catch (e) { if (e.kind !== 'auth') toast('Not deleted: ' + e.message, { error: true }); }
+    finally { setSaving(-1); }
+  }
+  // the follow-ups page: reminders sit above the jobs (due today and late first)
+  function remSection(anim) {
+    if (!canNote()) return '';
+    const list = state.reminders || [];
+    const body = remGroups(list, 0);
+    return '<section class="round-sec rm-sec' + (anim || '') + '" aria-labelledby="rs-rem"><div class="tile-head"><h2 class="tile-title" id="rs-rem">REMINDERS <span class="tile-count">' + remOpen().length + '</span></h2>' +
+      '<button type="button" class="btn-ghost rm-add" data-act="rem-add">' + icon('plus', 15) + '<span>Reminder</span></button></div>' +
+      (body || '<p class="rm-empty">Nothing to remember right now. Add one for anything that is not a booking — a call, a payment, a rate to check.</p>') + '</section>';
+  }
+  // the job page: this job's reminders in the follow-up card
+  function jobReminders(j) {
+    if (!canNote()) return '';
+    const list = (state.reminders || []).filter((r) => r.job && r.job.toUpperCase() === keyOf(j) && r.status !== 'DONE');
+    return '<div class="rm-job-block">' + (list.length ? '<ul class="rm-list">' + list.map((r) => remItem(r, true)).join('') + '</ul>' : '') +
+      '<button type="button" class="btn-ghost rm-add" data-act="rem-add" data-rem-job="' + esc(j.jobNo) + '">' + icon('clock', 15) + '<span>Remind me</span></button></div>';
+  }
+
+  // ================================================================ v2.9 — Home: MY DAY (what came in · what to remember) and the TODAY ribbon
+  function myDayTile(anim) {
+    const ch = changedJobs(), un = notifUnread(), late = remOpen().filter((r) => r.due < isoOf(today0())).length;
+    const line = (attrs, ic, txt, n, cls, tip) => '<button type="button" class="md-line' + (cls ? ' ' + cls : '') + '" ' + attrs + ' title="' + esc(tip) + '">' + icon(ic, 13) + '<b>' + n + '</b><span>' + txt + '</span></button>';
+    const brief = (ch.length ? line('data-act="changed"', 'refresh', 'changed', ch.length, 'is-chg', (ch.length === 1 ? 'One of your jobs' : ch.length + ' of your jobs') + ' changed since you looked — tap to see') : '') +
+      (un ? line('data-act="notif"', 'bell', un === 1 ? 'new alert' : 'new alerts', un, '', 'Open notifications') : '') +
+      (late ? line('data-act="rem-late"', 'clock', 'late', late, 'is-late', (late === 1 ? 'A reminder is' : late + ' reminders are') + ' past their day') : '');
+    const body = remGroups(state.reminders || [], 0);
+    return '<section class="tile t-act t-day' + anim + '" style="--d:340ms" aria-labelledby="dayTitle">' +
+      '<div class="tile-head"><h2 class="tile-title" id="dayTitle">MY DAY</h2><button type="button" class="tile-link rm-add" data-act="rem-add">' + icon('plus', 14) + 'Reminder</button></div>' +
+      '<div class="tile-body">' + (brief ? '<div class="md-brief">' + brief + '</div>' : '<div class="md-brief is-calm">' + icon('check', 15) + '<span>All caught up — nothing new since you looked.</span></div>') +
+        (body || '<p class="rm-empty">No reminders. Add one for anything that is not a booking — a call, a payment, a rate to check.</p>') + '</div></section>';
+  }
+  // office hours of a zone today, in minutes of YOUR day (0–1440): [[from, to, openNow]]
+  const partsMemo = new Map();
+  function zoneParts(tz, now) {
+    let f = partsMemo.get(tz);
+    if (f === undefined) { try { f = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { f = null; } partsMemo.set(tz, f); }
+    if (!f) return null;
+    const p = {}; f.formatToParts(now).forEach((x) => { p[x.type] = x.value; });
+    return { y: +p.year, mo: +p.month, d: +p.day, h: (+p.hour) % 24, mi: +p.minute };
+  }
+  function officeBands(z, now) {
+    const t = +now, p = zoneParts(z.tz, new Date(t)); if (!p) return [];
+    const off = Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi) - Math.floor(t / 60000) * 60000;   // the zone's clock minus UTC
+    const mid = new Date(t); mid.setHours(0, 0, 0, 0);
+    const wk = WEEKEND[z.cc] || [0, 6], out = [];
+    for (let k = -1; k <= 1; k++) {
+      const zd = new Date(Date.UTC(p.y, p.mo - 1, p.d + k));
+      if (wk.includes(zd.getUTCDay())) continue;
+      const o = Date.UTC(zd.getUTCFullYear(), zd.getUTCMonth(), zd.getUTCDate(), OFFICE[0] / 60, 0) - off, c = Date.UTC(zd.getUTCFullYear(), zd.getUTCMonth(), zd.getUTCDate(), OFFICE[1] / 60, 0) - off;
+      const a = (o - mid) / 60000, b = (c - mid) / 60000;
+      if (b <= 0 || a >= 1440) continue;
+      out.push([Math.max(0, a), Math.min(1440, b), t >= o && t < c]);
+    }
+    return out;
+  }
+  function ribbonZones(t0) {
+    const g = new Map();
+    fleetJobs().forEach((j) => {
+      const p = clockPort(j, t0), z = p && portZone(p); if (!z) return;
+      const key = z.tz + '|' + z.cc, e = g.get(key) || { z, ports: new Map(), n: 0 };
+      e.n++; e.ports.set(upq(p), (e.ports.get(upq(p)) || 0) + 1); g.set(key, e);
+    });
+    return Array.from(g.values()).sort((a, b) => b.n - a.n).slice(0, 4);
+  }
+  function todayItems(t0) {
+    const J = fleetJobs(), same = (d) => d && +dayOf(d) === +t0;
+    return {
+      cut: J.filter((j) => cutsFor(j, t0).some((c) => c.d === 0)),
+      sail: J.filter((j) => same(j.etd)),
+      arrive: J.filter((j) => same(j.eta)),
+      free: J.filter((j) => j.cat === 'IMPORT' && j.arrived && !j.delivery && same(j.lineFreeEnd)),
+      rem: remDue()
+    };
+  }
+  function todayRibbon(t0, anim) {
+    const now = new Date(), mins = now.getHours() * 60 + now.getMinutes(), pc = (m) => (m / 1440 * 100).toFixed(3);
+    const Z = ribbonZones(t0), T = todayItems(t0);
+    const chip = (k, n, label, cls) => (n ? '<button type="button" class="rb-chip' + (cls ? ' ' + cls : '') + '" data-rb="' + k + '"><b>' + n + '</b>' + label + '</button>' : '');
+    const chips = chip('cut', T.cut.length, T.cut.length === 1 ? 'cutoff today' : 'cutoffs today', 'is-red') + chip('sail', T.sail.length, T.sail.length === 1 ? 'sails' : 'sail') + chip('arrive', T.arrive.length, T.arrive.length === 1 ? 'arrives' : 'arrive') +
+      chip('free', T.free.length, 'free time ends', 'is-amber') + chip('rem', T.rem.length, T.rem.length === 1 ? 'reminder' : 'reminders', 'is-teal');
+    const lanes = Z.map((e) => {
+      const ports = Array.from(e.ports.entries()).sort((a, b) => b[1] - a[1]), c = clockBits(e.z, now), bands = officeBands(e.z, now);
+      return '<div class="rb-lane"><span class="rb-l" title="' + esc(ports.map(([p, n]) => p + ' (' + n + ')').join(', ') + ' — office hours 09:00–18:00 local, ' + weekTxt(e.z)) + '"><b>' + esc(ports[0][0]) + '</b>' + (ports.length > 1 ? '<em>+' + (ports.length - 1) + '</em>' : '') +
+        (c ? '<i class="is-' + c.tone + '" data-clock="' + esc(ports[0][0]) + '" data-mini="1"><b>' + c.time + '</b></i>' : '') + '</span>' +
+        '<span class="rb-t">' + (bands.length ? bands.map(([a, b, open]) => '<i class="rb-band' + (open ? ' is-open' : '') + '" style="left:' + pc(a) + '%;width:' + pc(b - a) + '%"></i>').join('') : '<em class="rb-off">closed today</em>') + '</span></div>';
+    }).join('');
+    const remAt = remOpen().filter((r) => r.due === isoOf(t0) && r.time).map((r) => [+r.time.slice(0, 2) * 60 + +r.time.slice(3), r]);
+    const timed = remAt.map(([m, r]) => '<i class="rb-rem" style="left:' + pc(m) + '%" title="' + esc(r.time + ' · ' + r.text) + '"></i>').join('');
+    const near = (h) => Math.abs(h * 60 + 10 - mins) < 95 || remAt.some(([m]) => m >= h * 60 - 20 && m <= h * 60 + 100);   // an hour label steps aside for the now chip or a reminder dot
+    const hhmm2 = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+    return '<section class="ribbon glass' + (anim || '') + '" id="todayRibbon" aria-label="Today: your ports and deadlines" style="--d:20ms">' +
+      '<div class="rb-head"><span class="rb-k">TODAY · YOUR PORTS</span><span class="rb-chips">' + (chips || '<span class="rb-quiet">No cutoffs, sailings or arrivals today</span>') + '</span></div>' +
+      '<div class="rb-grid">' +
+        '<div class="rb-axis"><span class="rb-l"></span><span class="rb-t">' + [0, 3, 6, 9, 12, 15, 18, 21].map((h) => '<i' + (near(h) ? ' class="is-near"' : '') + ' style="left:' + pc(h * 60) + '%">' + String(h).padStart(2, '0') + '</i>').join('') + timed + '</span></div>' +
+        (lanes || '<div class="rb-lane"><span class="rb-l"></span><span class="rb-t"><em class="rb-off">No port clocks yet — your jobs have no known ports</em></span></div>') +
+        '<div class="rb-nowline"><span class="rb-l"></span><span class="rb-t"><i style="left:' + pc(mins) + '%"><b>' + hhmm2 + '</b></i></span></div>' +
+      '</div></section>';
+  }
+  const ribbonList = (k) => () => {
+    const t0 = today0(), T = todayItems(t0);
+    if (k === 'rem') return '<div class="pop-title">Reminders due</div>' + (T.rem.length ? '<ul class="rm-list">' + T.rem.map((r) => remItem(r)).join('') + '</ul>' : '<p class="pop-text">Nothing due.</p>');
+    const title = { cut: 'Cutoffs today', sail: 'Sailing today', arrive: 'Arriving today', free: 'Free time ends today' }[k];
+    const list = T[k] || [];
+    return '<div class="pop-title">' + title + '</div><ul class="chg-list">' + list.map((j) => '<li><button type="button" data-fl-open="' + esc(j.jobNo) + '">' + changedDot(j) + '<b>' + esc(j.jobNo) + '</b><span class="chg-who">' + esc(j.customer || '—') + '</span><span class="chg-what">' + esc(j.route) + (k === 'cut' ? ' · ' + cutsFor(j, t0).filter((c) => c.d === 0).map((c) => c.k).join(' · ') + ' cutoff' : '') + '</span></button></li>').join('') + '</ul>';
+  };
+
+  function initV29() {
+    // the ribbon's "now" line and office bands move with the clock
+    setInterval(() => { const rb = $('#todayRibbon'); if (rb && state.route && state.route.name === 'home') rb.outerHTML = todayRibbon(today0(), ''); }, 60000);
+    document.addEventListener('click', (e) => {
+      if (!state.signedIn) return;
+      const op = e.target.closest('[data-fl-open]'); if (op) { closeOverlays(true); openJob(op.dataset.flOpen); return; }
+      const fc = e.target.closest('[data-fleet-card]'); if (fc) { openPop(fc, 'JOB', fleetCard(fc.dataset.fleetCard)); return; }
+      if (e.target.closest('[data-act="changed"]')) { openPop(e.target.closest('[data-act="changed"]'), 'MY DAY', changedMenu()); return; }
+      if (e.target.closest('[data-act="seen-all"]')) {
+        const keep = state.seen; state.seen = { _base: Date.now() }; closeOverlays(true); rerender();
+        api.call('ethixSeenAll').then((r) => { if (r && r.seen) state.seen = r.seen; }).catch(() => { state.seen = keep; rerender(); });
+        toast('All marked as seen'); return;
+      }
+      const rb = e.target.closest('[data-rb]'); if (rb) { openPop(rb, 'TODAY', ribbonList(rb.dataset.rb)); return; }
+      if (e.target.closest('[data-act="rem-late"]')) { go('#/follow-ups'); return; }
+      const ra = e.target.closest('[data-act="rem-add"]'); if (ra && canNote()) { remOpenForm(ra, null, ra.dataset.remJob || ''); return; }
+      const rd = e.target.closest('[data-rem-done]'); if (rd) { const r = (state.reminders || []).find((x) => x.id === rd.dataset.remDone); if (r) remDone(r.id, r.status !== 'DONE'); return; }
+      const re = e.target.closest('[data-rem-edit]'); if (re) { const r = (state.reminders || []).find((x) => x.id === re.dataset.remEdit); if (r) remOpenForm(re, r); return; }
+      const rday = e.target.closest('[data-rem-day]'); if (rday && state.remForm) { state.remForm.due = rday.dataset.remDay; refreshOverlay(); return; }
+      const rrep = e.target.closest('[data-rem-rep]'); if (rrep && state.remForm) { state.remForm.repeat = rrep.dataset.remRep; refreshOverlay(); return; }
+      const rsz = e.target.closest('[data-rem-snooze]'); if (rsz && state.remForm) { const d = addDays(today0(), +rsz.dataset.remSnooze); const F = Object.assign({}, state.remForm, { due: isoOf(d) }); remSave(F, 'Snoozed'); return; }
+      const rdl = e.target.closest('[data-rem-del]'); if (rdl) { remDelete(rdl.dataset.remDel); return; }
+      // fleet controls
+      if (!state.route || state.route.name !== 'fleet') return;
+      const U = fleetUi();
+      const m = e.target.closest('[data-fl-mode]'); if (m) { U.mode = m.dataset.flMode; rerender(); return; }
+      const z = e.target.closest('[data-fl-zoom]'); if (z) { U.zoom = z.dataset.flZoom; rerender(); return; }
+      if (e.target.closest('[data-act="fl-clear"]')) { Object.assign(U, { mode: 'all', type: 'all', port: 'all', cust: 'all', q: '' }); rerender(); }
+    });
+    document.addEventListener('input', (e) => {
+      const F = state.remForm, id = e.target.id;
+      if (F && ['remText', 'remDue', 'remTime', 'remJob'].includes(id)) { F[{ remText: 'text', remDue: 'due', remTime: 'time', remJob: 'job' }[id]] = e.target.value; if (id === 'remDue') refreshOverlay(); return; }
+      if (id === 'fleetSearch') { fleetUi().q = e.target.value; clearTimeout(state.flTimer); state.flTimer = setTimeout(() => { state.flFocus = true; rerender(); state.flFocus = false; }, 140); }
+    });
+    document.addEventListener('change', (e) => {
+      const map = { flType: 'type', flPort: 'port', flCust: 'cust' };
+      if (map[e.target.id]) { fleetUi()[map[e.target.id]] = e.target.value; rerender(); }
+    });
+    document.addEventListener('submit', (e) => {
+      const f = e.target.closest('[data-rem-form]'); if (!f) return;
+      e.preventDefault();
+      if (state.remForm) remSave(state.remForm);
+    });
+  }
+
   // ------------------------------------------------------------ lists & menus
   function openList(kind, opener) {
     const m = lastMetrics; if (!m) return;
@@ -4746,7 +5197,7 @@
     $('#drawerKicker').textContent = list.length + (list.length === 1 ? ' JOB' : ' JOBS');
     $('#drawerBody').innerHTML = '<h2 class="peek-job list-title" id="drawerTitle">' + esc(entry[0]) + '</h2>' +
       (list.length ? '<div>' + list.map((j) =>
-        '<button type="button" class="list-row" data-job="' + esc(j.jobNo) + '"><span class="lr-main"><span class="li-job">' + esc(j.jobNo) + ' · ' + esc(j.type) + '</span>' +
+        '<button type="button" class="list-row" data-job="' + esc(j.jobNo) + '"><span class="lr-main"><span class="li-job">' + changedDot(j) + esc(j.jobNo) + ' · ' + esc(j.type) + '</span>' +
         '<span class="lr-cust">' + esc(j.customer || '—') + '</span><span class="li-sub">' + esc(j.route) + '</span></span>' + toneChip(j.next) + '</button>'
       ).join('') + '</div>' : '<div class="tile-empty">Nothing here right now.</div>');
     showDrawer(opener);
