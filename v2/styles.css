@@ -1842,7 +1842,6 @@ body:has(#savePill:not([hidden])) .toasts { bottom: calc(68px + env(safe-area-in
 .md-line.is-chg b { color: var(--teal-text); }
 .md-line.is-late { border-color: #FDA29B; background: var(--red-tint); color: var(--red-text); }
 .md-line.is-late b { color: var(--red-text); }
-.md-brief.is-calm { flex-direction: row; align-items: center; gap: 8px; padding: 4px 2px 2px; font-size: 12.5px; font-weight: 700; color: var(--teal-text); }
 .t-day .tile-link { display: inline-flex; align-items: center; gap: 3px; }
 .t-day { container-type: inline-size; }
 @container (max-width: 300px) { .t-day .rm { flex-wrap: wrap; row-gap: 4px; } .t-day .rm-main { flex-basis: calc(100% - 30px); } .t-day .rm-job { order: 3; margin-left: 30px; } }
@@ -1923,7 +1922,10 @@ body:has(#savePill:not([hidden])) .toasts { bottom: calc(68px + env(safe-area-in
 
 /* ---------- Home: THIS WEEK (seven days, then day by day) ---------- */
 .wk-strip { flex: none; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
-.wk-day { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 6px 0 5px; border-radius: 10px; background: #F3F6F9; }
+.wk-day { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 6px 0 5px; border: none; border-radius: 10px; background: #F3F6F9; font: inherit; color: inherit; cursor: pointer; transition: background-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease; -webkit-tap-highlight-color: transparent; }
+.wk-day:hover { background: #E7EDF3; }
+.wk-day:active { transform: scale(0.96); }
+.wk-day:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
 .wk-day em { font-style: normal; font-family: var(--f-mono); font-size: 8.5px; letter-spacing: 0.06em; color: var(--ink-3); }
 .wk-day b { font-family: var(--f-display); font-stretch: 115%; font-weight: 800; font-size: 15px; line-height: 1.1; color: var(--ink); }
 .wk-day.is-none b { color: #9AA9B8; }
@@ -1935,6 +1937,17 @@ body:has(#savePill:not([hidden])) .toasts { bottom: calc(68px + env(safe-area-in
 .wk-n i.is-dep, .wk-legend i.is-dep { background: var(--navy); }
 .wk-n i.is-arr, .wk-legend i.is-arr { background: var(--teal); }
 .wk-day.is-today .wk-n i.is-dep { background: #3E6E95; }
+.wk-day.is-today:hover { background: #1F3346; }
+/* v2.9.2: the picked day */
+.wk-day.is-on { background: #FFFFFF; box-shadow: inset 0 0 0 2px var(--teal), 0 4px 12px -6px rgba(15, 41, 66, 0.35); }
+.wk-day.is-on b { color: var(--ink); }
+.wk-day.is-today.is-on { background: var(--ink); box-shadow: inset 0 0 0 2px var(--teal), 0 4px 12px -6px rgba(15, 41, 66, 0.35); }
+.wk-day.is-today.is-on b { color: #FFFFFF; }
+.wk-strip.has-pick .wk-day:not(.is-on) { opacity: 0.72; }
+.wk-all { margin-left: auto; padding: 0; border: none; background: none; font: inherit; font-size: 11.5px; font-weight: 700; color: var(--teal-text); cursor: pointer; white-space: nowrap; }
+.wk-all:hover { text-decoration: underline; text-underline-offset: 2px; }
+/* v2.9.2: DGPC done — the voyage card's DG chip turns calm */
+.vh-dg.is-done { background: var(--teal-tint); color: var(--teal-text); }
 .wk-legend { flex: none; display: flex; gap: 12px; margin: 7px 0 4px; font-size: 11.5px; font-weight: 700; color: var(--ink-2); }
 .wk-legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .wk-legend i { width: 8px; height: 8px; border-radius: 50%; }

@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders — v2.9.1)
+   enquiries, follow-ups, delays, close & archive, costing, reminders — v2.9.2)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -71,7 +71,9 @@
   const MON_UP = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
   const DOW_UP = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
   const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  function today0() { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }
+  // v2.9.2: Ethix works on Dubai time. dxb(moment) = a Date whose hours, minutes and day read as Dubai's (UTC+4, no summer time).
+  function dxb(t) { const x = t === undefined ? Date.now() : +t; return new Date(x + (240 + new Date(x).getTimezoneOffset()) * 60000); }
+  function today0() { const d = dxb(); d.setHours(0, 0, 0, 0); return d; }   // today in Dubai
   function mk(y, m, d) {
     if (!(y > 1990 && y < 2200) || !(m >= 0 && m <= 11) || !(d >= 1 && d <= 31)) return null;
     const x = new Date(y, m, d); return x.getMonth() === m ? x : null;
@@ -105,7 +107,8 @@
     ['delivery', (h) => h.startsWith('DELIVERY'), 19], ['docs', (h) => h.startsWith('ORIGINAL DOC'), 20], ['costing', (h) => h.includes('COSTING'), 21],
     ['sales', (h) => h.startsWith('SALES'), 22], ['eta', (h) => h.startsWith('ETA'), 23], ['pol', (h) => h === 'POL', 24],
     ['edCut', (h) => h.startsWith('ED CUTOFF'), 25], ['dgCut', (h) => h.startsWith('DG CUTOFF'), 26], ['lineFree', (h) => h.startsWith('LINE FREE'), 27],
-    ['portFree', (h) => h.startsWith('PORT FREE'), 28], ['against', (h) => h.startsWith('AGAINST'), 29], ['freight', (h) => h.startsWith('LINE FREIGHT'), 30]
+    ['portFree', (h) => h.startsWith('PORT FREE'), 28], ['against', (h) => h.startsWith('AGAINST'), 29], ['freight', (h) => h.startsWith('LINE FREIGHT'), 30],
+    ['dgpc', (h) => h.startsWith('DGPC'), -1]   // v2.9.2: added at the end of the tracker on first use
   ];
   const EXPORT = ['SFEF', 'SFEL', 'AFE'], IMPORT = ['SFIF', 'SFIL', 'AFI', 'CND'], CROSS = ['SFC', 'AFC', 'CRR'], AIR = ['AFE', 'AFI', 'AFC'];
   const TYPE_NAMES = { SFEF: 'Sea export · FCL', SFEL: 'Sea export · LCL', AFE: 'Air export', SFIF: 'Sea import · FCL', SFIL: 'Sea import · LCL', AFI: 'Air import', CND: 'Clearance & delivery', SFC: 'Sea cross-trade', AFC: 'Air cross-trade', CRR: 'Courier', MIS: 'Miscellaneous' };
@@ -136,7 +139,7 @@
       customer: g('customer'), vendor: g('vendor'), pol: g('pol').toUpperCase(), pod: g('pod').toUpperCase(),
       cs: g('cs').toUpperCase(), sales: g('sales').toUpperCase(), dg: g('dg').toUpperCase(),
       c20: num(g('c20')), c40: num(g('c40')), remarks: g('remarks'), freight: g('freight'), against: g('against'),
-      loadlist: g('loadlist').toUpperCase(), sido: g('sido').toUpperCase(), ed: g('ed').toUpperCase(), bl: g('bl').toUpperCase(),
+      loadlist: g('loadlist').toUpperCase(), sido: g('sido').toUpperCase(), ed: g('ed').toUpperCase(), bl: g('bl').toUpperCase(), dgpc: g('dgpc').toUpperCase(),
       docs: g('docs').toUpperCase(), costing: g('costing').toUpperCase(),
       opened: parseDate(g('opened')), etd: parseDate(g('etd')), eta: parseDate(g('eta')),
       siCut: parseDate(g('siCut')), edCut: parseDate(g('edCut')), dgCut: parseDate(g('dgCut')), delivery: parseDate(g('delivery')),
@@ -174,6 +177,7 @@
     ed: ['PENDING', 'PASSED/PAID', NA],
     bl: ['BL PENDING', 'CONFIRMATION PENDING', 'CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED', NA],
     docs: [NA, 'PENDING', 'RECEIVED'],
+    dgpc: ['PENDING', 'SUBMITTED', 'APPROVED', NA],
     costing: ['PENDING', 'JOB UPDATED', 'COSTING DONE', 'COMPLETED', 'CANCELLED'],
     dg: ['DG', 'NON DG'],
     type: ['SFEF', 'SFEL', 'AFE', 'SFIF', 'SFIL', 'AFI', 'CND', 'SFC', 'AFC', 'CRR', 'MIS']
@@ -186,6 +190,7 @@
     si:         { name: 'SI submitted', kind: 'field', field: 'sido', done: ['SUBMITTED', 'APPROVED'], primary: 'SUBMITTED', cut: 'siCut', label: 'SI status', next: 'SI to submit' },
     docsReady:  { name: 'Docs ready', kind: 'field', field: 'sido', done: ['SUBMITTED', 'APPROVED'], primary: 'SUBMITTED', label: 'Documents', next: 'Docs to prepare' },
     ed:         { name: 'ED passed', kind: 'field', field: 'ed', done: ['PASSED/PAID', 'PASSED'], primary: 'PASSED/PAID', cut: 'edCut', label: 'ED status', next: 'ED to pass' },
+    dgpc:       { name: 'DGPC submitted', kind: 'field', field: 'dgpc', done: ['SUBMITTED', 'APPROVED'], primary: 'SUBMITTED', cut: 'dgCut', label: 'DGPC status', next: 'DGPC to submit' },
     blConf:     { name: 'BL confirmed', kind: 'field', field: 'bl', done: BL_OK, primary: 'CONFIRMED SBL', choices: ['BL PENDING', 'CONFIRMATION PENDING', 'CONFIRMED OBL', 'CONFIRMED SBL', NA], label: 'BL status', next: 'BL to confirm' },
     blStatus:   { name: 'BL status', kind: 'field', field: 'bl', done: BL_OK, primary: 'CONFIRMED OBL', choices: ['BL PENDING', 'CONFIRMATION PENDING', 'CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED', NA], label: 'BL status', next: 'BL to confirm' },
     blReceived: { name: 'BL received', kind: 'field', field: 'bl', done: BL_OK, primary: 'CONFIRMED OBL', choices: ['BL PENDING', 'CONFIRMATION PENDING', 'CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED', NA], label: 'BL status', next: 'BL to receive' },
@@ -289,7 +294,7 @@
       }
       return s;
     };
-    const origin = J.o.map((id) => make(id, 'o'));
+    const origin = (key === 'SEA_EX' && j.dg === 'DG' ? J.o.slice(0, 3).concat('dgpc', J.o.slice(3)) : J.o).map((id) => make(id, 'o'));   // v2.9.2: DG → DGPC after ED
     const transit = J.t.map((id) => make(id, 't'));
     const dest = J.d.map((id) => make(id, 'd'));
     const all = origin.concat(transit, dest);
@@ -855,7 +860,7 @@
     drawBadges();
   }
 
-  function greeting() { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; }
+  function greeting() { const h = dxb().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; }
   function syncText() {
     const s = Math.round((Date.now() - state.syncedAt) / 1000);
     if (s < 60) return 'SYNCED JUST NOW';
@@ -1124,7 +1129,7 @@
     if (j.hold) return { kicker: 'ON HOLD', title: 'Waiting', sub: j.remarks ? j.remarks.toUpperCase().slice(0, 48) : 'NEXT STEP TO BE CONFIRMED', bubble: '' };
     if (j.arrived) return { kicker: W[4] + ' COMPLETE', title: total ? total + ' of ' + total + ' days' : 'Arrived', sub: 'ARRIVED ' + fmt(j.eta, true), bubble: W[3] + ' ' + fmt(j.eta) };
     if (j.atSea) return { kicker: W[0], title: j.dayN + ' of ' + j.dayT + ' days', sub: days(t0, j.eta) + (days(t0, j.eta) === 1 ? ' DAY' : ' DAYS') + ' TO ARRIVAL', bubble: 'DAY ' + j.dayN + ' OF ' + j.dayT };
-    const sub = j.cat === 'EXPORT' ? (j.mode === 'air' ? 'SI, ED AND AWB BEFORE ETD' : 'SI, ED AND BL BEFORE ETD') : j.etd ? W[2] + ' ' + fmt(j.etd, true) : 'DATES TO CONFIRM';
+    const sub = j.cat === 'EXPORT' ? (j.mode === 'air' ? 'SI, ED AND AWB BEFORE ETD' : j.dg === 'DG' ? 'SI, ED, DGPC AND BL BEFORE ETD' : 'SI, ED AND BL BEFORE ETD') : j.etd ? W[2] + ' ' + fmt(j.etd, true) : 'DATES TO CONFIRM';
     return { kicker: 'NOT ' + (j.mode === 'air' ? 'DEPARTED' : j.mode === 'courier' ? 'PICKED UP' : 'SAILED') + ' YET', title: total ? total + '-day ' + W[4].toLowerCase() : 'Dates to confirm', sub, bubble: j.etd ? W[2] + ' ' + fmt(j.etd) : '' };
   }
   function portLine(j, which) {
@@ -1142,7 +1147,8 @@
     const pos = p >= 1 ? 'calc(' + (w[0] + w[1]) + '% - ' + (moverW + 6) + 'px)' : p <= 0 ? 'calc(' + w[0] + '% + 6px)' : 'calc(' + w[0] + '% + ' + (w[1] * p).toFixed(2) + '% - ' + (moverW / 2) + 'px)';
     const centre = p >= 1 ? 'calc(' + (w[0] + w[1]) + '% - ' + (moverW / 2 + 6) + 'px)' : p <= 0 ? 'calc(' + w[0] + '% + ' + (moverW / 2 + 6) + 'px)' : 'calc(' + w[0] + '% + ' + (w[1] * p).toFixed(2) + '%)';
     const travelled = (w[1] * p).toFixed(2) + '%';
-    const dg = j.dg === 'DG' && j.dgCut && j.cat === 'EXPORT' && !(j.etd && j.etd <= t0) ? '<div class="vh-dg">DG CUTOFF ' + fmt(j.dgCut) + '</div>' : '';
+    const dgDone = j.mode === 'sea' && ['SUBMITTED', 'APPROVED'].includes(j.dgpc);   // v2.9.2
+    const dg = j.dg === 'DG' && j.dgCut && j.cat === 'EXPORT' && !(j.etd && j.etd <= t0) ? '<div class="vh-dg' + (dgDone ? ' is-done' : '') + '">' + (dgDone ? 'DGPC ' + esc(j.dgpc) : 'DG CUTOFF ' + fmt(j.dgCut)) + '</div>' : '';
     return '<section class="vhero is-' + mode + (j.hold ? ' is-hold' : '') + (j.arrived ? ' is-arrived' : '') + (j.atSea ? ' is-moving' : '') + '" style="--o:' + w[0] + '%;--s:' + w[1] + '%;--d:' + w[2] + '%" aria-label="' + esc('Voyage for job ' + j.jobNo + ' from ' + (j.pol || 'origin') + ' to ' + (j.pod || 'destination') + ': ' + vt.kicker.toLowerCase()) + '">' +
       '<div class="vh-sky">' +
         '<div class="vh-port vh-pol"><div class="kicker">ORIGIN · POL</div><div class="vh-name">' + esc(j.pol || '—') + '</div><div class="vh-date">' + esc(portLine(j, 'o')) + '</div>' + portClock(j.pol, 'hero') + dg + '</div>' +
@@ -1263,7 +1269,7 @@
     if (/^TRANSFERRED THE JOB /.test(a)) return transferText(a);
     if (/^CHANGED /.test(a)) return friendlyDates(a.slice(8));
     let m = a.match(/^SET (.+?) TO (.+)$/);
-    if (m) return 'set ' + m[1].toLowerCase().replace(/\bsi\b/g, 'SI').replace(/\bdo\b/g, 'DO').replace(/\bed\b/g, 'ED').replace(/\bbl\b/g, 'BL').replace(/\bawb\b/g, 'AWB').replace(/\betd\b/g, 'ETD').replace(/\beta\b/g, 'ETA').replace(/\bpol\b/g, 'POL').replace(/\bpod\b/g, 'POD').replace(/\bdg\b/g, 'DG').replace(/\bcs\b/g, 'CS') + ' to ' + m[2];
+    if (m) return 'set ' + m[1].toLowerCase().replace(/\bsi\b/g, 'SI').replace(/\bdo\b/g, 'DO').replace(/\bed\b/g, 'ED').replace(/\bbl\b/g, 'BL').replace(/\bawb\b/g, 'AWB').replace(/\betd\b/g, 'ETD').replace(/\beta\b/g, 'ETA').replace(/\bpol\b/g, 'POL').replace(/\bpod\b/g, 'POD').replace(/\bdgpc\b/g, 'DGPC').replace(/\bdg\b/g, 'DG').replace(/\bcs\b/g, 'CS') + ' to ' + m[2];
     if (a === 'CREATED NEW JOB') return 'opened the job';
     if (a === 'CLOSED JOB') return 'closed the job';
     m = a.match(/^CLOSED JOB — (.+)$/);
@@ -1403,6 +1409,7 @@
     if (!opts.datesOk) { const g8 = saveDateGate8(before, changes); if (g8) return g8.then((ok) => (ok === true ? saveJob(no, changes, Object.assign({}, opts, { datesOk: true })) : false)); }   // v2.8
     const prev = {};
     Object.keys(changes).forEach((f) => { prev[f] = asInput(f, before.raw[f]); });
+    if ('dgpc' in changes && !(state.ix.dgpc > -1)) state.ix.dgpc = state.header.length;   // v2.9.2: DGPC STATUS lands after the last column
     state.pending.set(k, Object.assign({}, state.pending.get(k) || {}, changes));
     rebuildJob(k); rerender(); refreshOverlay();
     setSaving(1);
@@ -1413,6 +1420,7 @@
       return api.call('ethixUpdateJob', [before.jobNo, changes, base, '']).then((res) => {
         if (res && res.ok) {
           if (Array.isArray(res.row)) state.rowMap.set(k, res.row);
+          if (Array.isArray(res.header) && res.header.length) { state.header = res.header; state.ix = mapHeaders(res.header); clearPending(k, changes); rebuildJobs(); }   // v2.9.2
           clearPending(k, changes); rebuildJob(k); rerender(); refreshOverlay();
           if (state.stories.has(k)) loadStory(no, true);
           if (opts.toast) toast(opts.toast, opts.undo === false ? {} : { action: { label: 'Undo', fn: () => saveJob(no, prev, { toast: 'Change undone', undo: false }) } });
@@ -1508,7 +1516,7 @@
     if (f === 'ed') return j.cat === 'IMPORT' ? 'Customs (ED) status' : 'ED status';
     if (f === 'bl') return j.mode === 'air' ? 'AWB status' : j.type === 'CRR' ? 'Tracking / AWB status' : 'BL status';
     if (f === 'loadlist') return j.cat === 'IMPORT' ? 'Discharge list' : 'Loadlist';
-    return { docs: 'Original docs', costing: 'Costing', status: 'Job status', etd: j.mode === 'courier' ? 'Pick-up date' : 'ETD', eta: j.mode === 'courier' ? 'Delivery date' : 'ETA', delivery: 'Delivery date', against: 'Against job no.' }[f] || f;
+    return { docs: 'Original docs', dgpc: 'DGPC status', costing: 'Costing', status: 'Job status', etd: j.mode === 'courier' ? 'Pick-up date' : 'ETD', eta: j.mode === 'courier' ? 'Delivery date' : 'ETA', delivery: 'Delivery date', against: 'Against job no.' }[f] || f;
   }
   function stopEditor(no, id) {
     return () => {
@@ -1579,7 +1587,7 @@
       const j = findJob(no); if (!j) return '';
       const fields = FORM_STATUS[j.type] || ['sido', 'ed', 'bl'];
       return '<h2 class="peek-job" id="drawerTitle">' + esc(j.jobNo) + '</h2><p class="pop-text">Tap a value to save it straight away.</p>' +
-        ['status'].concat(fields.filter((f) => f !== 'delivery')).map((f) => '<div class="quick-row"><div class="pop-label">' + esc(fieldLabel(j, f)) + '</div><div class="choice-row">' + OPTS[f].map((v) => '<button type="button" class="choice' + ((j[f] || '') === v ? ' is-on' : '') + '" data-set="' + f + '" data-val="' + esc(v) + '" aria-pressed="' + ((j[f] || '') === v) + '">' + esc(v === NA ? 'N/A' : v) + '</button>').join('') + '</div></div>').join('') + SAVE_NOTE;
+        ['status'].concat(fields.filter((f) => f !== 'delivery' && (f !== 'dgpc' || j.dg === 'DG'))).map((f) => '<div class="quick-row"><div class="pop-label">' + esc(fieldLabel(j, f)) + '</div><div class="choice-row">' + OPTS[f].map((v) => '<button type="button" class="choice' + ((j[f] || '') === v ? ' is-on' : '') + '" data-set="' + f + '" data-val="' + esc(v) + '" aria-pressed="' + ((j[f] || '') === v) + '">' + esc(v === NA ? 'N/A' : v) + '</button>').join('') + '</div></div>').join('') + SAVE_NOTE;
     };
   }
 
@@ -1693,7 +1701,7 @@
     MIS: ['against']
   };
   const FORM_STATUS = {
-    SFEF: ['loadlist', 'sido', 'ed', 'bl'], SFEL: ['loadlist', 'sido', 'ed', 'bl'], AFE: ['sido', 'ed', 'bl'],
+    SFEF: ['loadlist', 'sido', 'ed', 'bl', 'dgpc'], SFEL: ['loadlist', 'sido', 'ed', 'bl', 'dgpc'], AFE: ['sido', 'ed', 'bl'],
     SFIF: ['loadlist', 'sido', 'ed', 'bl', 'docs', 'delivery'], SFIL: ['loadlist', 'sido', 'ed', 'bl', 'docs', 'delivery'],
     AFI: ['sido', 'ed', 'bl', 'delivery'], CND: ['loadlist', 'sido', 'ed', 'bl', 'docs', 'delivery'],
     SFC: ['sido', 'bl'], AFC: ['sido', 'bl'], CRR: ['sido', 'bl'], MIS: []
@@ -1743,6 +1751,7 @@
       bl: { label: air ? 'AWB status' : crr ? 'Tracking / AWB status' : 'BL status', kind: 'select', opts: OPTS.bl, blank: true },
       loadlist: { label: imp ? 'Discharge list' : 'Loadlist', kind: 'select', opts: OPTS.loadlist, blank: true },
       docs: { label: 'Original docs', kind: 'select', opts: OPTS.docs, blank: true },
+      dgpc: { label: 'DGPC status', kind: 'select', opts: OPTS.dgpc, blank: true, dgOnly: true },
       costing: { label: 'Costing', kind: 'select', opts: OPTS.costing, blank: true }
     };
     return M[key];
@@ -1822,7 +1831,7 @@
       '</form>' + formLists();
     syncDg();
   }
-  function syncDg() { const f = $('#jobForm'); if (!f) return; const dg = f.querySelector('[name="dg"]'); const g = f.querySelector('.dg-only'); if (g) g.hidden = !(dg && dg.value === 'DG'); }
+  function syncDg() { const f = $('#jobForm'); if (!f) return; const dg = f.querySelector('[name="dg"]'); f.querySelectorAll('.dg-only').forEach((g) => { g.hidden = !(dg && dg.value === 'DG'); }); }
   function readForm(form) {
     const out = {};
     $$('input, select, textarea', form).forEach((el) => { if (!el.name) return; let v = el.value.trim(); if (el.classList.contains('is-upper')) v = v.toUpperCase().replace(/\s+/g, ' '); out[el.name] = v; });
@@ -1894,7 +1903,7 @@
         '<div class="form-error" id="formError" role="alert"></div>' +
         '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit">SAVE CHANGES</button></div>' +
       '</form>' + formLists();
-    const f = $('#editForm'); const dg = f.querySelector('[name="dg"]'); const g = f.querySelector('.dg-only'); if (g) g.hidden = !(dg && dg.value === 'DG');
+    const f = $('#editForm'); const dg = f.querySelector('[name="dg"]'); f.querySelectorAll('.dg-only').forEach((g) => { g.hidden = !(dg && dg.value === 'DG'); });
     showDrawer(document.activeElement);
     state.overlay = 'form';
   }
@@ -1924,7 +1933,7 @@
     });
     body.addEventListener('change', (e) => {
       if (state.overlay !== 'form') return;
-      if (e.target.name === 'dg') { const g = e.target.form && e.target.form.querySelector('.dg-only'); if (g) g.hidden = e.target.value !== 'DG'; }
+      if (e.target.name === 'dg' && e.target.form) e.target.form.querySelectorAll('.dg-only').forEach((g) => { g.hidden = e.target.value !== 'DG'; });
       if (e.target.name === 'type' && e.target.form && e.target.form.id === 'editForm') $('#typeWarn').hidden = !state.editing || e.target.value === state.editing.initial.type;
     });
     body.addEventListener('submit', (e) => {
@@ -1942,7 +1951,7 @@
     if (s < 60) return 'just now';
     if (s < 3600) return Math.round(s / 60) + ' min ago';
     if (s < 6 * 3600) return Math.round(s / 3600) + ' h ago';
-    const d = new Date(t), today = today0();
+    const d = dxb(t), today = today0();
     const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
     if (d >= today) return 'Today ' + hm;
     if (d >= addDays(today, -1)) return 'Yesterday ' + hm;
@@ -2222,8 +2231,8 @@
   // Follow-ups (the daily check of every job), delays and enquiries.
   const EVERY_N = { DAILY: 1, '2 DAYS': 2, WEEKLY: 7, PAUSED: 0 };
   const EVERY_LABEL = { DAILY: 'Daily', '2 DAYS': 'Every 2 days', WEEKLY: 'Weekly', PAUSED: 'Paused' };
-  const dayOf = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d; };
-  const hm = (t) => { const d = new Date(t); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  const dayOf = (t) => { const d = typeof t === 'number' ? dxb(t) : new Date(t); d.setHours(0, 0, 0, 0); return d; };   // a moment → its Dubai day; a sheet date stays itself
+  const hm = (t) => { const d = dxb(t); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
   const keyOf = (j) => String(j.jobNo || j).toUpperCase();
 
   // ---------- follow-ups ----------
@@ -2904,7 +2913,7 @@
     state.rowMap.delete(K);
     rebuildJobs();
   }
-  const nowText = () => { const d = new Date(); return String(d.getDate()).padStart(2, '0') + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + d.getFullYear() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  const nowText = () => { const d = dxb(); return String(d.getDate()).padStart(2, '0') + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + d.getFullYear() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
 
   // a closed job opened by link, notification or search: fetch it once
   function loadClosed(no) {
@@ -3092,7 +3101,8 @@
   // v2.7: every USD amount has its own rate, charges that fill themselves. v2.8: all-in only, one line per
   // charge on laptops, per-box figures in the bar, the statement-style Excel. v2.9: reminders and "changed since you
   // looked". v2.9.1: POD office hours, Home counters that open the side panel, Today's watch for every open task,
-  // This week as an agenda; Fleet removed (at the end of this module).
+  // This week as an agenda; Fleet removed. v2.9.2: Dubai time everywhere, offices 09:00–17:00 (Ethix till 18:00),
+  // DGPC for DG sea exports, pick a day in This week (at the end of this module).
   const BASIS = [['SHIP', 'Per shipment'], ['BOX', 'Per box'], ['B20', 'Per 20′'], ['B40', 'Per 40′'], ['DOC', 'Per document'], ['UNIT', 'Per unit']];
   const BASIS_SHORT = { SHIP: 'Per shipment', BOX: 'Per box', B20: 'Per 20′', B40: 'Per 40′', DOC: 'Per document', UNIT: 'Per unit' };
   const ABBR = new Set(['THC', 'OTHC', 'DPC', 'ISPS', 'VGM', 'BL', 'DG', 'DO', 'ED', 'TLUC', 'ITT', 'FOB', 'VAT', 'MECRC', 'IMCO', 'AWB', 'LCL', 'FCL']);
@@ -3393,7 +3403,7 @@
       (edit ? '<form class="note-box" data-act="cost-note"><input type="text" id="costNote" maxlength="500" placeholder="Add a note to this costing" aria-label="Add a costing note" autocomplete="off"><button type="submit" class="note-post">Add</button></form>' : '') +
       (pend.length || saved.length ? '<ol class="story">' +
         pend.map((t, i) => '<li class="is-pending"><div class="st-when">NOT SAVED YET</div><span class="avatar">' + esc(initials(state.user)) + '</span><div class="st-body"><div><strong>' + esc(state.user) + '</strong> <button type="button" class="link-btn quiet" data-unnote="' + i + '">remove</button></div><div class="st-note">' + esc(t) + '</div></div></li>').join('') +
-        saved.map((n) => '<li><div class="st-when">' + esc(stampText(n.t ? new Date(n.t) : null)) + '</div><span class="avatar' + (n.by === state.user ? '' : ' is-other') + '">' + esc(initials(n.by)) + '</span><div class="st-body"><div><strong>' + esc(n.by) + '</strong></div><div class="st-note">' + esc(n.txt) + '</div></div></li>').join('') + '</ol>'
+        saved.map((n) => '<li><div class="st-when">' + esc(stampText(n.t ? dxb(n.t) : null)) + '</div><span class="avatar' + (n.by === state.user ? '' : ' is-other') + '">' + esc(initials(n.by)) + '</span><div class="st-body"><div><strong>' + esc(n.by) + '</strong></div><div class="st-note">' + esc(n.txt) + '</div></div></li>').join('') + '</ol>'
         : '<div class="tile-empty">' + icon('note', 22) + '<span>' + (edit ? 'Notes are saved with the costing — quote numbers, why a rate changed.' : 'No notes.') + '</span></div>') +
     '</section>';
   }
@@ -3742,7 +3752,7 @@
     const N = (v) => { const n = Math.round(Number(v) * 1e8) / 1e8; return isFinite(n) ? String(n) : '0'; };
     function zip(files, type) {
       const parts = [], central = []; let off = 0;
-      const d = new Date();
+      const d = dxb();
       const dt = ((d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1)) & 0xFFFF, dd = (((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate()) & 0xFFFF;
       files.forEach((f) => {
         const nm = enc.encode(f.name), data = typeof f.data === 'string' ? enc.encode(f.data) : f.data, c = crc(data);
@@ -4041,14 +4051,14 @@
     const D = C.data;
     const read = readLines(C);
     const lines = read.lines || D.lines;
-    const stamp = (t) => (t ? stampText(new Date(t)) : '');
+    const stamp = (t) => (t ? stampText(dxb(t)) : '');
     const statusLine = D.status === 'LOCKED' ? 'COSTING DONE · LOCKED' + (D.lockedBy ? ' · ' + D.lockedBy : '') + (D.lockedAt ? ' · ' + stamp(D.lockedAt) : '')
       : C.dirty || D.status === 'NEW' ? 'DRAFT · NOT SAVED' : 'DRAFT' + (D.by ? ' · SAVED BY ' + D.by : '') + (D.at ? ' · ' + stamp(D.at) : '');
     return {
       job: j.jobNo, customer: j.customer, route: j.mode === 'misc' ? (j.against ? 'AGAINST ' + j.against : 'COSTING ONLY') : (j.pol || '—') + ' → ' + (j.pod || '—'), type: j.type + ' · ' + j.typeName, cargo: j.cargo || (j.mode === 'air' ? 'AIR' : j.mode === 'courier' ? 'COURIER' : ''), boxes: boxesOf(j),
       carrier: j.vendor || '—', carrierLabel: { sea: 'SHIPPING LINE', air: 'AIRLINE', courier: 'COURIER' }[j.mode] || 'VENDOR',
       datesLabel: j.mode === 'courier' ? 'PICK-UP · DELIVERY' : 'ETD · ETA', dates: (j.etd || j.eta) ? fmt(j.etd, true) + '  →  ' + fmt(j.eta, true) : '—',
-      sales: j.sales, cs: j.cs, status: D.status === 'LOCKED' ? 'LOCKED' : 'DRAFT', statusLine, lines, unsaved: C.dirty || D.status === 'NEW', user: state.user, at: fmt(new Date(), true) + ' ' + stampText(new Date()).slice(-5),
+      sales: j.sales, cs: j.cs, status: D.status === 'LOCKED' ? 'LOCKED' : 'DRAFT', statusLine, lines, unsaved: C.dirty || D.status === 'NEW', user: state.user, at: fmt(dxb(Date.now()), true) + ' ' + stampText(dxb(Date.now())).slice(-5),
       notes: C.draft.notes.map((t) => ({ when: 'not saved yet', by: state.user, txt: t })).concat((D.notes || []).slice().reverse().map((n) => ({ when: stamp(n.t), by: n.by, txt: n.txt })))
     };
   }
@@ -4080,7 +4090,7 @@
     const add = (k, label, date, pending) => { if (date && pending) { const d = days(t0, date); out.push({ k, label, d, date, tone: cutTone(d) }); } };
     if (['EXPORT', 'CROSS'].includes(j.cat) && j.type !== 'CRR') add('SI', 'SI cutoff', j.siCut, open(j.sido));
     if (j.cat === 'EXPORT') add('ED', 'ED cutoff', j.edCut, open(j.ed));
-    if (j.cat === 'EXPORT' && j.dg === 'DG') add('DG', 'DG cutoff', j.dgCut, true);
+    if (j.cat === 'EXPORT' && j.dg === 'DG') add('DG', 'DG cutoff', j.dgCut, j.mode === 'sea' ? open(j.dgpc) : true);   // v2.9.2: until DGPC is submitted
     return out;
   }
   function cutChips(j) {
@@ -4095,7 +4105,7 @@
     return { text: st ? st.def.next : n.text.replace(/\s*·?\s*cutoff.*$/i, ''), tone: 'calm', rank: n.rank };
   }
   // Step names say what is still to happen, until it has happened: "SI submission" → "SI submitted".
-  const PEND_NAME = { si: 'SI submission', docsReady: 'Docs to prepare', ed: 'ED pending', blConf: 'BL confirmation pending', blReceived: 'BL to receive', blIss: 'BL issue pending',
+  const PEND_NAME = { si: 'SI submission', docsReady: 'Docs to prepare', ed: 'ED pending', dgpc: 'DGPC pending', blConf: 'BL confirmation pending', blReceived: 'BL to receive', blIss: 'BL issue pending',
     awbConf: 'AWB confirmation pending', awbIss: 'AWB issue pending', tracking: 'Tracking no. pending', costing: 'Costing pending', discharge: 'Discharge list pending',
     doRel: 'DO release pending', customs: 'Customs clearance', sailed: 'Sailing', departed: 'Departing', pickedUp: 'Pick-up', arrived: 'ETA', deliveredEta: 'Delivery',
     delivered: 'Delivery', deliveredOpt: 'Delivery', linked: 'Link to a job' };
@@ -4516,9 +4526,41 @@
     [/NEW YORK|NEWARK|NEW JERSEY|\bJFK\b|\bEWR\b|BALTIMORE|PHILADELPHIA|NORFOLK|CHARLESTON|SAVANNAH|MIAMI|\bMIA\b|JACKSONVILLE|BOSTON|ATLANTA|\bATL\b|WILMINGTON/, 'America/New_York', 'US'],
     [/HOUSTON|\bIAH\b|NEW ORLEANS|DALLAS|CHICAGO|\bORD\b|MOBILE|MEMPHIS/, 'America/Chicago', 'US'], [/LOS ANGELES|\bLAX\b|LONG BEACH|OAKLAND|SEATTLE|TACOMA|SAN FRANCISCO|PORTLAND/, 'America/Los_Angeles', 'US'],
     [/HALIFAX/, 'America/Halifax', 'CA'], [/MONTREAL|TORONTO|\bYYZ\b/, 'America/Toronto', 'CA'], [/VANCOUVER|PRINCE RUPERT/, 'America/Vancouver', 'CA'],
-    [/MANZANILLO|VERACRUZ|LAZARO CARDENAS|MEXICO/, 'America/Mexico_City', 'MX'], [/SANTOS|RIO DE JANEIRO|PARANAGUA|SAO PAULO|ITAJAI|BRAZIL/, 'America/Sao_Paulo', 'BR'],
+    [/ENSENADA|\bMXESE\b|TIJUANA|\bMXTIJ\b|MEXICALI|BAJA CALIFORNIA(?! SUR)/, 'America/Tijuana', 'MX'], [/MAZATLAN|LA PAZ MX|BAJA CALIFORNIA SUR|CABO SAN LUCAS|TOPOLOBAMPO/, 'America/Mazatlan', 'MX'], [/GUAYMAS|HERMOSILLO|SONORA/, 'America/Hermosillo', 'MX'],
+    [/MANZANILLO|VERACRUZ|LAZARO CARDENAS|ALTAMIRA|TAMPICO|PROGRESO|COATZACOALCOS|MONTERREY|GUADALAJARA|MEXICO/, 'America/Mexico_City', 'MX'], [/SANTOS|RIO DE JANEIRO|PARANAGUA|SAO PAULO|ITAJAI|BRAZIL/, 'America/Sao_Paulo', 'BR'],
     [/BUENOS AIRES|ARGENTINA/, 'America/Argentina/Buenos_Aires', 'AR'], [/CALLAO|\bLIMA\b|PERU/, 'America/Lima', 'PE'], [/CARTAGENA|BUENAVENTURA|COLOMBIA/, 'America/Bogota', 'CO'],
     [/SAN ANTONIO CL|VALPARAISO|CHILE/, 'America/Santiago', 'CL'], [/\bCOLON\b|BALBOA|PANAMA/, 'America/Panama', 'PA'], [/GUAYAQUIL|ECUADOR/, 'America/Guayaquil', 'EC'], [/KINGSTON|JAMAICA/, 'America/Jamaica', 'JM'],
+    // v2.9.2: more ports
+    [/HONOLULU|HAWAII/, 'Pacific/Honolulu', 'US'], [/ANCHORAGE|ALASKA/, 'America/Anchorage', 'US'], [/DENVER|SALT LAKE/, 'America/Denver', 'US'], [/PHOENIX/, 'America/Phoenix', 'US'],
+    [/SAN DIEGO|LAS VEGAS/, 'America/Los_Angeles', 'US'], [/TAMPA|PORT EVERGLADES|ORLANDO|DETROIT|CLEVELAND|PITTSBURGH|WASHINGTON|\bIAD\b|CHARLOTTE/, 'America/New_York', 'US'], [/KANSAS CITY|MINNEAPOLIS|ST\.? LOUIS|GALVESTON|CORPUS CHRISTI|FREEPORT TX/, 'America/Chicago', 'US'],
+    [/CALGARY|EDMONTON/, 'America/Edmonton', 'CA'], [/WINNIPEG/, 'America/Winnipeg', 'CA'], [/SAINT JOHN|\bST\.? JOHN NB/, 'America/Moncton', 'CA'],
+    [/PUERTO CORTES|SAN PEDRO SULA|TEGUCIGALPA|HONDURAS/, 'America/Tegucigalpa', 'HN'], [/SANTO TOMAS|PUERTO QUETZAL|PUERTO BARRIOS|GUATEMALA/, 'America/Guatemala', 'GT'], [/PUERTO LIMON|\bMOIN\b|CALDERA|SAN JOSE CR|COSTA RICA/, 'America/Costa_Rica', 'CR'],
+    [/ACAJUTLA|SAN SALVADOR|EL SALVADOR/, 'America/El_Salvador', 'SV'], [/CORINTO|MANAGUA|NICARAGUA/, 'America/Managua', 'NI'], [/BELIZE/, 'America/Belize', 'BZ'],
+    [/CAUCEDO|RIO HAINA|SANTO DOMINGO|DOMINICAN/, 'America/Santo_Domingo', 'DO'], [/PORT OF SPAIN|POINT LISAS|TRINIDAD/, 'America/Port_of_Spain', 'TT'], [/SAN JUAN|PUERTO RICO/, 'America/Puerto_Rico', 'PR'],
+    [/BRIDGETOWN|BARBADOS/, 'America/Barbados', 'BB'], [/NASSAU|FREEPORT|BAHAMAS/, 'America/Nassau', 'BS'], [/HAVANA|MARIEL|CUBA/, 'America/Havana', 'CU'], [/PORT.AU.PRINCE|HAITI/, 'America/Port-au-Prince', 'HT'],
+    [/WILLEMSTAD|CURACAO/, 'America/Curacao', 'CW'], [/ORANJESTAD|ARUBA/, 'America/Aruba', 'AW'], [/POINTE.A.PITRE|GUADELOUPE/, 'America/Guadeloupe', 'GP'], [/FORT.DE.FRANCE|MARTINIQUE/, 'America/Martinique', 'MQ'],
+    [/MONTEVIDEO|URUGUAY/, 'America/Montevideo', 'UY'], [/ASUNCION|PARAGUAY/, 'America/Asuncion', 'PY'], [/LA GUAIRA|PUERTO CABELLO|CARACAS|VENEZUELA/, 'America/Caracas', 'VE'],
+    [/GEORGETOWN GY|GUYANA/, 'America/Guyana', 'GY'], [/PARAMARIBO|SURINAME/, 'America/Paramaribo', 'SR'], [/\bARICA\b|IQUIQUE|ANTOFAGASTA|SAN ANTONIO|SANTIAGO CL/, 'America/Santiago', 'CL'],
+    [/MANAUS/, 'America/Manaus', 'BR'], [/RIO GRANDE|NAVEGANTES|PECEM|SUAPE|SALVADOR BR|VITORIA|FORTALEZA|RECIFE|ITAPOA|SAO FRANCISCO DO SUL/, 'America/Sao_Paulo', 'BR'], [/PAITA/, 'America/Lima', 'PE'], [/BARRANQUILLA|SANTA MARTA|BOGOTA/, 'America/Bogota', 'CO'],
+    [/DAKAR|SENEGAL/, 'Africa/Dakar', 'SN'], [/CONAKRY/, 'Africa/Conakry', 'GN'], [/FREETOWN|SIERRA LEONE/, 'Africa/Freetown', 'SL'], [/MONROVIA|LIBERIA/, 'Africa/Monrovia', 'LR'], [/BANJUL|GAMBIA/, 'Africa/Banjul', 'GM'],
+    [/NOUAKCHOTT|NOUADHIBOU|MAURITANIA/, 'Africa/Nouakchott', 'MR'], [/BISSAU/, 'Africa/Bissau', 'GW'], [/PRAIA|CAPE VERDE|CABO VERDE/, 'Atlantic/Cape_Verde', 'CV'], [/SAN PEDRO CI/, 'Africa/Abidjan', 'CI'],
+    [/LOBITO|NAMIBE/, 'Africa/Luanda', 'AO'], [/POINTE.NOIRE|BRAZZAVILLE|CONGO REP/, 'Africa/Brazzaville', 'CG'], [/MATADI|KINSHASA|\bBOMA\b|\bDRC\b|CONGO/, 'Africa/Kinshasa', 'CD'], [/LUBUMBASHI/, 'Africa/Lubumbashi', 'CD'],
+    [/LIBREVILLE|OWENDO|GABON/, 'Africa/Libreville', 'GA'], [/MALABO|\bBATA\b|EQUATORIAL GUINEA/, 'Africa/Malabo', 'GQ'], [/PORT LOUIS|MAURITIUS/, 'Indian/Mauritius', 'MU'], [/TOAMASINA|TAMATAVE|ANTANANARIVO|MADAGASCAR/, 'Indian/Antananarivo', 'MG'],
+    [/WALVIS BAY|WINDHOEK|NAMIBIA/, 'Africa/Windhoek', 'NA'], [/NACALA/, 'Africa/Maputo', 'MZ'], [/PORT ELIZABETH|NGQURA|GQEBERHA|EAST LONDON|RICHARDS BAY/, 'Africa/Johannesburg', 'ZA'],
+    [/KAMPALA|UGANDA/, 'Africa/Kampala', 'UG'], [/KIGALI|RWANDA/, 'Africa/Kigali', 'RW'], [/ADDIS ABABA|ETHIOPIA/, 'Africa/Addis_Ababa', 'ET'], [/MASSAWA|ASMARA|ERITREA/, 'Africa/Asmara', 'ER'],
+    [/LUSAKA|ZAMBIA/, 'Africa/Lusaka', 'ZM'], [/HARARE|ZIMBABWE/, 'Africa/Harare', 'ZW'], [/LILONGWE|BLANTYRE|MALAWI/, 'Africa/Blantyre', 'MW'], [/\bMAHE\b|SEYCHELLES/, 'Indian/Mahe', 'SC'], [/MORONI|COMOROS/, 'Indian/Comoro', 'KM'],
+    [/LATAKIA|TARTUS|DAMASCUS|SYRIA/, 'Asia/Damascus', 'SY'], [/CHABAHAR|BANDAR IMAM/, 'Asia/Tehran', 'IR'], [/KABUL|AFGHANISTAN/, 'Asia/Kabul', 'AF'],
+    [/TASHKENT|UZBEKISTAN/, 'Asia/Tashkent', 'UZ'], [/ALMATY|ASTANA|AKTAU|KAZAKHSTAN/, 'Asia/Almaty', 'KZ'], [/\bBAKU\b|\bALAT\b|AZERBAIJAN/, 'Asia/Baku', 'AZ'], [/TURKMENBASHI|ASHGABAT|TURKMENISTAN/, 'Asia/Ashgabat', 'TM'], [/YEREVAN|ARMENIA/, 'Asia/Yerevan', 'AM'], [/BISHKEK|KYRGYZ/, 'Asia/Bishkek', 'KG'], [/DUSHANBE|TAJIKISTAN/, 'Asia/Dushanbe', 'TJ'],
+    [/KATHMANDU|BIRGUNJ|NEPAL/, 'Asia/Kathmandu', 'NP'], [/THIMPHU|BHUTAN/, 'Asia/Thimphu', 'BT'], [/YANGON|RANGOON|MYANMAR/, 'Asia/Yangon', 'MM'], [/SIHANOUKVILLE|PHNOM PENH|CAMBODIA/, 'Asia/Phnom_Penh', 'KH'], [/VIENTIANE|\bLAOS\b/, 'Asia/Vientiane', 'LA'],
+    [/MUARA|BRUNEI/, 'Asia/Brunei', 'BN'], [/\bDILI\b|TIMOR/, 'Asia/Dili', 'TL'], [/KUCHING|BINTULU|KOTA KINABALU|SABAH|SARAWAK/, 'Asia/Kuching', 'MY'], [/MAKASSAR|BALIKPAPAN|\bBALI\b|DENPASAR/, 'Asia/Makassar', 'ID'], [/BELAWAN|MEDAN|BATAM|PALEMBANG/, 'Asia/Jakarta', 'ID'],
+    [/DAVAO|SUBIC|BATANGAS/, 'Asia/Manila', 'PH'], [/SONGKHLA/, 'Asia/Bangkok', 'TH'], [/QUY NHON|VUNG TAU/, 'Asia/Ho_Chi_Minh', 'VN'], [/ULSAN|PYEONGTAEK/, 'Asia/Seoul', 'KR'], [/MOJI|SHIMIZU|SENDAI|HIROSHIMA/, 'Asia/Tokyo', 'JP'], [/TAOYUAN|TAIPEI/, 'Asia/Taipei', 'TW'],
+    [/QINZHOU|BEIHAI|FANGCHENG|YINGKOU|RIZHAO|YANTAI|WEIHAI|ZHANGJIAGANG|JIANGYIN|NANTONG|WENZHOU|TAIZHOU|ZHAPU|KUNMING|CHENGDU|XIAN|ZHENGZHOU|HEFEI|CHANGSHA/, 'Asia/Shanghai', 'CN'], [/MACAU|MACAO/, 'Asia/Macau', 'MO'],
+    [/DARWIN/, 'Australia/Darwin', 'AU'], [/TOWNSVILLE|GLADSTONE/, 'Australia/Brisbane', 'AU'], [/HOBART|BELL BAY|TASMANIA/, 'Australia/Hobart', 'AU'], [/LYTTELTON|CHRISTCHURCH|NAPIER|WELLINGTON|PORT CHALMERS/, 'Pacific/Auckland', 'NZ'],
+    [/PORT MORESBY|\bLAE\b|PAPUA/, 'Pacific/Port_Moresby', 'PG'], [/\bSUVA\b|LAUTOKA|FIJI/, 'Pacific/Fiji', 'FJ'], [/NOUMEA|NEW CALEDONIA/, 'Pacific/Noumea', 'NC'], [/PAPEETE|TAHITI/, 'Pacific/Tahiti', 'PF'], [/\bAPIA\b|SAMOA/, 'Pacific/Apia', 'WS'], [/GUAM/, 'Pacific/Guam', 'GU'],
+    [/DUBLIN|\bCORK\b|IRELAND/, 'Europe/Dublin', 'IE'], [/BELFAST|GRANGEMOUTH|GLASGOW|EDINBURGH|BRISTOL|PORTSMOUTH|MANCHESTER|BIRMINGHAM|LONDON GATEWAY|HULL/, 'Europe/London', 'GB'], [/REYKJAVIK|ICELAND/, 'Atlantic/Reykjavik', 'IS'],
+    [/ZURICH|BASEL|GENEVA|SWITZERLAND/, 'Europe/Zurich', 'CH'], [/VIENNA|LINZ|AUSTRIA/, 'Europe/Vienna', 'AT'], [/PRAGUE|CZECH/, 'Europe/Prague', 'CZ'], [/BUDAPEST|HUNGARY/, 'Europe/Budapest', 'HU'], [/BRATISLAVA|SLOVAKIA/, 'Europe/Bratislava', 'SK'],
+    [/BELGRADE|SERBIA/, 'Europe/Belgrade', 'RS'], [/\bBAR\b|MONTENEGRO/, 'Europe/Podgorica', 'ME'], [/DURRES|TIRANA|ALBANIA/, 'Europe/Tirane', 'AL'], [/LUXEMBOURG/, 'Europe/Luxembourg', 'LU'], [/MINSK|BELARUS/, 'Europe/Minsk', 'BY'],
+    [/DUISBURG|DUSSELDORF|COLOGNE|MUNICH|STUTTGART|LEIPZIG|BERLIN/, 'Europe/Berlin', 'DE'], [/DUNKIRK|DUNKERQUE|LYON/, 'Europe/Paris', 'FR'], [/TARRAGONA|LAS PALMAS|CANARY|SEVILLE|MALAGA/, 'Europe/Madrid', 'ES'], [/MOERDIJK|VLISSINGEN/, 'Europe/Amsterdam', 'NL'],
     [/\bUSA\b|UNITED STATES/, 'America/New_York', 'US'], [/CANADA/, 'America/Toronto', 'CA'], [/AUSTRALIA/, 'Australia/Sydney', 'AU']
   ];
   // UN/LOCODE country → zone, for ports typed as codes ("AEJEA", "JEBEL ALI (AEJEA)")
@@ -4528,10 +4570,22 @@
     TG: 'Africa/Lome', ZA: 'Africa/Johannesburg', LY: 'Africa/Tripoli', MA: 'Africa/Casablanca', DZ: 'Africa/Algiers', DJ: 'Africa/Djibouti', SD: 'Africa/Khartoum', NL: 'Europe/Amsterdam', BE: 'Europe/Brussels', DE: 'Europe/Berlin',
     GB: 'Europe/London', FR: 'Europe/Paris', IT: 'Europe/Rome', ES: 'Europe/Madrid', GR: 'Europe/Athens', PT: 'Europe/Lisbon', TR: 'Europe/Istanbul', RO: 'Europe/Bucharest', BG: 'Europe/Sofia', RU: 'Europe/Moscow',
     UA: 'Europe/Kyiv', SE: 'Europe/Stockholm', DK: 'Europe/Copenhagen', NO: 'Europe/Oslo', FI: 'Europe/Helsinki', PL: 'Europe/Warsaw', US: 'America/New_York', CA: 'America/Toronto', MX: 'America/Mexico_City',
-    BR: 'America/Sao_Paulo', AR: 'America/Argentina/Buenos_Aires', PE: 'America/Lima', CO: 'America/Bogota', CL: 'America/Santiago', PA: 'America/Panama', AU: 'Australia/Sydney', NZ: 'Pacific/Auckland', IL: 'Asia/Jerusalem', LB: 'Asia/Beirut' };
-  const WEEKEND = { SA: [5, 6], KW: [5, 6], QA: [5, 6], BH: [5, 6], OM: [5, 6], JO: [5, 6], EG: [5, 6], IQ: [5, 6], YE: [5, 6], DZ: [5, 6], LY: [5, 6], SD: [5, 6], MV: [5, 6], IL: [5, 6], IR: [5] };
-  const OFFICE = [9 * 60, 18 * 60];                               // 09:00–18:00 local, Monday–Friday (or the country's working week)
-  const HOME_ZONE = { tz: 'Asia/Dubai', cc: 'AE', home: true };
+    BR: 'America/Sao_Paulo', AR: 'America/Argentina/Buenos_Aires', PE: 'America/Lima', CO: 'America/Bogota', CL: 'America/Santiago', PA: 'America/Panama', AU: 'Australia/Sydney', NZ: 'Pacific/Auckland', IL: 'Asia/Jerusalem', LB: 'Asia/Beirut',
+    CY: 'Asia/Nicosia', CI: 'Africa/Abidjan', BJ: 'Africa/Porto-Novo', MZ: 'Africa/Maputo', AO: 'Africa/Luanda', SO: 'Africa/Mogadishu', TN: 'Africa/Tunis', HR: 'Europe/Zagreb', SI: 'Europe/Ljubljana', LV: 'Europe/Riga', LT: 'Europe/Vilnius',
+    EE: 'Europe/Tallinn', MT: 'Europe/Malta', GE: 'Asia/Tbilisi', JM: 'America/Jamaica', EC: 'America/Guayaquil', HN: 'America/Tegucigalpa', GT: 'America/Guatemala', CR: 'America/Costa_Rica', SV: 'America/El_Salvador', NI: 'America/Managua',
+    BZ: 'America/Belize', DO: 'America/Santo_Domingo', TT: 'America/Port_of_Spain', PR: 'America/Puerto_Rico', BB: 'America/Barbados', BS: 'America/Nassau', CU: 'America/Havana', HT: 'America/Port-au-Prince', CW: 'America/Curacao',
+    AW: 'America/Aruba', UY: 'America/Montevideo', PY: 'America/Asuncion', VE: 'America/Caracas', GY: 'America/Guyana', SR: 'America/Paramaribo', SN: 'Africa/Dakar', GN: 'Africa/Conakry', SL: 'Africa/Freetown', LR: 'Africa/Monrovia',
+    GM: 'Africa/Banjul', MR: 'Africa/Nouakchott', CV: 'Atlantic/Cape_Verde', CG: 'Africa/Brazzaville', CD: 'Africa/Kinshasa', GA: 'Africa/Libreville', GQ: 'Africa/Malabo', MU: 'Indian/Mauritius', MG: 'Indian/Antananarivo',
+    NA: 'Africa/Windhoek', UG: 'Africa/Kampala', RW: 'Africa/Kigali', ET: 'Africa/Addis_Ababa', ER: 'Africa/Asmara', ZM: 'Africa/Lusaka', ZW: 'Africa/Harare', MW: 'Africa/Blantyre', SC: 'Indian/Mahe', KM: 'Indian/Comoro',
+    SY: 'Asia/Damascus', AF: 'Asia/Kabul', UZ: 'Asia/Tashkent', KZ: 'Asia/Almaty', AZ: 'Asia/Baku', TM: 'Asia/Ashgabat', AM: 'Asia/Yerevan', KG: 'Asia/Bishkek', TJ: 'Asia/Dushanbe', NP: 'Asia/Kathmandu', BT: 'Asia/Thimphu',
+    MM: 'Asia/Yangon', KH: 'Asia/Phnom_Penh', LA: 'Asia/Vientiane', BN: 'Asia/Brunei', TL: 'Asia/Dili', MO: 'Asia/Macau', PG: 'Pacific/Port_Moresby', FJ: 'Pacific/Fiji', NC: 'Pacific/Noumea', PF: 'Pacific/Tahiti', WS: 'Pacific/Apia',
+    GU: 'Pacific/Guam', IE: 'Europe/Dublin', IS: 'Atlantic/Reykjavik', CH: 'Europe/Zurich', AT: 'Europe/Vienna', CZ: 'Europe/Prague', HU: 'Europe/Budapest', SK: 'Europe/Bratislava', RS: 'Europe/Belgrade', ME: 'Europe/Podgorica',
+    AL: 'Europe/Tirane', LU: 'Europe/Luxembourg', BY: 'Europe/Minsk', GP: 'America/Guadeloupe', MQ: 'America/Martinique', GW: 'Africa/Bissau' };
+  const WEEKEND = { SA: [5, 6], KW: [5, 6], QA: [5, 6], BH: [5, 6], OM: [5, 6], JO: [5, 6], EG: [5, 6], IQ: [5, 6], YE: [5, 6], DZ: [5, 6], LY: [5, 6], SD: [5, 6], MV: [5, 6], IL: [5, 6], IR: [5], SY: [5, 6], BD: [5, 6], AF: [4, 5], NP: [6], BN: [0, 5] };
+  const OFFICE = [9 * 60, 17 * 60];                               // v2.9.2: companies work 09:00–17:00 local, Monday–Friday (or the country's week)
+  const HOME_ZONE = { tz: 'Asia/Dubai', cc: 'AE', home: true, hours: [9 * 60, 18 * 60] };   // Ethix: 09:00–18:00 Dubai
+  const hoursOf = (z) => (z && z.hours) || OFFICE;
+  const hrsTxt = (z) => hoursOf(z).map((m) => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0')).join('–');
   const zoneMemo = new Map(), fmtMemo = new Map();
   function portZone(port) {
     const s = upq(port);
@@ -4545,7 +4599,11 @@
   }
   function zoneNow(tz, now) {
     let f = fmtMemo.get(tz);
-    if (f === undefined) { try { f = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hourCycle: 'h23', weekday: 'short', hour: '2-digit', minute: '2-digit' }); } catch (e) { f = null; } fmtMemo.set(tz, f); }
+    if (f === undefined) {
+      const mk = (z) => { try { return new Intl.DateTimeFormat('en-GB', { timeZone: z, hourCycle: 'h23', weekday: 'short', hour: '2-digit', minute: '2-digit' }); } catch (e) { return null; } };
+      f = mk(tz) || ({ 'Europe/Kyiv': 'Europe/Kiev', 'Asia/Yangon': 'Asia/Rangoon' }[tz] ? mk({ 'Europe/Kyiv': 'Europe/Kiev', 'Asia/Yangon': 'Asia/Rangoon' }[tz]) : null);   // older browsers know the old names
+      fmtMemo.set(tz, f);
+    }
     if (!f) return null;
     const p = {}; f.formatToParts(now).forEach((x) => { p[x.type] = x.value; });
     const dow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(p.weekday);
@@ -4554,11 +4612,11 @@
   // open now (and minutes to closing), or closed (and minutes to opening, and which day)
   function officeState(z, now) {
     const t = zoneNow(z.tz, now || new Date()); if (!t) return null;
-    const off = WEEKEND[z.cc] || [0, 6], work = (d) => !off.includes(d), mins = t.h * 60 + t.m;
-    if (work(t.dow) && mins >= OFFICE[0] && mins < OFFICE[1]) return { open: true, t, toClose: OFFICE[1] - mins };
+    const off = WEEKEND[z.cc] || [0, 6], work = (d) => !off.includes(d), mins = t.h * 60 + t.m, H = hoursOf(z);
+    if (work(t.dow) && mins >= H[0] && mins < H[1]) return { open: true, t, toClose: H[1] - mins };
     let add, d = t.dow;
-    if (work(d) && mins < OFFICE[0]) add = OFFICE[0] - mins;
-    else { add = 1440 - mins; d = (d + 1) % 7; for (let k = 0; k < 7 && !work(d); k++) { add += 1440; d = (d + 1) % 7; } add += OFFICE[0]; }
+    if (work(d) && mins < H[0]) add = H[0] - mins;
+    else { add = 1440 - mins; d = (d + 1) % 7; for (let k = 0; k < 7 && !work(d); k++) { add += 1440; d = (d + 1) % 7; } add += H[0]; }
     return { open: false, t, toOpen: add, opensDow: d };
   }
   const hhmm = (t) => String(t.h).padStart(2, '0') + ':' + String(t.m).padStart(2, '0');
@@ -4567,10 +4625,11 @@
   // state: short, on the clock · more: the whole story, for the tooltip
   function clockBits(z, now) {
     const o = officeState(z, now); if (!o) return null;
-    if (o.open) return { time: hhmm(o.t), tone: o.toClose <= 60 ? 'amber' : 'open', state: o.toClose <= 60 ? 'CLOSES IN ' + durTxt(o.toClose) : 'OPEN', more: 'open · closes 18:00 (in ' + durTxt(o.toClose).toLowerCase() + ')', o };
-    return { time: hhmm(o.t), tone: 'closed', state: 'CLOSED', more: 'closed · opens ' + (o.toOpen < 1440 && o.opensDow === (o.t.dow + (o.t.h >= 9 ? 1 : 0)) % 7 ? (o.t.h >= 9 ? 'tomorrow' : 'today') : DOW[o.opensDow]) + ' 09:00 (in ' + durTxt(o.toOpen).toLowerCase() + ')', o };
+    const [o9, o5] = hrsTxt(z).split('–'), h9 = hoursOf(z)[0] / 60;
+    if (o.open) return { time: hhmm(o.t), tone: o.toClose <= 60 ? 'amber' : 'open', state: o.toClose <= 60 ? 'CLOSES IN ' + durTxt(o.toClose) : 'OPEN', more: 'open · closes ' + o5 + ' (in ' + durTxt(o.toClose).toLowerCase() + ')', o };
+    return { time: hhmm(o.t), tone: 'closed', state: 'CLOSED', more: 'closed · opens ' + (o.toOpen < 1440 && o.opensDow === (o.t.dow + (o.t.h >= h9 ? 1 : 0)) % 7 ? (o.t.h >= h9 ? 'tomorrow' : 'today') : DOW[o.opensDow]) + ' ' + o9 + ' (in ' + durTxt(o.toOpen).toLowerCase() + ')', o };
   }
-  const clockTitle = (port, z, c) => 'Local time at ' + upq(port) + ' — ' + c.more + '. Office hours 09:00–18:00, ' + weekTxt(z) + '.';
+  const clockTitle = (port, z, c) => 'Local time at ' + upq(port) + ' — ' + c.more + '. Office hours ' + hrsTxt(z) + ', ' + weekTxt(z) + '.';
   // The live clock under a port name on the job page (ticks by itself).
   function portClock(port, where) {
     const z = portZone(port); if (!z) return '';
@@ -4889,12 +4948,12 @@
     const body = remGroups(state.reminders || [], 0);
     return '<section class="tile t-act t-day' + anim + '" style="--d:340ms" aria-labelledby="dayTitle">' +
       '<div class="tile-head"><h2 class="tile-title" id="dayTitle">MY DAY</h2><button type="button" class="tile-link rm-add" data-act="rem-add">' + icon('plus', 14) + 'Reminder</button></div>' +
-      '<div class="tile-body">' + (brief ? '<div class="md-brief">' + brief + '</div>' : '<div class="md-brief is-calm">' + icon('check', 15) + '<span>All caught up — nothing new since you looked.</span></div>') +
+      '<div class="tile-body">' + (brief ? '<div class="md-brief">' + brief + '</div>' : '') +
         (body || '<p class="rm-empty">No reminders. Add one for anything that is not a booking — a call, a payment, a rate to check.</p>') + '</div></section>';
   }
   // ================================================================ v2.9.1 — TODAY'S WATCH: what still has to happen, and by when
   // Before sailing: SI, ED and BL confirmation — by their cutoff, or by the sailing date when there is no cutoff
-  // (plus the DG cutoff). Still open after the ship sailed = overdue. Imports: the line free time ending or over.
+  // (v2.9.2: DGPC for DG sea exports, the DG cutoff for air). Still open after the ship sailed = overdue. Imports: the line free time ending or over.
   function watchItems91(active, t0) {
     const out = [];
     const cutW = (d) => (d < 0 ? (-d) + (d === -1 ? ' day' : ' days') + ' overdue' : d === 0 ? 'cutoff today' : d === 1 ? 'cutoff tomorrow' : 'cutoff in ' + d + ' days');
@@ -4913,7 +4972,8 @@
         task(!j.sido || j.sido === 'PENDING', j.siCut, 'SI NOT SUBMITTED', 'SI not submitted');
         if (j.cat === 'EXPORT') task(!j.ed || j.ed === 'PENDING', j.edCut, 'ED NOT PASSED', 'ED not passed');
         task(j.bl !== NA && !BL_OK.includes(j.bl), null, air ? 'AWB NOT CONFIRMED' : 'BL NOT CONFIRMED', air ? 'AWB not confirmed' : 'BL not confirmed');
-        if (j.cat === 'EXPORT' && j.dg === 'DG' && j.dgCut && !(sd !== null && sd < 0)) { const dc = days(t0, j.dgCut); if (dc >= -1 && dc <= 3) add(j, 'DG CUTOFF', 'DG cutoff', dc, dc < 0 ? 'passed yesterday' : dc === 0 ? 'today' : dc === 1 ? 'tomorrow' : 'in ' + dc + ' days'); }
+        if (j.cat === 'EXPORT' && j.dg === 'DG' && j.mode === 'sea') task(!j.dgpc || j.dgpc === 'PENDING', j.dgCut, 'DGPC NOT SUBMITTED', 'DGPC not submitted');   // v2.9.2
+        else if (j.cat === 'EXPORT' && j.dg === 'DG' && j.dgCut && !(sd !== null && sd < 0)) { const dc = days(t0, j.dgCut); if (dc >= -1 && dc <= 3) add(j, 'DG CUTOFF', 'DG cutoff', dc, dc < 0 ? 'passed yesterday' : dc === 0 ? 'today' : dc === 1 ? 'tomorrow' : 'in ' + dc + ' days'); }
       }
       if (j.cat === 'IMPORT' && j.arrived && !j.delivery && j.lineFreeEnd) {
         const d = days(t0, j.lineFreeEnd);
@@ -4953,14 +5013,17 @@
   }
   // the week as an agenda: a strip of seven days (how much sails and arrives each day), then day by day
   function weekTile91(m, anim) {
-    const t0 = today0(), ev = [];
+    const t0 = today0(); let ev = [];
     m.arriving.forEach((j) => ev.push({ j, d: j.eta, k: 'arr' }));
     m.departing.forEach((j) => ev.push({ j, d: j.etd, k: 'dep' }));
     ev.sort((a, b) => a.d - b.d || (a.k === b.k ? 0 : a.k === 'dep' ? -1 : 1));
-    const nA = m.arriving.length, nD = m.departing.length;
-    const strip = '<div class="wk-strip" aria-hidden="true">' + Array.from({ length: 7 }, (_, i) => addDays(t0, i)).map((d, i) => {
-      const e = ev.filter((x) => +dayOf(x.d) === +d), a = e.filter((x) => x.k === 'arr').length, s = e.length - a;
-      return '<span class="wk-day' + (i === 0 ? ' is-today' : '') + (e.length ? '' : ' is-none') + '"><em>' + DOW_UP[d.getDay()] + '</em><b>' + d.getDate() + '</b><span class="wk-n">' + (s ? '<i class="is-dep">' + s + '</i>' : '') + (a ? '<i class="is-arr">' + a + '</i>' : '') + '</span></span>';
+    const pick = wkPick92(t0), all = ev;                          // v2.9.2: a day picked in the strip (tap it again for the whole week)
+    ev = pick ? all.filter((x) => +dayOf(x.d) === +pick) : all;
+    const nA = ev.filter((x) => x.k === 'arr').length, nD = ev.length - nA;
+    const strip = '<div class="wk-strip' + (pick ? ' has-pick' : '') + '" role="group" aria-label="Pick a day">' + Array.from({ length: 7 }, (_, i) => addDays(t0, i)).map((d, i) => {
+      const e = all.filter((x) => +dayOf(x.d) === +d), a = e.filter((x) => x.k === 'arr').length, s = e.length - a, on = !!pick && +pick === +d;
+      return '<button type="button" class="wk-day' + (i === 0 ? ' is-today' : '') + (e.length ? '' : ' is-none') + (on ? ' is-on' : '') + '" data-wkday="' + isoOf(d) + '" aria-pressed="' + on + '" title="' + esc(DOW[d.getDay()] + ' ' + d.getDate() + ' ' + MON91[d.getMonth()] + ' · ' + (s ? s + ' sailing' : 'none sailing') + ', ' + (a ? a + ' arriving' : 'none arriving')) + '">' +
+        '<em>' + DOW_UP[d.getDay()] + '</em><b>' + d.getDate() + '</b><span class="wk-n">' + (s ? '<i class="is-dep">' + s + '</i>' : '') + (a ? '<i class="is-arr">' + a + '</i>' : '') + '</span></button>';
     }).join('') + '</div>';
     const tag = (e) => (e.k === 'arr' ? (e.j.mode === 'courier' ? 'DELIVERY' : 'ARRIVES') : e.j.mode === 'air' ? 'DEPARTS' : e.j.mode === 'courier' ? 'PICK-UP' : 'SAILS');
     let last = -1, list = '';
@@ -4971,9 +5034,22 @@
     });
     return '<section class="tile t-week' + anim + '" style="--d:280ms" aria-labelledby="weekTitle">' +
       '<div class="tile-head"><h2 class="tile-title" id="weekTitle">THIS WEEK</h2><span class="tile-count">' + ev.length + '</span></div>' +
-      strip + '<div class="wk-legend"><span><i class="is-dep"></i>Sailing ' + nD + '</span><span><i class="is-arr"></i>Arriving ' + nA + '</span></div><div class="tile-body">' + (list || empty('calendar', 'Nothing sails or arrives in the next 7 days.')) + '</div>' + seeAll('week', ev.length) + '</section>';
+      strip + '<div class="wk-legend"><span><i class="is-dep"></i>Sailing ' + nD + '</span><span><i class="is-arr"></i>Arriving ' + nA + '</span>' + (pick ? '<button type="button" class="wk-all" data-wkday="">Whole week</button>' : '') + '</div>' +
+      '<div class="tile-body">' + (list || empty('calendar', pick ? 'Nothing sails or arrives on ' + DOW[pick.getDay()] + ' ' + pick.getDate() + ' ' + MON91[pick.getMonth()] + '.' : 'Nothing sails or arrives in the next 7 days.')) + '</div>' + seeAll('week', ev.length) + '</section>';
   }
-  // ================================================================ v2.9.1 — Home: POD OFFICE HOURS (times in your time)
+  // the picked day (a Date at local midnight) while it is still inside the coming seven days, else null
+  function wkPick92(t0) {
+    const k = state.wkDay92; if (!k) return null;
+    for (let i = 0; i < 7; i++) { const d = addDays(t0 || today0(), i); if (isoOf(d) === k) return d; }
+    state.wkDay92 = ''; return null;
+  }
+  // the side panel for THIS WEEK follows the picked day
+  function weekPanel92(m) {
+    const pick = wkPick92(today0()), list = m.departing.concat(m.arriving);
+    if (!pick) return ['THIS WEEK', list];
+    return [DOW_UP[pick.getDay()] + ' · ' + pick.getDate() + ' ' + MON91[pick.getMonth()].toUpperCase(), list.filter((j) => (m.departing.includes(j) && j.etd && +dayOf(j.etd) === +pick) || (m.arriving.includes(j) && j.eta && +dayOf(j.eta) === +pick))];
+  }
+  // ================================================================ v2.9.1 — Home: POD OFFICE HOURS (v2.9.2: times in Dubai time)
   // The destination port of each of your jobs, by name: teal = open, amber = closing within the hour, grey = closed.
   // Open ones by who closes first, then who opens first.
   function portList91(t0) {
@@ -4985,23 +5061,23 @@
     return Array.from(map.values()).map((e) => Object.assign(e, { o: officeState(e.z, now) })).filter((e) => e.o)
       .sort((a, b) => (a.o.open !== b.o.open ? (a.o.open ? -1 : 1) : a.o.open ? a.o.toClose - b.o.toClose : a.o.toOpen - b.o.toOpen) || b.jobs.length - a.jobs.length);
   }
-  const yourTime91 = (d) => String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  const yourTime91 = (d) => { const x = dxb(d); return String(x.getHours()).padStart(2, '0') + ':' + String(x.getMinutes()).padStart(2, '0'); };   // Dubai time
   function portState91(o, now) {
-    if (o.open) return o.toClose <= 60 ? { tone: 'amber', txt: 'closes in ' + o.toClose + ' min' } : { tone: 'open', txt: 'closes ' + yourTime91(new Date(+now + o.toClose * 60000)) };
-    const at = new Date(+now + o.toOpen * 60000), dd = days(dayOf(now), dayOf(at));
-    return { tone: 'closed', txt: 'opens ' + (dd === 0 ? '' : dd === 1 ? 'tomorrow ' : DOW[at.getDay()] + ' ') + yourTime91(at) };
+    if (o.open) { const at = +now + o.toClose * 60000; return o.toClose <= 60 ? { tone: 'amber', txt: 'closes in ' + o.toClose + ' min' } : { tone: 'open', txt: 'closes ' + (days(dayOf(+now), dayOf(at)) === 1 ? 'tomorrow ' : '') + yourTime91(at) }; }
+    const at = +now + o.toOpen * 60000, dd = days(dayOf(+now), dayOf(at));
+    return { tone: 'closed', txt: 'opens ' + (dd === 0 ? '' : dd === 1 ? 'tomorrow ' : DOW[dxb(at).getDay()] + ' ') + yourTime91(at) };
   }
   function portChip91(e, now) {
     const c = portState91(e.o, now);
-    return '<button type="button" class="po-chip is-' + c.tone + '" data-port91="' + esc(e.port) + '" title="' + esc(portName91(e.port) + ' — local time ' + hhmm(e.o.t) + ' · office 09:00–18:00, ' + weekTxt(e.z) + ' · ' + e.jobs.length + (e.jobs.length === 1 ? ' job' : ' jobs')) + '">' +
+    return '<button type="button" class="po-chip is-' + c.tone + '" data-port91="' + esc(e.port) + '" title="' + esc(portName91(e.port) + ' — local time ' + hhmm(e.o.t) + ' · office ' + hrsTxt(e.z) + ' their time, ' + weekTxt(e.z) + ' · ' + e.jobs.length + (e.jobs.length === 1 ? ' job' : ' jobs')) + '">' +
       '<i></i><b>' + esc(portName91(e.port)) + '</b><span>' + esc(c.txt) + '</span></button>';
   }
   function portOffices(anim) {
     const t0 = today0(), now = new Date(), L = portList91(t0);
     return '<section class="ports glass' + (anim || '') + '" id="portOffices" aria-labelledby="poTitle" style="--d:20ms">' +
-      '<div class="po-head"><h2 class="po-k" id="poTitle">POD OFFICE HOURS</h2><span class="po-now">YOUR TIME <b>' + yourTime91(now) + '</b></span></div>' +
+      '<div class="po-head"><h2 class="po-k" id="poTitle">POD OFFICE HOURS</h2><span class="po-now" title="Every time here is Dubai time. Ethix office hours 09:00–18:00, Monday–Friday.">DUBAI TIME <b>' + yourTime91(now) + '</b></span></div>' +
       (L.length ? '<div class="po-chips">' + L.map((e) => portChip91(e, now)).join('') + '<button type="button" class="po-chip is-more" data-act="ports-all" hidden>+0 more</button></div>'
-        : '<p class="po-none">The ports of your jobs show here, with their office hours in your time.</p>') + '</section>';
+        : '<p class="po-none">The ports of your jobs show here, with their office hours in Dubai time.</p>') + '</section>';
   }
   // keep the chips to two rows (three on the phone); the rest are counted in "+N more"
   function fitPorts91() {
@@ -5021,7 +5097,7 @@
   const portJobsPop91 = (port) => () => {
     const e = portList91(today0()).find((x) => x.port === port); if (!e) return '<p class="pop-text">No jobs.</p>';
     const c = portState91(e.o, new Date());
-    return '<div class="pop-title">' + esc(portName91(port)) + '</div><p class="pop-text">Local time ' + hhmm(e.o.t) + ' · ' + esc(c.txt) + ' (your time)</p>' +
+    return '<div class="pop-title">' + esc(portName91(port)) + '</div><p class="pop-text">Local time ' + hhmm(e.o.t) + ' · ' + esc(c.txt) + ' Dubai time</p>' +
       '<ul class="chg-list">' + e.jobs.map((j) => '<li><button type="button" data-fl-open="' + esc(j.jobNo) + '">' + changedDot(j) + '<b>' + esc(j.jobNo) + '</b><span class="chg-who">' + esc(j.customer || '—') + '</span><span class="chg-what">' + esc(j.route) + ' · ' + esc(rowNext(j).text) + '</span></button></li>').join('') + '</ul>';
   };
 
@@ -5056,15 +5132,15 @@
     } else if (kind === 'sied') {
       const item = (j) => {
         const sailed = !!(j.etd && j.etd < t0), C = cutsFor(j, t0);
-        const one = (k, v, show) => {
+        const one = (k, v, show, ck) => {
           if (!show || v === NA) return { h: '', d: 99 };
           if (v && v !== 'PENDING') return { h: '<span class="cut-chip is-done"><b>' + k + '</b>✓</span>', d: 99 };
           if (sailed) return { h: '<span class="cut-chip is-red"><b>' + k + '</b>SAILED</span>', d: -99 };
-          const c = C.find((x) => x.k === k);
+          const c = C.find((x) => x.k === (ck || k));
           return c ? { h: '<span class="cut-chip is-' + c.tone + '"><b>' + k + '</b>' + esc(cutWhen(c.d, c.date)) + '</span>', d: c.d } : { h: '<span class="cut-chip is-calm"><b>' + k + '</b>NO CUTOFF</span>', d: 50 };
         };
-        const si = one('SI', j.sido, true), ed = one('ED', j.ed, j.cat === 'EXPORT'), d = Math.min(si.d, ed.d);
-        return { j, d, h: row(j, '', '<span class="dr-side is-cuts">' + si.h + ed.h + '</span>') };
+        const si = one('SI', j.sido, true), ed = one('ED', j.ed, j.cat === 'EXPORT'), dg = one('DGPC', j.dgpc, j.cat === 'EXPORT' && j.dg === 'DG' && j.mode === 'sea', 'DG'), d = Math.min(si.d, ed.d, dg.d);
+        return { j, d, h: row(j, '', '<span class="dr-side is-cuts">' + si.h + ed.h + dg.h + '</span>') };
       };
       const L = list.map(item).sort((a, b) => a.d - b.d);
       html = group('OVERDUE OR WITHIN 24 H', L.filter((x) => x.d <= 1).map((x) => x.h), 'red') + group('NEXT 3 DAYS', L.filter((x) => x.d > 1 && x.d <= 3).map((x) => x.h), 'amber') + group('LATER', L.filter((x) => x.d > 3).map((x) => x.h));
@@ -5079,7 +5155,8 @@
     } else if (kind === 'watch') {
       html = m.watch.map((w) => row(w.j, '<span class="dr-next"><span class="dr-what">' + esc(w.say) + '</span></span>', '<span class="dr-side is-' + (w.level === 'urgent' ? 'red' : 'amber') + '"><b>' + esc(w.when) + '</b></span>')).join('');
     } else if (kind === 'week') {
-      const ev = m.departing.map((j) => ({ j, d: j.etd, k: 'dep' })).concat(m.arriving.map((j) => ({ j, d: j.eta, k: 'arr' }))).sort((a, b) => a.d - b.d);
+      const pick = wkPick92(t0);
+      const ev = m.departing.map((j) => ({ j, d: j.etd, k: 'dep' })).concat(m.arriving.map((j) => ({ j, d: j.eta, k: 'arr' }))).filter((e) => !pick || +dayOf(e.d) === +pick).sort((a, b) => a.d - b.d);
       html = ev.map((e) => row(e.j, '', side(e.k === 'arr' ? 'ARRIVES' : e.j.mode === 'air' ? 'DEPARTS' : 'SAILS', e.d, rel91(e.d, t0), e.k === 'arr' ? 'teal' : ''))).join('');
     } else if (kind === 'atsea') {
       html = list.map((j) => row(j, '<span class="dr-note">Day ' + j.dayN + ' of ' + j.dayT + '</span>', side('ETA', j.eta, rel91(j.eta, t0)))).join('');
@@ -5105,7 +5182,8 @@
     const bl = j.mode === 'misc' || v === NA ? '' : !v || v === 'BL PENDING' ? k + ' pending' : v === 'CONFIRMATION PENDING' ? k + ' to confirm'
       : /^CONFIRMED/.test(v) ? (air || cr ? k + ' confirmed' : v.slice(10) + ' confirmed') : /ISSUED$/.test(v) ? (air || cr ? k + ' issued' : v.slice(0, 3) + ' issued') : nice(v);
     const cs = costState(j), cost = cs === 'none' ? '' : 'Costing ' + (cs === 'draft' ? 'draft' : cs === 'done' ? 'done' : 'pending');
-    return { hold: j.hold, where, rest: [bl, cost].filter(Boolean) };
+    const dgpc = j.cat === 'EXPORT' && j.dg === 'DG' && j.mode === 'sea' && j.dgpc !== NA ? (['SUBMITTED', 'APPROVED'].includes(j.dgpc) ? '' : 'DGPC pending') : '';
+    return { hold: j.hold, where, rest: [bl, dgpc, cost].filter(Boolean) };
   }
   async function jobsWord91() {
     const t0 = today0(), X = XL.X, jobs = scoped().filter((j) => j.active);
@@ -5207,6 +5285,8 @@
       }
       if (e.target.closest('[data-act="rem-late"]')) { go('#/follow-ups'); return; }
       if (e.target.closest('[data-act="jobs-word"]')) { jobsWord91(); return; }
+      const wd = e.target.closest('[data-wkday]');
+      if (wd) { state.wkDay92 = wd.dataset.wkday && wd.dataset.wkday !== state.wkDay92 ? wd.dataset.wkday : ''; rerender(); return; }
       const ra = e.target.closest('[data-act="rem-add"]'); if (ra && canNote()) { remOpenForm(ra, null, ra.dataset.remJob || ''); return; }
       const rd = e.target.closest('[data-rem-done]'); if (rd) { const r = (state.reminders || []).find((x) => x.id === rd.dataset.remDone); if (r) remDone(r.id, r.status !== 'DONE'); return; }
       const re = e.target.closest('[data-rem-edit]'); if (re) { const r = (state.reminders || []).find((x) => x.id === re.dataset.remEdit); if (r) remOpenForm(re, r); return; }
@@ -5232,7 +5312,7 @@
     const map = {
       active: ['ACTIVE JOBS', m.active], costing: ['COSTING DUE', m.costing], sied: ['SI / ED DUE', m.sied],
       free: ['FREE TIME ENDING ≤ 2 DAYS', m.freeJobs], atsea: ['AT SEA NOW', m.atSea], arriving: ['ARRIVING THIS WEEK', m.arriving],
-      departing: ['DEPARTING THIS WEEK', m.departing], hold: ['ON HOLD', m.hold], watch: ['TODAY’S WATCH', m.watch.map((w) => w.j)], week: ['THIS WEEK', m.departing.concat(m.arriving)],
+      departing: ['DEPARTING THIS WEEK', m.departing], hold: ['ON HOLD', m.hold], watch: ['TODAY’S WATCH', m.watch.map((w) => w.j)], week: weekPanel92(m),
       behind: ['NOT FOLLOWED UP YET', isSales() ? behindList() : []]
     };
     const entry = map[kind]; if (!entry) return;
