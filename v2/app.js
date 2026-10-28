@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders — v2.9.3)
+   enquiries, follow-ups, delays, close & archive, costing, reminders — v2.9.4)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -3123,7 +3123,7 @@
   // This week as an agenda; Fleet removed. v2.9.2: Dubai time everywhere, offices 09:00–17:00 (Ethix till 18:00),
   // DGPC for DG sea exports, pick a day in This week. v2.9.3: overseas office hours, calendar weeks, switch BL, sea import
   // BL steps, remarks on the job page, copy a job number, follow-ups by weekday or date, preponed, delivery note
-  // (at the end of this module).
+  // (at the end of this module). v2.9.4: the cost sheet's PROFIT and PROFIT / BOX in AED and USD.
   const BASIS = [['SHIP', 'Per shipment'], ['BOX', 'Per box'], ['B20', 'Per 20′'], ['B40', 'Per 40′'], ['DOC', 'Per document'], ['UNIT', 'Per unit']];
   const BASIS_SHORT = { SHIP: 'Per shipment', BOX: 'Per box', B20: 'Per 20′', B40: 'Per 40′', DOC: 'Per document', UNIT: 'Per unit' };
   const ABBR = new Set(['THC', 'OTHC', 'DPC', 'ISPS', 'VGM', 'BL', 'DG', 'DO', 'ED', 'TLUC', 'ITT', 'FOB', 'VAT', 'MECRC', 'IMCO', 'AWB', 'LCL', 'FCL']);
@@ -3811,7 +3811,7 @@
         let numFmtId = 0;
         if (o.fmt) { const builtin = { General: 0, '0': 1, '0.00': 2, '#,##0': 3, '#,##0.00': 4, '0%': 9, '0.00%': 10 }[o.fmt]; numFmtId = builtin !== undefined ? builtin : 164 + idx(fmts, o.fmt); }
         const a = o.align || {};
-        const al = a.h || a.v || a.wrap || a.indent ? '<alignment' + (a.h ? ' horizontal="' + a.h + '"' : '') + (a.v ? ' vertical="' + a.v + '"' : '') + (a.wrap ? ' wrapText="1"' : '') + (a.indent ? ' indent="' + a.indent + '"' : '') + '/>' : '';
+        const al = a.h || a.v || a.wrap || a.indent || a.shrink ? '<alignment' + (a.h ? ' horizontal="' + a.h + '"' : '') + (a.v ? ' vertical="' + a.v + '"' : '') + (a.wrap ? ' wrapText="1"' : '') + (a.indent ? ' indent="' + a.indent + '"' : '') + (a.shrink ? ' shrinkToFit="1"' : '') + '/>' : '';
         const xf = '<xf numFmtId="' + numFmtId + '" fontId="' + fontId + '" fillId="' + fillId + '" borderId="' + borderId + '" xfId="0"' + (numFmtId ? ' applyNumberFormat="1"' : '') + (fontId ? ' applyFont="1"' : '') + (fillId ? ' applyFill="1"' : '') + (borderId ? ' applyBorder="1"' : '') + (al ? ' applyAlignment="1">' + al + '</xf>' : '/>');
         const id = idx(xfs, xf); seen.set(key, id); return id;
       }
@@ -3886,10 +3886,12 @@
   // One sheet, read top to bottom like a statement: the job · the result (selling, buying, profit, margin, mark-up) ·
   // per box · the charges with BUYING and SELLING side by side · the result in one line · notes.
   // Columns A–J. Every USD amount converts at its own rate (the @ column, USD lines only); everything is a live formula.
+  // v2.9.4: PROFIT and PROFIT / BOX read AED (the figure) then USD (company rate) on a line of its own.
   function costWorkbook(info, logo, opts = {}) {
     const S = XL.Styles(), C = XL.col;
     const INK = '0B1B2B', NAVY = '1C5179', GREY = '5A6878', MUTE = '7D8B9A', LINE = 'D5DDE5', HAIR = 'E8EDF2', TEAL = '0E7C7B', ZEBRA = 'F7F9FB', RED = 'B42318';
     const AED = '#,##0.00;[Red]-#,##0.00', AEDL = '#,##0.00;[Red]-#,##0.00;"–"', FX = '0.000##', PCT = '0.0%;[Red]-0.0%', USD2 = '#,##0.00;[Red]-#,##0.00';
+    const AEDP = '"AED "#,##0.00;[Red]"AED -"#,##0.00', USDL = '"USD "#,##0.00;[Red]"USD -"#,##0.00';   // PROFIT and PROFIT / BOX: AED, then USD
     const RATEF = { USD: '"USD "#,##0.00##', AED: '"AED "#,##0.00##' };
     const CO = 3.685;                                              // per-box USD figures use the company rate
     const W = [28, 22, 14, 6.5, 16.5, 8.5, 16, 16.5, 8.5, 16];   // A–J (generous: nothing may clip in Excel — not even AED 1,234,567.89)
@@ -3926,7 +3928,8 @@
     };
     // KPI tiles: a thin rule on top, a hairline between tiles (left edge), label then value
     const tileLab = (first, color) => S({ font: { sz: 7.5, b: true, color: color || MUTE }, border: Object.assign({ top: ['thin', LINE] }, first ? {} : { left: ['thin', LINE] }), align: { v: 'bottom', indent: 1 } });
-    const tileVal = (first, sz, color, fmt, bottom) => S({ font: { sz, b: true, color: color || INK }, fmt, border: Object.assign(first ? {} : { left: ['thin', LINE] }, bottom ? { bottom: ['thin', LINE] } : {}), align: { h: 'left', v: 'center', indent: 1 } });
+    const tileVal = (first, sz, color, fmt, bottom, v) => S({ font: { sz, b: true, color: color || INK }, fmt, border: Object.assign(first ? {} : { left: ['thin', LINE] }, bottom ? { bottom: ['thin', LINE] } : {}), align: { h: 'left', v: v || 'center', indent: 1, shrink: first } });
+    const tileUsd = (first, color, fmt, bottom) => S({ font: { sz: 9.5, b: true, color: color || MUTE }, fmt, border: Object.assign(first ? {} : { left: ['thin', LINE] }, bottom ? { bottom: ['thin', LINE] } : {}), align: { h: 'left', v: 'top', indent: 1, shrink: first } });
     // table cells: z = zebra row; side '' | 'b' | 's'; the selling side opens with a hairline (the divider)
     const td = (z, kind, side, fmt) => {
       const o = { border: Object.assign({ bottom: ['thin', HAIR] }, side === 's' && (kind === 'rate' || kind === 'incl') ? { left: ['thin', LINE] } : {}), fill: z ? ZEBRA : undefined };
@@ -3960,7 +3963,7 @@
     facts(7, [['CONTAINERS', info.cargo], [info.carrierLabel, info.carrier], [info.datesLabel, info.dates], ['SALES · CUSTOMER SERVICE', (info.sales || '—') + ' · ' + (info.cs || '—')]]);
     height(9, 10);
     // ---- the table first (the summary refers to its totals)
-    const G = 15, H = 16, first = 17, lines = info.lines, last = first + lines.length - 1, T = first + lines.length;
+    const G = 17, H = 18, first = 19, lines = info.lines, last = first + lines.length - 1, T = first + lines.length;   // v2.9.4: two rows lower (the USD lines)
     cell(G, 0, 3, 'CHARGES · ' + lines.length, st.chg);
     cell(G, 4, 6, 'BUYING', st.grpB);
     cell(G, 7, LAST, 'SELLING', st.grpS);
@@ -4002,35 +4005,37 @@
     const resF = '"Selling "&TEXT(' + jT + ',"#,##0.00")&"  −  Buying "&TEXT(' + gT + ',"#,##0.00")&"  =  Profit "&TEXT(' + jT + '-' + gT + ',"#,##0.00")&IF(' + jT + '=0,"","  ·  "&TEXT((' + jT + '-' + gT + ')/' + jT + ',"0.0%")&" margin")';
     cell(T + 1, 0, LAST, resTxt, S({ font: { sz: 10.5, b: true, color: p < 0 ? RED : TEAL }, align: { h: 'right', v: 'center', indent: 1 } }), lines.length ? resF : null);
     height(T + 1, 20);
-    // ---- the result (rows 10–11) and per box (rows 12–13)
+    // ---- the result (rows 10–12) and per box (rows 13–15): label · figure · the USD line (PROFIT and PROFIT / BOX only)
     const TILES = [[0, 0], [1, 1], [2, 3], [4, 6], [7, LAST]];        // the same columns as the table below
     const tiles = (rl, items, sz, bottom) => {
-      items.forEach(([label, value, fmt, f, color, lcolor], i) => {
+      items.forEach(([label, value, fmt, f, color, lcolor, usd], i) => {
         const [c1, c2] = TILES[i];
         cell(rl, c1, c2, label, tileLab(i === 0, lcolor));
-        cell(rl + 1, c1, c2, value, tileVal(i === 0, sz, color, fmt, bottom), f);
+        cell(rl + 1, c1, c2, value, tileVal(i === 0, sz, color, fmt, false, 'bottom'), f);
+        cell(rl + 2, c1, c2, usd ? usd[0] : '', tileUsd(i === 0, usd && usd[3], usd && usd[1], bottom), usd ? usd[2] : null);
       });
     };
-    height(10, 14); height(11, 25);
+    const pc = p < 0 ? RED : TEAL;
+    height(10, 14); height(11, 22); height(12, 15);
     tiles(10, [
-      ['PROFIT · AED', p, AED, jT + '-' + gT, p < 0 ? RED : TEAL, TEAL],
+      ['PROFIT', p, AEDP, jT + '-' + gT, pc, TEAL, [p / CO, USDL, '(' + jT + '-' + gT + ')/' + CO, pc]],
       ['MARGIN', ss ? p / ss : 0, PCT, 'IF(' + jT + '=0,0,(' + jT + '-' + gT + ')/' + jT + ')'],
       ['MARK-UP', sb ? p / sb : 0, PCT, 'IF(' + gT + '=0,0,(' + jT + '-' + gT + ')/' + gT + ')'],
       ['BUYING · AED', sb, AED, gT, INK, NAVY],
       ['SELLING · AED', ss, AED, jT, INK, TEAL]
     ], 15, false);
-    height(12, 14); height(13, 21);
-    tiles(12, bx ? [
-      ['PROFIT / BOX · AED', p / bx, AED, '(' + jT + '-' + gT + ')/' + bx, p < 0 ? RED : TEAL],
+    height(13, 14); height(14, 19); height(15, 16);
+    tiles(13, bx ? [
+      ['PROFIT / BOX', p / bx, AEDP, '(' + jT + '-' + gT + ')/' + bx, pc, null, [p / bx / CO, USDL, '(' + jT + '-' + gT + ')/' + bx + '/' + CO, pc]],
       ['BOXES', bx + ' · ' + info.cargo, null, null, INK],
       ['USD RATE · PER BOX', CO, FX, null, INK],
       ['COST / BOX · USD', sb / bx / CO, USD2, gT + '/' + bx + '/' + CO, NAVY],
       ['SELL / BOX · USD', ss / bx / CO, USD2, jT + '/' + bx + '/' + CO, TEAL]
     ] : [
-      ['PROFIT / BOX · AED', '—', null, null, MUTE], ['BOXES', info.cargo || '—', null, null, INK], ['USD RATE · PER BOX', CO, FX, null, INK],
+      ['PROFIT / BOX', '—', null, null, MUTE, null, ['—', null, null, MUTE]], ['BOXES', info.cargo || '—', null, null, INK], ['USD RATE · PER BOX', CO, FX, null, INK],
       ['COST / BOX · USD', '—', null, null, MUTE], ['SELL / BOX · USD', '—', null, null, MUTE]
     ], 12, true);
-    height(14, 12);
+    height(16, 12);
     // ---- under the table: notes, then where it came from
     let r = T + 3;
     if (info.notes.length) {
