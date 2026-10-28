@@ -2008,3 +2008,122 @@ body:has(#savePill:not([hidden])) .toasts { bottom: calc(68px + env(safe-area-in
   .jobs-head { grid-template-areas: "main word" "search search"; grid-template-columns: minmax(0, 1fr) auto; }
   .jobs-head .jobs-word { grid-area: word; align-self: end; height: 40px; padding: 0 13px; gap: 6px; font-size: 13.5px; }
 }
+
+/* ===================================================================================================
+   v2.9.3
+   =================================================================================================== */
+
+/* ---------- Home: the search list sits above the counters and tiles, on a solid card ---------- */
+.home > .page-head { position: relative; z-index: 6; }
+.search-results.glass { background: #FFFFFF; -webkit-backdrop-filter: none; backdrop-filter: none; border-color: var(--line); box-shadow: 0 22px 48px -14px rgba(11, 27, 43, 0.38), 0 2px 6px rgba(11, 27, 43, 0.06); }
+
+/* ---------- the menu: room under the last item so its shadow is not cut (Costing) ---------- */
+.nav-list { padding-bottom: 26px; margin-bottom: -18px; }
+
+/* ---------- Home on laptop screens that are not tall: the wide layout, the page scrolls, six rows + See all ---------- */
+@media (min-width: 1024px) {
+  .view.is-flow .home { display: grid; grid-template-columns: minmax(360px, 1fr) minmax(0, 1.08fr); grid-template-areas: "head ports" "bento bento"; column-gap: clamp(16px, 2vw, 28px); align-items: end; }
+  .view.is-flow .home > .page-head { grid-area: head; }
+  .view.is-flow .home > .ports { grid-area: ports; }
+  .view.is-flow .home > .bento { grid-area: bento; align-self: stretch; grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "kpis kpis kpis" "watch week act"; align-items: stretch; }
+  .view.is-flow .home .tile-body > .li:nth-child(n+7) { display: none; }
+  .view.is-flow .home .t-week .tile-body > .li:nth-child(n+7), .view.is-flow .home .t-watch .tile-body > .li:nth-child(n+7) { display: flex; }   /* the week and the watch count rows, not headings */
+  .view.is-flow .home .t-week .tile-body > .is-more, .view.is-flow .home .t-watch .tile-body > .is-more { display: none !important; }
+  .view.is-flow .home .see-all { display: inline-flex; }
+  .view.is-flow .home .tile-body.has-more { -webkit-mask-image: none; mask-image: none; }
+}
+/* tall screens keep one screen: rows out of sight are counted under the tile */
+.view.is-fit .home .tile-body.has-more { -webkit-mask-image: none; mask-image: none; }
+.more-bar { flex: none; display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 30px; margin-top: 6px; border: 1px solid var(--line); border-radius: 10px; background: #F6F8FB; font-size: 12px; font-weight: 800; color: var(--navy); }
+.more-bar:hover { border-color: var(--navy); background: #FFFFFF; }
+.t-watch .more-bar { border-color: #2B4359; background: #15283B; color: #7FD6D5; }
+.t-watch .more-bar:hover { border-color: #7FD6D5; background: #1B3247; }
+
+/* ---------- OVERSEAS OFFICE HOURS: pages that turn by themselves; the full list in the side panel ---------- */
+.po-chips.is-paged { align-content: flex-start; }
+.po-chips.is-turn { animation: poTurn 0.42s var(--ease); }
+@keyframes poTurn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.po-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 18px; margin-top: -2px; }
+.po-dots { display: inline-flex; align-items: center; gap: 2px; }
+.po-dot { width: 18px; height: 18px; padding: 0; border: none; background: none; display: inline-flex; align-items: center; justify-content: center; }
+.po-dot::before { content: ""; width: 6px; height: 6px; border-radius: 3px; background: #B9C6D2; transition: width 0.2s var(--ease), background-color 0.2s var(--ease); }
+.po-dot.is-on::before { width: 16px; background: var(--navy); }
+.po-dot:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; border-radius: 6px; }
+.po-all { margin-left: auto; padding: 0; border: none; background: none; font-size: 12px; font-weight: 800; color: var(--navy); white-space: nowrap; }
+.po-all:hover { text-decoration: underline; text-underline-offset: 2px; }
+.of-intro { margin: -2px 0 12px; font-size: 12.5px; color: var(--ink-2); }
+.of-row { padding: 9px 0 10px; border-top: 1px solid var(--line-2); }
+.dr-gh + .of-row { border-top: none; }
+.of-top { display: flex; align-items: center; gap: 9px; }
+.of-top i { flex: none; width: 9px; height: 9px; border-radius: 50%; background: #A3B1BF; }
+.of-row.is-open .of-top i { background: var(--teal); box-shadow: 0 0 0 3px rgba(72, 190, 191, 0.22); }
+.of-row.is-amber .of-top i { background: #F79009; box-shadow: 0 0 0 3px rgba(247, 144, 9, 0.2); }
+.of-top b { font-size: 15px; font-weight: 800; color: var(--ink); }
+.of-state { margin-left: auto; font-size: 12.5px; font-weight: 700; white-space: nowrap; color: var(--ink-3); }
+.of-row.is-open .of-state { color: var(--teal-text); }
+.of-row.is-amber .of-state { color: #B54708; }
+.of-sub { margin: 2px 0 0 18px; font-family: var(--f-mono); font-size: 11px; color: var(--ink-3); }
+.of-jobs { display: flex; flex-wrap: wrap; gap: 5px; margin: 7px 0 0 18px; }
+.of-job { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: #FFFFFF; font-family: var(--f-mono); font-size: 12px; font-weight: 600; color: var(--ink); }
+.of-job:hover { border-color: var(--navy); }
+.dr-gh.is-teal { color: var(--teal-text); }
+.dr-gh.is-teal b { background: var(--teal); color: #FFFFFF; }
+
+/* ---------- THIS WEEK: calendar weeks with ‹ › ---------- */
+.wk-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.wk-nav { display: inline-flex; gap: 2px; }
+.wk-arrow { width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 9px; background: #FFFFFF; display: inline-flex; align-items: center; justify-content: center; color: var(--ink-2); }
+.wk-arrow:hover { border-color: var(--navy); color: var(--navy); }
+.wk-arrow:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.wk-arrow.is-prev svg { transform: rotate(90deg); }
+.wk-arrow.is-next svg { transform: rotate(-90deg); }
+.wk-day.is-past { background: #F7F9FB; }
+.wk-day.is-past b, .wk-day.is-past em { color: #9AA9B8; }
+.wk-day.is-past .wk-n i { opacity: 0.6; }
+.wk-tag.is-past { opacity: 0.68; }
+.wk-links { margin-left: auto; display: inline-flex; gap: 12px; }
+.wk-links .wk-all { margin-left: 0; }
+
+/* ---------- tap a job number to copy it ---------- */
+.copy-no { cursor: copy; border-radius: 6px; transition: background-color 0.2s var(--ease), box-shadow 0.2s var(--ease); }
+.copy-no:hover { background: rgba(72, 190, 191, 0.14); box-shadow: 0 0 0 3px rgba(72, 190, 191, 0.14); }
+.copy-no:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+.copy-no.is-copied { background: rgba(72, 190, 191, 0.28); box-shadow: 0 0 0 3px rgba(72, 190, 191, 0.28); }
+.job-row.is-dark .copy-no:hover, .t-watch .copy-no:hover { background: rgba(127, 214, 213, 0.18); }
+
+/* ---------- job page: remarks under the customer name ---------- */
+.vh-remarks { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; column-gap: 10px; max-width: 680px; margin-top: 8px; padding: 8px 8px 8px 12px; border: 1px solid var(--line); border-left: 3px solid var(--teal); border-radius: 10px; background: rgba(255, 255, 255, 0.72); }
+.vh-rm-k { padding-top: 3px; font-family: var(--f-mono); font-size: 9.5px; font-weight: 600; letter-spacing: 0.16em; color: var(--ink-3); }
+.vh-rm-text { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--ink); white-space: pre-line; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.vh-rm-text.is-open { display: block; -webkit-line-clamp: unset; }
+.vh-rm-act { display: inline-flex; align-items: center; gap: 4px; }
+.vh-rm-more { font-size: 12px; }
+.vh-rm-edit { width: 30px; height: 30px; }
+.vh-rm-add { display: inline-flex; align-items: center; gap: 5px; margin-top: 8px; padding: 0; border: none; background: none; font-size: 13px; font-weight: 800; color: var(--navy); }
+.vh-rm-add:hover { text-decoration: underline; text-underline-offset: 2px; }
+@media (max-width: 759px) { .vh-remarks { grid-template-columns: minmax(0, 1fr) auto; } .vh-rm-k { grid-column: 1 / -1; padding-top: 0; margin-bottom: 2px; } }
+
+/* ---------- job actions on a phone: with the delivery note, two by two under UPDATE ---------- */
+@media (max-width: 759px) { .vh-actions:not(.is-ro):has([data-act="dnote"]) { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* ---------- delays and preponed ---------- */
+.delay-chip.is-early { border-color: var(--teal); color: var(--teal-text); }
+.delay-chip.is-early:hover { background: var(--teal-tint); }
+.jr-delay.is-early { background: var(--teal-tint); color: var(--teal-text); }
+.dl-days.is-early { color: var(--teal-text); }
+.dl-total.is-early b { color: var(--teal); }
+.dl-dir { display: inline-flex; align-self: flex-start; width: auto; margin-bottom: 14px; }
+.dl-cuts { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-2); }
+
+/* ---------- switch BL ---------- */
+.sw-hint { margin: 4px 0 0; font-size: 11.5px; font-weight: 700; color: var(--teal-text); }
+
+/* ---------- follow-up plans: a day of the week, a date ---------- */
+.ev-days { flex-wrap: nowrap; gap: 4px; }
+.ev-days .choice { flex: 1 1 0; min-width: 0; padding: 0; }
+.ev-on { margin-top: 10px; }
+.ev-on .date-row { flex-wrap: wrap; }
+.ev-on .date-row input { flex: 1 1 100%; }
+.ev-on .date-row .choice { flex: 1 1 0; }
+.ev-on .choice.is-on { border-color: var(--navy); background: var(--navy); color: #FFFFFF; }
+.rm-rep-hint { margin: 6px 0 0; font-size: 12px; font-weight: 700; color: var(--teal-text); }

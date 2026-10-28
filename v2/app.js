@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders — v2.9.2)
+   enquiries, follow-ups, delays, close & archive, costing, reminders — v2.9.3)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -108,7 +108,8 @@
     ['sales', (h) => h.startsWith('SALES'), 22], ['eta', (h) => h.startsWith('ETA'), 23], ['pol', (h) => h === 'POL', 24],
     ['edCut', (h) => h.startsWith('ED CUTOFF'), 25], ['dgCut', (h) => h.startsWith('DG CUTOFF'), 26], ['lineFree', (h) => h.startsWith('LINE FREE'), 27],
     ['portFree', (h) => h.startsWith('PORT FREE'), 28], ['against', (h) => h.startsWith('AGAINST'), 29], ['freight', (h) => h.startsWith('LINE FREIGHT'), 30],
-    ['dgpc', (h) => h.startsWith('DGPC'), -1]   // v2.9.2: added at the end of the tracker on first use
+    ['dgpc', (h) => h.startsWith('DGPC'), -1],   // v2.9.2: added at the end of the tracker on first use
+    ['switchBl', (h) => h.startsWith('SWITCH BL'), -1]   // v2.9.3: the same
   ];
   const EXPORT = ['SFEF', 'SFEL', 'AFE'], IMPORT = ['SFIF', 'SFIL', 'AFI', 'CND'], CROSS = ['SFC', 'AFC', 'CRR'], AIR = ['AFE', 'AFI', 'AFC'];
   const TYPE_NAMES = { SFEF: 'Sea export · FCL', SFEL: 'Sea export · LCL', AFE: 'Air export', SFIF: 'Sea import · FCL', SFIL: 'Sea import · LCL', AFI: 'Air import', CND: 'Clearance & delivery', SFC: 'Sea cross-trade', AFC: 'Air cross-trade', CRR: 'Courier', MIS: 'Miscellaneous' };
@@ -139,7 +140,7 @@
       customer: g('customer'), vendor: g('vendor'), pol: g('pol').toUpperCase(), pod: g('pod').toUpperCase(),
       cs: g('cs').toUpperCase(), sales: g('sales').toUpperCase(), dg: g('dg').toUpperCase(),
       c20: num(g('c20')), c40: num(g('c40')), remarks: g('remarks'), freight: g('freight'), against: g('against'),
-      loadlist: g('loadlist').toUpperCase(), sido: g('sido').toUpperCase(), ed: g('ed').toUpperCase(), bl: g('bl').toUpperCase(), dgpc: g('dgpc').toUpperCase(),
+      loadlist: g('loadlist').toUpperCase(), sido: g('sido').toUpperCase(), ed: g('ed').toUpperCase(), bl: g('bl').toUpperCase(), dgpc: g('dgpc').toUpperCase(), switchBl: g('switchBl').toUpperCase(),
       docs: g('docs').toUpperCase(), costing: g('costing').toUpperCase(),
       opened: parseDate(g('opened')), etd: parseDate(g('etd')), eta: parseDate(g('eta')),
       siCut: parseDate(g('siCut')), edCut: parseDate(g('edCut')), dgCut: parseDate(g('dgCut')), delivery: parseDate(g('delivery')),
@@ -178,6 +179,7 @@
     bl: ['BL PENDING', 'CONFIRMATION PENDING', 'CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED', NA],
     docs: [NA, 'PENDING', 'RECEIVED'],
     dgpc: ['PENDING', 'SUBMITTED', 'APPROVED', NA],
+    switchBl: ['NO', 'REQUESTED', 'CONFIRMATION PENDING', 'CONFIRMED', 'ISSUED'],
     costing: ['PENDING', 'JOB UPDATED', 'COSTING DONE', 'COMPLETED', 'CANCELLED'],
     dg: ['DG', 'NON DG'],
     type: ['SFEF', 'SFEL', 'AFE', 'SFIF', 'SFIL', 'AFI', 'CND', 'SFC', 'AFC', 'CRR', 'MIS']
@@ -194,6 +196,8 @@
     blConf:     { name: 'BL confirmed', kind: 'field', field: 'bl', done: BL_OK, primary: 'CONFIRMED SBL', choices: ['BL PENDING', 'CONFIRMATION PENDING', 'CONFIRMED OBL', 'CONFIRMED SBL', NA], label: 'BL status', next: 'BL to confirm' },
     blStatus:   { name: 'BL status', kind: 'field', field: 'bl', done: BL_OK, primary: 'CONFIRMED OBL', choices: ['BL PENDING', 'CONFIRMATION PENDING', 'CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED', NA], label: 'BL status', next: 'BL to confirm' },
     blReceived: { name: 'BL received', kind: 'field', field: 'bl', done: BL_OK, primary: 'CONFIRMED OBL', choices: ['BL PENDING', 'CONFIRMATION PENDING', 'CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED', NA], label: 'BL status', next: 'BL to receive' },
+    blFinal:    { name: 'Final BL issued', kind: 'field', field: 'bl', done: BL_ISSUED, primary: 'SBL ISSUED', choices: ['CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED', NA], label: 'BL status', next: 'Final BL pending' },
+    switchBl:   { name: 'Switch BL issued', kind: 'field', field: 'switchBl', done: ['ISSUED'], skip: ['NO', ''], primary: 'ISSUED', choices: ['REQUESTED', 'CONFIRMATION PENDING', 'CONFIRMED', 'ISSUED', 'NO'], label: 'Switch BL', next: 'Switch BL pending' },
     blIss:      { name: 'BL issued', kind: 'field', field: 'bl', done: BL_ISSUED, primary: 'SBL ISSUED', choices: ['CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED', NA], label: 'BL status', next: 'BL issue pending' },
     awbConf:    { name: 'AWB confirmed', kind: 'field', field: 'bl', done: BL_OK, primary: 'CONFIRMED SBL', choices: ['BL PENDING', 'CONFIRMATION PENDING', 'CONFIRMED OBL', 'CONFIRMED SBL', NA], label: 'AWB status', next: 'AWB to confirm' },
     awbStatus:  { name: 'AWB status', kind: 'field', field: 'bl', done: BL_OK, primary: 'CONFIRMED SBL', choices: OPTS.bl, label: 'AWB status', next: 'AWB to confirm' },
@@ -219,7 +223,7 @@
   };
   const JOURNEYS = {
     SEA_EX: { o: ['opened', 'si', 'ed', 'blConf'], t: ['sailed', 'costing', 'blIss'], d: ['arrived', 'completed'], w: [34, 40, 26] },
-    SEA_IM: { o: ['opened', 'blStatus', 'sailed'], t: ['atSea'], d: ['arrived', 'discharge', 'doRel', 'customs', 'delivered', 'costing', 'completed'], w: [26, 32, 42] },
+    SEA_IM: { o: ['opened', 'blConf', 'sailed'], t: ['atSea', 'blFinal'], d: ['arrived', 'discharge', 'doRel', 'customs', 'delivered', 'costing', 'completed'], w: [26, 32, 42] },
     AFE:    { o: ['opened', 'si', 'ed', 'awbConf'], t: ['departed', 'costing', 'awbIss'], d: ['arrived', 'completed'], w: [34, 40, 26] },
     AFI:    { o: ['opened', 'awbStatus', 'departed'], t: ['inAir'], d: ['arrived', 'doRel', 'customs', 'delivered', 'costing', 'completed'], w: [27, 33, 40] },
     CND:    { o: ['opened', 'blReceived'], t: ['vesselArriving'], d: ['arrived', 'discharge', 'doRel', 'customsOpt', 'deliveredOpt', 'costing', 'completed'], w: [24, 30, 46] },
@@ -295,9 +299,10 @@
       return s;
     };
     const origin = (key === 'SEA_EX' && j.dg === 'DG' ? J.o.slice(0, 3).concat('dgpc', J.o.slice(3)) : J.o).map((id) => make(id, 'o'));   // v2.9.2: DG → DGPC after ED
-    const transit = J.t.map((id) => make(id, 't'));
+    const transit = (swOn93(j) ? J.t.concat('switchBl') : J.t).map((id) => make(id, 't'));   // v2.9.3: switch BL after the BL
     const dest = J.d.map((id) => make(id, 'd'));
     const all = origin.concat(transit, dest);
+    swBl93(j, all);   // v2.9.3: a switch BL job's main BL is an OBL
     const doable = (s) => ['field', 'date', 'status', 'link'].includes(s.kind) && (s.state === 'todo' || s.state === 'late');
     const closeStop = all.find((s) => s.kind === 'status');
     const others = all.filter((s) => s !== closeStop && !s.optional && s.kind !== 'info' && s.kind !== 'auto');
@@ -778,7 +783,8 @@
     state.route = r;
     const view = $('#view');
     const changed = !prev || prev.name !== r.name || prev.jobNo !== r.jobNo;
-    view.classList.toggle('is-fit', r.name === 'home' || r.name === 'jobs');
+    view.classList.toggle('is-fit', r.name === 'home' ? homeFit93() : r.name === 'jobs');
+    view.classList.toggle('is-flow', r.name === 'home' && !homeFit93());   // v2.9.3: short laptop screens scroll, six rows + See all
     document.body.classList.toggle('on-voyage', r.name === 'job' && canEdit());
     if (r.name === 'admin') renderAdmin(changed || first);
     else if (r.name === 'activity') renderActivity(changed || first);
@@ -788,8 +794,8 @@
     else if (r.name === 'costing') renderCostList(changed || first);
     else if (r.name === 'costjob') renderCostJob(r.jobNo, changed || first);
     else if (r.name === 'notif') renderNotifPage(changed || first);
-    else if (r.name === 'job') { if (changed || first) seenOpen9(r.jobNo); renderVoyage(r.jobNo, changed || first); fitNames(); }
-    else { renderHome(changed || first); fitNames(); fitPorts91(); }
+    else if (r.name === 'job') { if (changed || first) seenOpen9(r.jobNo); renderVoyage(r.jobNo, changed || first); fitNames(); remarksFit93(); }
+    else { renderHome(changed || first); fitNames(); fitPorts91(); moreBars93(); }
     if (changed) view.scrollTop = 0;
     updateNav();
   }
@@ -1028,13 +1034,13 @@
 
   function jobRow(j) {
     return '<li><button type="button" class="job-row' + (isChanged(j) ? ' is-changed' : '') + '" data-job="' + esc(j.jobNo) + '">' +
-      '<span class="jr-job">' + changedDot(j) + esc(j.jobNo) + '</span>' +
+      '<span class="jr-job">' + changedDot(j) + copyNo93(j.jobNo) + '</span>' +
       '<span class="jr-type"><span class="badge">' + esc(j.type || '—') + '</span><span class="jr-typename">' + esc(j.typeName) + '</span></span>' +
       '<span class="jr-cust"><span class="jr-name">' + esc(j.customer || '—') + '</span><span class="jr-route">' + esc(j.mode === 'misc' ? (j.against ? 'AGAINST ' + j.against : 'COSTING ONLY') : j.route) + '</span></span>' +
       '<span class="jr-track">' + miniTrack(j, 26) + '</span>' +
       '<span class="jr-next">' + toneChip(rowNext(j)) + cutChips(j) + '</span>' +
       '<span class="jr-etd"><span class="jr-k">ETD</span>' + esc(j.etd ? fmt(j.etd) : '—') + '</span>' +
-      '<span class="jr-eta"><span class="jr-k">ETA</span>' + esc(j.eta ? fmt(j.eta) : '—') + (delayInfo(j) ? '<span class="jr-delay" title="Delayed">+' + delayInfo(j).total + 'D</span>' : '') + '</span>' +
+      '<span class="jr-eta"><span class="jr-k">ETA</span>' + esc(j.eta ? fmt(j.eta) : '—') + delayTag(j) + '</span>' +
       '<span class="jr-people"><span class="jr-cs">' + esc(j.cs || '—') + '</span><span class="jr-sales">' + esc(j.sales || '') + '</span></span>' +
       '<span class="jr-dates">' + esc(j.mode === 'misc' ? (j.cs || '') : (j.etd ? fmt(j.etd) : '—') + ' → ' + (j.eta ? fmt(j.eta) : '—')) + '</span>' +
       '</button></li>';
@@ -1277,6 +1283,10 @@
     if (a === 'REOPENED JOB') return 'reopened the job';
     m = a.match(/^MARKED DELAY \+(\d+) DAYS? — (.+?) \((.+)\)$/);
     if (m) return 'marked a delay: +' + m[1] + (m[1] === '1' ? ' day' : ' days') + ' · ' + m[2].toLowerCase() + ' · ' + m[3].toLowerCase();
+    m = a.match(/^MARKED PREPONED (\d+) DAYS? — (.+?) \((.+)\)$/);
+    if (m) return 'marked preponed: ' + m[1] + (m[1] === '1' ? ' day' : ' days') + ' earlier · ' + m[2].toLowerCase() + ' · ' + m[3].toLowerCase();
+    m = a.match(/^REMOVED PREPONED (\d+) DAYS? — (.+)$/);
+    if (m) return 'removed preponed (' + m[1] + (m[1] === '1' ? ' day' : ' days') + ' earlier · ' + m[2].toLowerCase() + ')';
     m = a.match(/^REMOVED DELAY \+(\d+) DAYS? — (.+)$/);
     if (m) return 'removed a delay (+' + m[1] + (m[1] === '1' ? ' day' : ' days') + ' · ' + m[2].toLowerCase() + ')';
     m = a.match(/^BOOKED ENQUIRY (\S+) AS JOB$/);
@@ -1365,9 +1375,9 @@
       '<div class="crumbs' + anim + '"><button type="button" class="back-btn" data-act="back" aria-label="Back">' + icon('back', 18) + '</button><button type="button" class="link-btn" data-href="#/jobs">JOBS</button><span>/ ' + esc(j.jobNo) + '</span>' + changedChip9(j) +
         (canEditJob(j) ? '<button type="button" class="status-pill tone-' + tone + '" data-act="status" aria-label="Job status: ' + sw + '. Change">' + esc(sw) + icon('chevron', 14) + '</button>' : '<span class="status-pill tone-' + tone + '">' + esc(sw) + '</span>') + '</div>' +
       '<header class="vhead' + anim + '" style="--d:30ms">' +
-        '<div class="vh-titles"><div class="vh-idrow"><h1 class="vh-job">' + esc(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + delayChip(j) + readyChip(j) + '</div>' +
-        '<div class="vh-cust">' + esc(j.customer || '—') + '</div>' + (j.closed && j.closed.reason ? '<div class="vh-why">' + esc(j.closed.reason) + '</div>' : '') + '</div>' +
-        (j.closed ? closedActions(j) : canEdit() ? '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="delay" title="Mark delay" aria-label="Mark delay">' + icon('clock', 16) + '<span class="bl-full">Mark delay</span><span class="bl-short">Delay</span></button><button type="button" class="btn-ghost" data-act="duplicate" title="Duplicate job" aria-label="Duplicate job">' + icon('copy', 16) + '<span>Duplicate</span></button><button type="button" class="btn-ghost" data-act="edit" title="Edit details" aria-label="Edit details">' + icon('edit', 16) + '<span class="bl-full">Edit details</span><span class="bl-short">Edit</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>'
+        '<div class="vh-titles"><div class="vh-idrow"><h1 class="vh-job">' + copyNo93(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + delayChip(j) + readyChip(j) + '</div>' +
+        '<div class="vh-cust">' + esc(j.customer || '—') + '</div>' + (j.closed && j.closed.reason ? '<div class="vh-why">' + esc(j.closed.reason) + '</div>' : '') + remarksLine93(j) + '</div>' +
+        (j.closed ? closedActions(j) : canEdit() ? '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="delay" title="Delay or prepone" aria-label="Delay or prepone">' + icon('clock', 16) + '<span class="bl-full">Delay / prepone</span><span class="bl-short">Delay</span></button>' + (DN_TYPES93.includes(j.type) ? '<button type="button" class="btn-ghost" data-act="dnote" title="Delivery note (Word)" aria-label="Delivery note">' + icon('truck', 16) + '<span class="bl-full">Delivery note</span><span class="bl-short">Delivery note</span></button>' : '') + '<button type="button" class="btn-ghost" data-act="duplicate" title="Duplicate job" aria-label="Duplicate job">' + icon('copy', 16) + '<span>Duplicate</span></button><button type="button" class="btn-ghost" data-act="edit" title="Edit details" aria-label="Edit details">' + icon('edit', 16) + '<span class="bl-full">Edit details</span><span class="bl-short">Edit</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>'
           : '<div class="vh-actions is-ro"><span class="ro-chip">' + icon('lock', 14) + '<span>UPDATED BY ' + esc(j.cs || 'CUSTOMER SERVICE') + '</span></span>' + (canNote() ? '<button type="button" class="btn-brutal btn-icon" data-act="focus-note">' + icon('note', 16) + '<span>ADD A NOTE</span></button>' : '') + '</div>') +
       '</header>' +
       '<div class="ft-top">' + freeCard(j, t0) + '</div>' +
@@ -1409,7 +1419,7 @@
     if (!opts.datesOk) { const g8 = saveDateGate8(before, changes); if (g8) return g8.then((ok) => (ok === true ? saveJob(no, changes, Object.assign({}, opts, { datesOk: true })) : false)); }   // v2.8
     const prev = {};
     Object.keys(changes).forEach((f) => { prev[f] = asInput(f, before.raw[f]); });
-    if ('dgpc' in changes && !(state.ix.dgpc > -1)) state.ix.dgpc = state.header.length;   // v2.9.2: DGPC STATUS lands after the last column
+    { let n = state.header.length; ['dgpc', 'switchBl'].forEach((k) => { if (k in changes && !(state.ix[k] > -1)) state.ix[k] = n++; }); }   // v2.9.2 / v2.9.3: new columns land after the last one
     state.pending.set(k, Object.assign({}, state.pending.get(k) || {}, changes));
     rebuildJob(k); rerender(); refreshOverlay();
     setSaving(1);
@@ -1516,7 +1526,7 @@
     if (f === 'ed') return j.cat === 'IMPORT' ? 'Customs (ED) status' : 'ED status';
     if (f === 'bl') return j.mode === 'air' ? 'AWB status' : j.type === 'CRR' ? 'Tracking / AWB status' : 'BL status';
     if (f === 'loadlist') return j.cat === 'IMPORT' ? 'Discharge list' : 'Loadlist';
-    return { docs: 'Original docs', dgpc: 'DGPC status', costing: 'Costing', status: 'Job status', etd: j.mode === 'courier' ? 'Pick-up date' : 'ETD', eta: j.mode === 'courier' ? 'Delivery date' : 'ETA', delivery: 'Delivery date', against: 'Against job no.' }[f] || f;
+    return { docs: 'Original docs', dgpc: 'DGPC status', switchBl: 'Switch BL', costing: 'Costing', status: 'Job status', etd: j.mode === 'courier' ? 'Pick-up date' : 'ETD', eta: j.mode === 'courier' ? 'Delivery date' : 'ETA', delivery: 'Delivery date', against: 'Against job no.' }[f] || f;
   }
   function stopEditor(no, id) {
     return () => {
@@ -1587,7 +1597,7 @@
       const j = findJob(no); if (!j) return '';
       const fields = FORM_STATUS[j.type] || ['sido', 'ed', 'bl'];
       return '<h2 class="peek-job" id="drawerTitle">' + esc(j.jobNo) + '</h2><p class="pop-text">Tap a value to save it straight away.</p>' +
-        ['status'].concat(fields.filter((f) => f !== 'delivery' && (f !== 'dgpc' || j.dg === 'DG'))).map((f) => '<div class="quick-row"><div class="pop-label">' + esc(fieldLabel(j, f)) + '</div><div class="choice-row">' + OPTS[f].map((v) => '<button type="button" class="choice' + ((j[f] || '') === v ? ' is-on' : '') + '" data-set="' + f + '" data-val="' + esc(v) + '" aria-pressed="' + ((j[f] || '') === v) + '">' + esc(v === NA ? 'N/A' : v) + '</button>').join('') + '</div></div>').join('') + SAVE_NOTE;
+        ['status'].concat(fields.filter((f) => f !== 'delivery' && (f !== 'dgpc' || j.dg === 'DG'))).map((f) => '<div class="quick-row"><div class="pop-label">' + esc(fieldLabel(j, f)) + '</div><div class="choice-row">' + optsFor93(j, f).map((v) => '<button type="button" class="choice' + ((j[f] || '') === v ? ' is-on' : '') + '" data-set="' + f + '" data-val="' + esc(v) + '" aria-pressed="' + ((j[f] || '') === v) + '">' + esc(v === NA ? 'N/A' : v) + '</button>').join('') + '</div></div>').join('') + SAVE_NOTE;
     };
   }
 
@@ -1599,7 +1609,7 @@
     const holdNote = $('#holdNote') ? $('#holdNote').value.trim() : '';
     if (state.overlay !== 'quick') closeOverlays();
     const shown = /^\d{4}-\d{2}-\d{2}$/.test(val) ? fmt(parseDate(val), true) : val === NA ? 'not needed' : val;
-    saveJob(j.jobNo, { [field]: val }, { toast: (val === '' ? label + ' cleared' : label + ' → ' + shown) });
+    saveJob(j.jobNo, Object.assign({ [field]: val }, swFix93(j, field, val)), { toast: (val === '' ? label + ' cleared' : label + ' → ' + shown) });   // v2.9.3: switch BL keeps an OBL
     if (field === 'status' && holdNote) postNote(j.jobNo, (val === 'HOLD' ? 'On hold: ' : 'Status ' + val.toLowerCase() + ': ') + holdNote);
   }
 
@@ -1701,10 +1711,10 @@
     MIS: ['against']
   };
   const FORM_STATUS = {
-    SFEF: ['loadlist', 'sido', 'ed', 'bl', 'dgpc'], SFEL: ['loadlist', 'sido', 'ed', 'bl', 'dgpc'], AFE: ['sido', 'ed', 'bl'],
-    SFIF: ['loadlist', 'sido', 'ed', 'bl', 'docs', 'delivery'], SFIL: ['loadlist', 'sido', 'ed', 'bl', 'docs', 'delivery'],
+    SFEF: ['loadlist', 'sido', 'ed', 'bl', 'switchBl', 'dgpc'], SFEL: ['loadlist', 'sido', 'ed', 'bl', 'switchBl', 'dgpc'], AFE: ['sido', 'ed', 'bl'],
+    SFIF: ['loadlist', 'sido', 'ed', 'bl', 'switchBl', 'docs', 'delivery'], SFIL: ['loadlist', 'sido', 'ed', 'bl', 'switchBl', 'docs', 'delivery'],
     AFI: ['sido', 'ed', 'bl', 'delivery'], CND: ['loadlist', 'sido', 'ed', 'bl', 'docs', 'delivery'],
-    SFC: ['sido', 'bl'], AFC: ['sido', 'bl'], CRR: ['sido', 'bl'], MIS: []
+    SFC: ['sido', 'bl', 'switchBl'], AFC: ['sido', 'bl'], CRR: ['sido', 'bl'], MIS: []
   };
   const TYPE_GROUPS = [
     ['Sea export', [['SFEF', 'FCL'], ['SFEL', 'LCL']], 'ship'],
@@ -1752,6 +1762,7 @@
       loadlist: { label: imp ? 'Discharge list' : 'Loadlist', kind: 'select', opts: OPTS.loadlist, blank: true },
       docs: { label: 'Original docs', kind: 'select', opts: OPTS.docs, blank: true },
       dgpc: { label: 'DGPC status', kind: 'select', opts: OPTS.dgpc, blank: true, dgOnly: true },
+      switchBl: { label: 'Switch BL', kind: 'select', opts: OPTS.switchBl, blank: true },
       costing: { label: 'Costing', kind: 'select', opts: OPTS.costing, blank: true }
     };
     return M[key];
@@ -1904,6 +1915,7 @@
         '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit">SAVE CHANGES</button></div>' +
       '</form>' + formLists();
     const f = $('#editForm'); const dg = f.querySelector('[name="dg"]'); f.querySelectorAll('.dg-only').forEach((g) => { g.hidden = !(dg && dg.value === 'DG'); });
+    swForm93(f);   // v2.9.3: switch BL → the main BL list is OBL only
     showDrawer(document.activeElement);
     state.overlay = 'form';
   }
@@ -2236,17 +2248,11 @@
   const keyOf = (j) => String(j.jobNo || j).toUpperCase();
 
   // ---------- follow-ups ----------
-  function planFor(j) { const p = state.follow.plan[keyOf(j)]; return EVERY_N[p] !== undefined ? p : j.hold ? 'WEEKLY' : 'DAILY'; }
+  function planFor(j) { const p = state.follow.plan[keyOf(j)]; return planOk93(p) ? p : j.hold ? 'WEEKLY' : 'DAILY'; }   // v2.9.3: weekdays and dates too
   function checksFor(j) { return state.follow.checks[keyOf(j)] || []; }
   function followState(j, t0) {
     const every = planFor(j), checks = checksFor(j), last = checks[0] || null;
-    const since = last ? days(dayOf(last[0]), t0) : null;
-    const today = since === 0;
-    const mineToday = checks.find((c) => days(dayOf(c[0]), t0) === 0 && c[1] === state.user) || null;
-    const n = EVERY_N[every];
-    const due = every !== 'PAUSED' && !today && (since === null || since >= n);
-    const nextIn = every === 'PAUSED' ? null : today ? n : since === null ? 0 : Math.max(0, n - since);
-    return { every, checks, last, since, today, mineToday, due, nextIn };
+    return followState93(j, t0, every, checks, last);   // v2.9.3
   }
   function roundRows(t0, list) {
     const rows = (list || mineJobs().filter((j) => j.active)).map((j) => ({ j, f: followState(j, t0) }));
@@ -2317,7 +2323,7 @@
     state.follow.plan[K] = every;
     closeOverlays(); rerender(); updateNav();
     setSaving(1);
-    try { const res = await api.call('ethixFollowPlan', [j.jobNo, every]); if (!res || !res.ok) throw new Error((res && res.error) || 'Not saved.'); toast(j.jobNo + ': ' + EVERY_LABEL[every].toLowerCase()); }
+    try { const res = await api.call('ethixFollowPlan', [j.jobNo, every]); if (!res || !res.ok) throw new Error((res && res.error) || 'Not saved.'); toast(j.jobNo + ': ' + everyLabel93(every).toLowerCase()); }
     catch (e) { if (prev === undefined) delete state.follow.plan[K]; else state.follow.plan[K] = prev; rerender(); updateNav(); if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'Follow-ups need the Phase 4 Code.gs update.' : e.message, { error: true }); }
     finally { setSaving(-1); }
   }
@@ -2386,7 +2392,7 @@
     const rt = remarksToday(f, t0), lr = lastRemark(f);
     const remark = rt.length ? remarkList(rt, 3) : lr ? '<p class="fu-remark">“' + esc(lr.text) + '”</p>' : '';
     return '<section class="tile side-card fu-card" aria-labelledby="fuTitle"><div class="tile-head"><h2 class="tile-title" id="fuTitle">FOLLOW-UP</h2>' +
-      (canEditJob(j) ? '<button type="button" class="every-pill" data-every="' + esc(j.jobNo) + '">' + EVERY_LABEL[f.every] + icon('chevron', 13) + '</button>' : '<span class="every-pill is-ro">' + EVERY_LABEL[f.every] + '</span>') + '</div>' +
+      (canEditJob(j) ? '<button type="button" class="every-pill" data-every="' + esc(j.jobNo) + '">' + esc(f.label) + icon('chevron', 13) + '</button>' : '<span class="every-pill is-ro">' + EVERY_LABEL[f.every] + '</span>') + '</div>' +
       '<div class="fu-status">' + status + '</div>' + remark +
       (canEditJob(j) && j.active ? (f.mineToday ? '<button type="button" class="btn-ghost fu-btn" data-check-menu="' + esc(j.jobNo) + '">' + icon('edit', 15) + 'Add remark or undo</button>'
         : '<button type="button" class="btn-brutal fu-btn" data-check="' + esc(j.jobNo) + '">' + icon('check', 16) + 'CHECKED TODAY</button>') : '') +
@@ -2403,12 +2409,12 @@
   function roundRow(x, t0) {
     const j = x.j, f = x.f;
     return '<li class="rr' + (f.today ? ' is-done' : '') + (f.mineToday ? ' is-mine' : '') + (f.due ? ' is-due' : '') + '">' +
-      '<button type="button" class="rr-main" data-job="' + esc(j.jobNo) + '"><span class="rr-job">' + changedDot(j) + esc(j.jobNo) + '<span class="badge">' + esc(j.type) + '</span></span>' +
+      '<button type="button" class="rr-main" data-job="' + esc(j.jobNo) + '"><span class="rr-job">' + changedDot(j) + copyNo93(j.jobNo) + '<span class="badge">' + esc(j.type) + '</span></span>' +
         '<span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span></button>' +
       '<span class="rr-next">' + toneChip(rowNext(j)) + cutChips(j) + rowClock(j, t0) + '</span>' +
       '<span class="rr-last"><span>' + esc(lastCheckText(f, t0)) + '</span>' + ((lr) => (lr ? '<span class="rr-remark">“' + esc(lr.text) + '”' + (lr.n > 1 ? ' <b>+' + (lr.n - 1) + '</b>' : '') + '</span>' : ''))(lastRemark(f)) + '</span>' +
       '<span class="rr-strip">' + dotStrip(j, t0, 14) + '</span>' +
-      '<span class="rr-every"><button type="button" class="every-pill" data-every="' + esc(j.jobNo) + '">' + EVERY_LABEL[f.every] + icon('chevron', 13) + '</button></span>' +
+      '<span class="rr-every"><button type="button" class="every-pill" data-every="' + esc(j.jobNo) + '">' + esc(f.label) + icon('chevron', 13) + '</button></span>' +
       '<span class="rr-act">' + checkCircle(j, f) + '</span>' +
     '</li>';
   }
@@ -2458,6 +2464,8 @@
     misc: ['CUSTOMS', 'DELIVERY']
   };
   const DELAY_REASONS = ['Vessel delayed', 'Port congestion', 'Weather', 'Rolled over', 'Missed cutoff', 'Documents', 'Customs hold', 'Customer request'];
+  const PREPONE_REASONS = ['Vessel advanced', 'Schedule change', 'Earlier vessel', 'Customer request'];   // v2.9.3
+  const dsign = (n) => (n < 0 ? '−' + (-n) : '+' + n);
   const movesDates = (where) => ['ORIGIN PORT', 'ORIGIN AIRPORT', 'PICK-UP'].includes(where) ? { etd: true, eta: true } : ['CUSTOMS', 'DELIVERY'].includes(where) ? { etd: false, eta: false } : { etd: false, eta: true };
   function delayInfo(j) {
     const list = (state.delays[keyOf(j)] || []).slice().sort((a, b) => a.t - b.t);
@@ -2471,26 +2479,28 @@
       plan: firstEtd && firstEta ? days(firstEtd, firstEta) : null, now: j.etd && j.eta ? days(j.etd, j.eta) : null
     };
   }
-  const delayChip = (j) => { const d = delayInfo(j); return d && d.total ? '<button type="button" class="delay-chip" data-act="delays">' + icon('clock', 13) + 'DELAYED +' + d.total + (d.total === 1 ? ' DAY' : ' DAYS') + '</button>' : ''; };
+  const delayChip = (j) => { const d = delayInfo(j); if (!d || !d.total) return ''; const a = Math.abs(d.total); return '<button type="button" class="delay-chip' + (d.total < 0 ? ' is-early' : '') + '" data-act="delays">' + icon('clock', 13) + (d.total < 0 ? 'PREPONED ' : 'DELAYED +') + a + (a === 1 ? ' DAY' : ' DAYS') + '</button>'; };
+  const delayTag = (j) => { const d = delayInfo(j); return d && d.total ? '<span class="jr-delay' + (d.total < 0 ? ' is-early' : '') + '" title="' + (d.total < 0 ? 'Preponed' : 'Delayed') + '">' + dsign(d.total) + 'D</span>' : ''; };
   function delayCard(j) {
     const d = delayInfo(j); if (!d) return '';
     const sign = (n) => (n > 0 ? '+' : '') + n;
-    return '<section class="tile side-card delay-card" id="delayCard" aria-labelledby="dlTitle"><div class="tile-head"><h2 class="tile-title" id="dlTitle">DELAYS</h2>' + (canEditJob(j) ? '<button type="button" class="tile-link" data-act="delay">+ Mark another</button>' : '') + '</div>' +
-      '<div class="dl-total"><b>+' + d.total + '</b><span>' + (d.total === 1 ? 'day' : 'days') + ' delayed in all · ' + d.list.length + (d.list.length === 1 ? ' delay' : ' delays') + '</span></div>' +
+    const early = d.list.some((x) => x.days < 0), a = Math.abs(d.total);
+    return '<section class="tile side-card delay-card" id="delayCard" aria-labelledby="dlTitle"><div class="tile-head"><h2 class="tile-title" id="dlTitle">' + (early ? 'DATE CHANGES' : 'DELAYS') + '</h2>' + (canEditJob(j) ? '<button type="button" class="tile-link" data-act="delay">+ Mark another</button>' : '') + '</div>' +
+      '<div class="dl-total' + (d.total < 0 ? ' is-early' : '') + '"><b>' + (d.total ? dsign(d.total) : '0') + '</b><span>' + (d.total === 0 ? 'days — back on the first dates' : (a === 1 ? 'day' : 'days') + (d.total < 0 ? ' earlier' : ' delayed') + ' in all') + ' · ' + d.list.length + (d.list.length === 1 ? ' change' : ' changes') + '</span></div>' +
       (d.etd ? '<div class="kv"><span class="kv-k">' + (j.mode === 'air' ? 'Departure' : j.mode === 'courier' ? 'Pick-up' : 'Sailing') + '</span><span class="kv-v">' + fmt(d.etd.from) + ' → ' + fmt(d.etd.to) + ' · ' + sign(d.etd.d) + 'D</span></div>' : '') +
       (d.eta ? '<div class="kv"><span class="kv-k">Arrival</span><span class="kv-v">' + fmt(d.eta.from) + ' → ' + fmt(d.eta.to) + ' · ' + sign(d.eta.d) + 'D</span></div>' : '') +
       (d.plan !== null && d.now !== null && d.plan !== d.now ? '<div class="kv"><span class="kv-k">Transit</span><span class="kv-v">planned ' + d.plan + ' days · now ' + d.now + '</span></div>' : '') +
-      '<ol class="dl-list">' + d.list.slice().reverse().map((x) => '<li><span class="dl-days">+' + x.days + 'D</span><span class="dl-body"><b>' + esc(nice(x.where)) + '</b> · ' + esc(x.reason) + (x.note ? '<span class="dl-note">' + esc(x.note) + '</span>' : '') +
-        '<span class="dl-meta">' + esc(x.by) + ' · ' + esc(ago(x.t)) + '</span></span>' + (canEditJob(j) ? '<button type="button" class="icon-btn dl-rm" data-delay-rm="' + esc(x.id) + '" aria-label="Remove this delay">' + icon('close', 13) + '</button>' : '') + '</li>').join('') + '</ol></section>';
+      '<ol class="dl-list">' + d.list.slice().reverse().map((x) => '<li><span class="dl-days' + (x.days < 0 ? ' is-early' : '') + '">' + dsign(x.days) + 'D</span><span class="dl-body"><b>' + esc(nice(x.where)) + '</b> · ' + esc(x.reason) + (x.note ? '<span class="dl-note">' + esc(x.note) + '</span>' : '') +
+        '<span class="dl-meta">' + esc(x.by) + ' · ' + esc(ago(x.t)) + '</span></span>' + (canEditJob(j) ? '<button type="button" class="icon-btn dl-rm" data-delay-rm="' + esc(x.id) + '" aria-label="' + (x.days < 0 ? 'Remove this prepone' : 'Remove this delay') + '">' + icon('close', 13) + '</button>' : '') + '</li>').join('') + '</ol></section>';
   }
   function openDelay(no) {
     const j = findJob(no); if (!j || !canEdit()) return;
     closeOverlays(true);
     const where = (DELAY_WHERE[j.mode] || DELAY_WHERE.sea);
     const start = j.atSea || j.arrived ? (j.arrived ? where[where.length - 3] || where[0] : where[2] || where[0]) : where[0];
-    state.delayForm = { no: j.jobNo, days: 2, where: start, reason: '', other: '', note: '', move: movesDates(start) };
+    state.delayForm = { no: j.jobNo, dir: 'late', days: 2, where: start, reason: '', other: '', note: '', move: movesDates(start) };
     $('#drawer').classList.add('is-wide');
-    $('#drawerKicker').textContent = 'MARK DELAY';
+    $('#drawerKicker').textContent = 'DELAY / PREPONE';
     popRender = delayForm;
     $('#drawerBody').innerHTML = delayForm();
     showDrawer(document.activeElement);
@@ -2498,23 +2508,28 @@
   }
   function delayForm() {
     const F = state.delayForm; const j = findJob(F.no); if (!j) return '';
-    const where = DELAY_WHERE[j.mode] || DELAY_WHERE.sea;
-    const shift = (d) => (d ? fmt(addDays(d, F.days)) : '—');
+    const where = DELAY_WHERE[j.mode] || DELAY_WHERE.sea, early = F.dir === 'early', sg = early ? -1 : 1;
+    const shift = (d) => (d ? fmt(addDays(d, sg * F.days)) : '—');
+    const reasons = early ? PREPONE_REASONS : DELAY_REASONS;
     const reasonOk = F.reason && (F.reason !== 'Other' || F.other.trim());
+    const newEtd = early && j.etd && F.move.etd ? addDays(j.etd, -F.days) : null;   // v2.9.3: cutoffs after the new ETD move with it
+    const cuts = newEtd ? [['siCut', 'SI cutoff'], ['edCut', 'ED cutoff'], ['dgCut', 'DG cutoff']].filter(([k]) => j[k] && j[k] > newEtd) : [];
     return '<h2 class="peek-job form-title" id="drawerTitle">' + esc(j.jobNo) + ' <span class="small">' + esc(j.customer || '') + '</span></h2>' +
       '<form class="job-form delay-form" id="delayForm" novalidate>' +
-        '<fieldset><legend>HOW MANY DAYS?</legend><div class="dl-stepper"><button type="button" class="icon-btn" data-dl-step="-1" aria-label="One day less">−</button><output id="dlDays" aria-live="polite">' + F.days + '<small>' + (F.days === 1 ? 'day' : 'days') + '</small></output><button type="button" class="icon-btn" data-dl-step="1" aria-label="One day more">+</button></div>' +
-          '<div class="choice-row">' + [1, 2, 3, 5, 7, 10, 14].map((n) => '<button type="button" class="choice' + (F.days === n ? ' is-on' : '') + '" data-dl-days="' + n + '">' + n + 'D</button>').join('') + '</div></fieldset>' +
+        '<div class="seg dl-dir" role="group" aria-label="Delayed or preponed"><button type="button" data-dl-dir="late" aria-pressed="' + !early + '">Delayed</button><button type="button" data-dl-dir="early" aria-pressed="' + early + '">Preponed</button></div>' +
+        '<fieldset><legend>' + (early ? 'HOW MANY DAYS EARLIER?' : 'HOW MANY DAYS?') + '</legend><div class="dl-stepper"><button type="button" class="icon-btn" data-dl-step="-1" aria-label="One day less">−</button><output id="dlDays" aria-live="polite">' + F.days + '<small>' + (F.days === 1 ? 'day' : 'days') + '</small></output><button type="button" class="icon-btn" data-dl-step="1" aria-label="One day more">+</button></div>' +
+          '<div class="choice-row">' + [1, 2, 3, 5, 7, 10, 14].map((n) => '<button type="button" class="choice' + (F.days === n ? ' is-on' : '') + '" data-dl-days="' + n + '">' + (early ? '−' : '') + n + 'D</button>').join('') + '</div></fieldset>' +
         '<fieldset><legend>WHERE?</legend><div class="choice-row">' + where.map((w) => '<button type="button" class="choice' + (F.where === w ? ' is-on' : '') + '" data-dl-where="' + w + '" aria-pressed="' + (F.where === w) + '">' + esc(nice(w)) + '</button>').join('') + '</div></fieldset>' +
-        '<fieldset><legend>WHY?</legend><div class="choice-row">' + DELAY_REASONS.concat(['Other']).map((r) => '<button type="button" class="choice' + (F.reason === r ? ' is-on' : '') + '" data-dl-reason="' + esc(r) + '" aria-pressed="' + (F.reason === r) + '">' + esc(r) + '</button>').join('') + '</div>' +
+        '<fieldset><legend>WHY?</legend><div class="choice-row">' + reasons.concat(['Other']).map((r) => '<button type="button" class="choice' + (F.reason === r ? ' is-on' : '') + '" data-dl-reason="' + esc(r) + '" aria-pressed="' + (F.reason === r) + '">' + esc(r) + '</button>').join('') + '</div>' +
           (F.reason === 'Other' ? '<div class="field is-wide"><label for="dlOther">Reason</label><input id="dlOther" maxlength="60" value="' + esc(F.other) + '" autocomplete="off"></div>' : '') +
           '<div class="field is-wide"><label for="dlNote">Note (optional — the sales person sees it)</label><input id="dlNote" maxlength="300" value="' + esc(F.note) + '" placeholder="Type a note for the sales person" autocomplete="off"></div></fieldset>' +
         '<fieldset><legend>MOVE THE DATES TOO?</legend>' +
           (j.etd ? '<button type="button" class="toggle dl-move" data-dl-move="etd" aria-pressed="' + F.move.etd + '"><span class="toggle-track"><span class="toggle-thumb"></span></span>' + (j.mode === 'courier' ? 'Pick-up' : 'ETD') + ' ' + fmt(j.etd) + ' → <b>' + shift(j.etd) + '</b></button>' : '') +
           (j.eta ? '<button type="button" class="toggle dl-move" data-dl-move="eta" aria-pressed="' + F.move.eta + '"><span class="toggle-track"><span class="toggle-thumb"></span></span>' + (j.mode === 'courier' ? 'Delivery' : 'ETA') + ' ' + fmt(j.eta) + ' → <b>' + shift(j.eta) + '</b></button>' : '') +
-          (!j.etd && !j.eta ? '<p class="pop-hint">This job has no ETD / ETA yet.</p>' : '<p class="pop-hint">Editing ETD or ETA by hand never counts as a delay — only this does.</p>') + '</fieldset>' +
+          (cuts.length ? '<p class="dl-cuts">' + cuts.map(([k, l]) => l + ' ' + fmt(j[k]) + ' → <b>' + fmt(addDays(j[k], -F.days)) + '</b>').join(' · ') + ' — cutoffs move with the ETD.</p>' : '') +
+          (!j.etd && !j.eta ? '<p class="pop-hint">This job has no ETD / ETA yet.</p>' : '<p class="pop-hint">Editing ETD or ETA by hand never counts as ' + (early ? 'preponed' : 'a delay') + ' — only this does.</p>') + '</fieldset>' +
         '<div class="form-error" id="formError" role="alert"></div>' +
-        '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit"' + (reasonOk ? '' : ' disabled') + '>MARK DELAY +' + F.days + 'D</button></div>' +
+        '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit"' + (reasonOk ? '' : ' disabled') + '>' + (early ? 'MARK PREPONED −' : 'MARK DELAY +') + F.days + 'D</button></div>' +
       '</form>';
   }
   async function submitDelay() {
@@ -2523,21 +2538,23 @@
     if (!reason) { $('#formError').textContent = 'Choose a reason.'; return; }
     const btn = $('#formSubmit'); btn.disabled = true; btn.textContent = 'SAVING…';
     try {
-      const res = await api.call('ethixDelayAdd', [j.jobNo, { days: F.days, where: F.where, reason, note: F.note.trim(), moveEtd: !!(F.move.etd && j.etd), moveEta: !!(F.move.eta && j.eta) }]);
+      const early = F.dir === 'early';
+      const res = await api.call('ethixDelayAdd', [j.jobNo, { days: early ? -F.days : F.days, where: F.where, reason, note: F.note.trim(), moveEtd: !!(F.move.etd && j.etd), moveEta: !!(F.move.eta && j.eta) }]);
       if (res && res.ok) {
         const K = keyOf(j);
         if (Array.isArray(res.row)) { state.rowMap.set(K, res.row); rebuildJob(K); }
         state.delays[K] = res.delays || [];
         closeOverlays(); rerender();
-        toast('Delay +' + F.days + (F.days === 1 ? ' day' : ' days') + ' marked', { action: { label: 'Undo', fn: () => removeDelay(res.id, true) } });
+        toast((early ? 'Preponed ' + F.days : 'Delay +' + F.days) + (F.days === 1 ? ' day' : ' days') + ' marked', { action: { label: 'Undo', fn: () => removeDelay(res.id, true) } });
         state.syncedAt = Date.now();
         return;
       }
       $('#formError').textContent = (res && res.error) || 'Not saved.';
     } catch (e) { if (e.kind !== 'auth') $('#formError').textContent = /not available/i.test(e.message) ? 'Mark delay needs the Phase 4 Code.gs update.' : e.message; }
-    btn.disabled = false; btn.textContent = 'MARK DELAY +' + F.days + 'D';
+    btn.disabled = false; btn.textContent = (F.dir === 'early' ? 'MARK PREPONED −' : 'MARK DELAY +') + F.days + 'D';
   }
   async function removeDelay(id, quiet) {
+    const was = Object.values(state.delays || {}).reduce((a, l) => a.concat(l || []), []).find((x) => x.id === id), word = was && was.days < 0 ? 'Prepone' : 'Delay';   // v2.9.3
     setSaving(1);
     try {
       const res = await api.call('ethixDelayRemove', [id]);
@@ -2546,7 +2563,7 @@
         if (Array.isArray(res.row)) { state.rowMap.set(K, res.row); rebuildJob(K); }
         state.delays[K] = res.delays || [];
         rerender();
-        toast(quiet ? 'Delay undone' : 'Delay removed' + (res.restored && res.restored.length ? ' — dates put back' : ''));
+        toast(quiet ? word + ' undone' : word + ' removed' + (res.restored && res.restored.length ? ' — dates put back' : ''));
         return;
       }
       toast((res && res.error) || 'Not removed.', { error: true });
@@ -2665,7 +2682,7 @@
   const FCL = ['SFEF', 'SFIF', 'CND', 'SFC'];
   function openNewEnquiry() {
     if (!canNote()) return;
-    if (canEdit()) loadLists();
+    loadLists();   // v2.9.3: sales too (the company's customer names)
     closeOverlays(true);
     state.newEnq = { type: '' };
     $('#drawer').classList.add('is-wide');
@@ -2763,7 +2780,7 @@
       if (!b) return;
       if (b.dataset.check && canEdit()) { followCheck(b.dataset.check); return; }
       if (b.dataset.checkMenu && canEdit()) { openPop(b, 'FOLLOW-UP', checkedMenu(b.dataset.checkMenu)); return; }
-      if (b.dataset.every && canEdit()) { openPop(b, 'FOLLOW-UP', everyMenu(b.dataset.every)); return; }
+      if (b.dataset.every && canEdit()) { openPop(b, 'FOLLOW-UP', everyMenu93(b.dataset.every)); return; }
       if (b.dataset.cal) { const K = String(b.dataset.calJob).toUpperCase(); state.calOffset[K] = Math.min(0, (state.calOffset[K] || 0) + +b.dataset.cal); rerender(); return; }
       if (b.dataset.enq) { openEnquiry(b.dataset.enq, b); return; }
       if (b.dataset.enqTab) { state.enqTab = b.dataset.enqTab; rerender(); return; }
@@ -2771,7 +2788,8 @@
       if (b.dataset.act === 'delays') { const k = findJob(state.route.jobNo); if (!$('#delayCard') && k) { state.voyageTab[k.jobNo] = 'overview'; rerender(); } const c = $('#delayCard'); if (c) { c.scrollIntoView({ block: 'center', behavior: 'smooth' }); c.classList.remove('is-flash'); void c.offsetWidth; c.classList.add('is-flash'); } return; }
       if (b.dataset.delayRm && canEdit()) {
         const id = b.dataset.delayRm;
-        confirmBox('Remove this delay?', 'If the delay moved ETD/ETA and nobody changed them since, they go back too.', 'Remove', () => removeDelay(id));
+        const early = Object.values(state.delays || {}).reduce((a, l) => a.concat(l || []), []).some((x) => x.id === id && x.days < 0);   // v2.9.3
+        confirmBox(early ? 'Remove this prepone?' : 'Remove this delay?', 'If it moved ETD/ETA and nobody changed them since, they go back too.', 'Remove', () => removeDelay(id));
       }
     });
     view.addEventListener('input', (e) => {
@@ -2807,9 +2825,10 @@
       }
       if (state.overlay === 'delay') {
         const F = state.delayForm; if (!F) return;
-        const t = e.target.closest('[data-dl-step], [data-dl-days], [data-dl-where], [data-dl-reason], [data-dl-move], [data-act="form-cancel"]'); if (!t) return;
+        const t = e.target.closest('[data-dl-dir], [data-dl-step], [data-dl-days], [data-dl-where], [data-dl-reason], [data-dl-move], [data-act="form-cancel"]'); if (!t) return;
         if (t.dataset.act === 'form-cancel') { closeOverlays(); return; }
         const other = $('#dlOther'); if (other) F.other = other.value; F.note = $('#dlNote').value;
+        if (t.dataset.dlDir && t.dataset.dlDir !== F.dir) { F.dir = t.dataset.dlDir; F.reason = ''; }
         if (t.dataset.dlStep) F.days = Math.max(1, Math.min(90, F.days + +t.dataset.dlStep));
         if (t.dataset.dlDays) F.days = +t.dataset.dlDays;
         if (t.dataset.dlWhere) { F.where = t.dataset.dlWhere; F.move = movesDates(F.where); }
@@ -3102,7 +3121,9 @@
   // charge on laptops, per-box figures in the bar, the statement-style Excel. v2.9: reminders and "changed since you
   // looked". v2.9.1: POD office hours, Home counters that open the side panel, Today's watch for every open task,
   // This week as an agenda; Fleet removed. v2.9.2: Dubai time everywhere, offices 09:00–17:00 (Ethix till 18:00),
-  // DGPC for DG sea exports, pick a day in This week (at the end of this module).
+  // DGPC for DG sea exports, pick a day in This week. v2.9.3: overseas office hours, calendar weeks, switch BL, sea import
+  // BL steps, remarks on the job page, copy a job number, follow-ups by weekday or date, preponed, delivery note
+  // (at the end of this module).
   const BASIS = [['SHIP', 'Per shipment'], ['BOX', 'Per box'], ['B20', 'Per 20′'], ['B40', 'Per 40′'], ['DOC', 'Per document'], ['UNIT', 'Per unit']];
   const BASIS_SHORT = { SHIP: 'Per shipment', BOX: 'Per box', B20: 'Per 20′', B40: 'Per 40′', DOC: 'Per document', UNIT: 'Per unit' };
   const ABBR = new Set(['THC', 'OTHC', 'DPC', 'ISPS', 'VGM', 'BL', 'DG', 'DO', 'ED', 'TLUC', 'ITT', 'FOB', 'VAT', 'MECRC', 'IMCO', 'AWB', 'LCL', 'FCL']);
@@ -3301,7 +3322,7 @@
     const unlockBtn = costCanUnlock(D) ? '<button type="button" class="btn-ghost" data-act="cost-unlock">' + icon('lock', 16) + '<span>Unlock</span></button>' : '';
     const xlsBtn = D && (D.lines.length || (C && C.draft && C.draft.lines.length)) ? '<button type="button" class="btn-ghost" data-act="cost-xlsx" title="Download Excel">' + icon('download', 16) + '<span>Excel</span></button>' : '';
     return '<header class="cost-head">' +
-      '<div class="ch-main"><div class="vh-idrow"><h1 class="vh-job">' + esc(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + '</div>' +
+      '<div class="ch-main"><div class="vh-idrow"><h1 class="vh-job">' + copyNo93(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + '</div>' +
         '<div class="vh-cust">' + esc(j.customer || '—') + '</div>' +
         '<div class="ch-meta"><span>' + esc(j.mode === 'misc' ? (j.against ? 'AGAINST ' + j.against : 'COSTING ONLY') : j.route) + '</span><span>CS · ' + esc(j.cs || '—') + '</span>' + (j.sales ? '<span>SALES · ' + esc(j.sales) + '</span>' : '') +
         '<button type="button" class="link-btn" data-job="' + esc(j.jobNo) + '">Open job →</button></div></div>' +
@@ -4105,7 +4126,7 @@
     return { text: st ? st.def.next : n.text.replace(/\s*·?\s*cutoff.*$/i, ''), tone: 'calm', rank: n.rank };
   }
   // Step names say what is still to happen, until it has happened: "SI submission" → "SI submitted".
-  const PEND_NAME = { si: 'SI submission', docsReady: 'Docs to prepare', ed: 'ED pending', dgpc: 'DGPC pending', blConf: 'BL confirmation pending', blReceived: 'BL to receive', blIss: 'BL issue pending',
+  const PEND_NAME = { si: 'SI submission', docsReady: 'Docs to prepare', ed: 'ED pending', dgpc: 'DGPC pending', blFinal: 'Final BL pending', switchBl: 'Switch BL pending', blConf: 'BL confirmation pending', blReceived: 'BL to receive', blIss: 'BL issue pending',
     awbConf: 'AWB confirmation pending', awbIss: 'AWB issue pending', tracking: 'Tracking no. pending', costing: 'Costing pending', discharge: 'Discharge list pending',
     doRel: 'DO release pending', customs: 'Customs clearance', sailed: 'Sailing', departed: 'Departing', pickedUp: 'Pick-up', arrived: 'ETA', deliveredEta: 'Delivery',
     delivered: 'Delivery', deliveredOpt: 'Delivery', linked: 'Link to a job' };
@@ -4315,7 +4336,7 @@
     if (formType(form) !== 'SFIF') return;
     const dg = form.querySelector('[name="dg"]'), eta = form.querySelector('[name="eta"]'), pf = form.querySelector('[name="portFree"]');
     if (!pf || !eta || !eta.value || (dg && dg.value === 'DG') || pf.value) return;
-    pf.value = '9'; flashField(pf);
+    pf.value = '10'; flashField(pf);
   }
 
   // ================================================================ v2.7 — wiring
@@ -4621,7 +4642,15 @@
   }
   const hhmm = (t) => String(t.h).padStart(2, '0') + ':' + String(t.m).padStart(2, '0');
   const durTxt = (m) => (m < 60 ? m + ' MIN' : Math.floor(m / 60) + ' H' + (m % 60 && m < 300 ? ' ' + (m % 60) + ' MIN' : ''));
-  const weekTxt = (z) => ((WEEKEND[z.cc] || [0, 6]).join() === '5,6' ? 'Sunday–Thursday' : (WEEKEND[z.cc] || []).join() === '5' ? 'Saturday–Thursday' : 'Monday–Friday');
+  function weekTxt(z) {   // v2.9.3: any working week (Brunei: Monday–Thursday, Saturday)
+    const off = WEEKEND[z.cc] || [0, 6], N = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const start = [0, 1, 2, 3, 4, 5, 6].find((d) => !off.includes(d) && off.includes((d + 6) % 7));
+    if (start === undefined) return 'every day';
+    const runs = []; let cur = null;
+    for (let i = 0; i < 7; i++) { const d = (start + i) % 7; if (off.includes(d)) { if (cur) { runs.push(cur); cur = null; } } else if (!cur) cur = [d, d]; else cur[1] = d; }
+    if (cur) runs.push(cur);
+    return runs.map(([a, b]) => (a === b ? N[a] : N[a] + '–' + N[b])).join(', ');
+  }
   // state: short, on the clock · more: the whole story, for the tooltip
   function clockBits(z, now) {
     const o = officeState(z, now); if (!o) return null;
@@ -4839,7 +4868,7 @@
     const tone = done ? 'done' : n < 0 ? 'late' : n === 0 ? 'today' : 'later';
     return '<li class="rm is-' + tone + '"><button type="button" class="rm-tick' + (done ? ' is-on' : '') + '" data-rem-done="' + esc(r.id) + '" aria-label="' + esc((done ? 'Done — tap to put back: ' : 'Mark done: ') + r.text) + '">' + TICK + '</button>' +
       '<button type="button" class="rm-main" data-rem-edit="' + esc(r.id) + '" aria-label="' + esc('Edit or snooze: ' + r.text) + '"><span class="rm-text">' + esc(r.text) + '</span><span class="rm-meta"><span class="rm-when">' + esc(remWhen(r)) + '</span>' +
-        (r.repeat ? '<span class="rm-rep">' + icon('refresh', 11) + REPEAT_NAME[r.repeat] + '</span>' : '') + '</span></button>' +
+        (r.repeat ? '<span class="rm-rep">' + icon('refresh', 11) + remRep93(r) + '</span>' : '') + '</span></button>' +
       (r.job && !noJob ? '<button type="button" class="rm-job" data-job="' + esc(r.job) + '">' + esc(r.job) + '</button>' : '') + '</li>';
   }
   // grouped: late · today · tomorrow · later (next 14 days) · done today
@@ -4867,6 +4896,7 @@
         '<div class="rm-two"><label><span class="pop-label">Time (optional)</span><input type="time" id="remTime" value="' + esc(F.time) + '"></label>' +
           '<label><span class="pop-label">Job (optional)</span><input type="text" id="remJob" list="dlMyJobs" autocomplete="off" spellcheck="false" value="' + esc(F.job) + '" placeholder="Job number"></label></div>' +
         '<div class="pop-label">Repeat</div><div class="seg seg-mini rm-rep-seg" role="group" aria-label="Repeat">' + Object.keys(REPEAT_NAME).map((k) => '<button type="button" data-rem-rep="' + k + '" aria-pressed="' + ((F.repeat || '') === k) + '">' + REPEAT_NAME[k] + '</button>').join('') + '</div>' +
+        (F.repeat && parseDate(F.due) ? '<p class="rm-rep-hint">' + esc(remRep93({ repeat: F.repeat, due: F.due }, true)) + '</p>' : '') +
         '<div class="form-error" id="remErr" role="alert"></div>' +
         '<button type="submit" class="btn-brutal pop-main" data-primary>' + (F.id ? 'SAVE' : 'ADD REMINDER') + '</button>' +
         (F.id ? '<div class="rm-snooze"><span class="pop-label">Snooze to</span><div class="choice-row">' + [[1, 'Tomorrow'], [3, 'In 3 days'], [((8 - t0.getDay()) % 7) || 7, 'Next ' + DOW[mon.getDay()]]].map(([n, l]) => '<button type="button" class="choice" data-rem-snooze="' + n + '">' + l + '</button>').join('') + '</div></div>' +
@@ -4975,6 +5005,13 @@
         if (j.cat === 'EXPORT' && j.dg === 'DG' && j.mode === 'sea') task(!j.dgpc || j.dgpc === 'PENDING', j.dgCut, 'DGPC NOT SUBMITTED', 'DGPC not submitted');   // v2.9.2
         else if (j.cat === 'EXPORT' && j.dg === 'DG' && j.dgCut && !(sd !== null && sd < 0)) { const dc = days(t0, j.dgCut); if (dc >= -1 && dc <= 3) add(j, 'DG CUTOFF', 'DG cutoff', dc, dc < 0 ? 'passed yesterday' : dc === 0 ? 'today' : dc === 1 ? 'tomorrow' : 'in ' + dc + ' days'); }
       }
+      if (j.type === 'SFIF' || j.type === 'SFIL') {   // v2.9.3: sea imports — BL confirmation by the sailing date, overdue after it
+        const sd = j.etd ? days(t0, j.etd) : null;
+        if (j.bl !== NA && !BL_OK.includes(j.bl)) {
+          if (sd !== null && sd < 0) { if (sd >= -21 && !j.arrived) add(j, 'BL NOT CONFIRMED', 'BL not confirmed', sd, 'sailed ' + (sd === -1 ? 'yesterday' : (-sd) + ' days ago')); }
+          else if (sd !== null && sd <= 3) add(j, 'BL NOT CONFIRMED', 'BL not confirmed', sd, sd === 0 ? 'sails today' : sd === 1 ? 'sails tomorrow' : 'sails in ' + sd + ' days');
+        }
+      }
       if (j.cat === 'IMPORT' && j.arrived && !j.delivery && j.lineFreeEnd) {
         const d = days(t0, j.lineFreeEnd);
         if (d <= 2 && d >= -30) add(j, d < 0 ? 'FREE TIME OVER' : 'FREE TIME ENDS', d < 0 ? 'Free time over' : 'Free time ends', d, d < 0 ? 'over by ' + (-d) + (d === -1 ? ' day' : ' days') : d === 0 ? 'ends today' : d === 1 ? 'ends tomorrow' : 'ends in 2 days', { free: true });
@@ -5011,53 +5048,79 @@
       '<div class="tile-head"><h2 class="tile-title" id="watchTitle">TODAY’S WATCH</h2><span class="watch-sub">' + (m.watch.length ? m.watch.length + ' to do' : 'All clear') + '</span></div>' +
       '<div class="tile-body">' + (body || empty('check', 'Nothing due in the next 3 days.')) + '</div>' + seeAll('watch', m.watch.length, true) + '</section>';
   }
-  // the week as an agenda: a strip of seven days (how much sails and arrives each day), then day by day
+  // the week as an agenda: a strip of seven days (how much sails and arrives each day), then day by day.
+  // v2.9.3: calendar weeks Monday–Sunday with ‹ › (last week, next week …); days already gone say what sailed or arrived.
+  const monday93 = (d) => addDays(d, -((d.getDay() + 6) % 7));
+  const wkStart93 = () => addDays(monday93(today0()), 7 * (state.wkOff93 || 0));
+  function wkEvents93(m, start) {
+    const end = addDays(start, 6), ev = [];
+    m.active.forEach((j) => {
+      if (j.mode === 'misc') return;
+      if (j.etd && j.etd >= start && j.etd <= end) ev.push({ j, d: j.etd, k: 'dep' });
+      if (j.eta && j.eta >= start && j.eta <= end) ev.push({ j, d: j.eta, k: 'arr' });
+    });
+    return ev.sort((a, b) => a.d - b.d || (a.k === b.k ? 0 : a.k === 'dep' ? -1 : 1));
+  }
+  function wkTag93(e, t0) {
+    const past = e.d < t0, cr = e.j.mode === 'courier';
+    if (e.k === 'arr') return cr ? (past ? 'DELIVERED' : 'DELIVERY') : past ? 'ARRIVED' : 'ARRIVES';
+    return e.j.mode === 'air' ? (past ? 'DEPARTED' : 'DEPARTS') : cr ? (past ? 'PICKED UP' : 'PICK-UP') : past ? 'SAILED' : 'SAILS';
+  }
+  const dm93 = (d) => d.getDate() + ' ' + MON91[d.getMonth()];
+  function wkName93(off, start) {
+    if (off === 0) return 'THIS WEEK';
+    if (off === 1) return 'NEXT WEEK';
+    if (off === -1) return 'LAST WEEK';
+    const e = addDays(start, 6);
+    return (start.getMonth() === e.getMonth() ? start.getDate() + '–' + dm93(e) : dm93(start) + ' – ' + dm93(e)).toUpperCase();
+  }
   function weekTile91(m, anim) {
-    const t0 = today0(); let ev = [];
-    m.arriving.forEach((j) => ev.push({ j, d: j.eta, k: 'arr' }));
-    m.departing.forEach((j) => ev.push({ j, d: j.etd, k: 'dep' }));
-    ev.sort((a, b) => a.d - b.d || (a.k === b.k ? 0 : a.k === 'dep' ? -1 : 1));
-    const pick = wkPick92(t0), all = ev;                          // v2.9.2: a day picked in the strip (tap it again for the whole week)
-    ev = pick ? all.filter((x) => +dayOf(x.d) === +pick) : all;
+    const t0 = today0(), off = state.wkOff93 || 0, start = wkStart93(), end = addDays(start, 6);
+    const all = wkEvents93(m, start), pick = wkPick92();                // a day picked in the strip (tap it again for the whole week)
+    const ev = pick ? all.filter((x) => +dayOf(x.d) === +pick) : all;
     const nA = ev.filter((x) => x.k === 'arr').length, nD = ev.length - nA;
-    const strip = '<div class="wk-strip' + (pick ? ' has-pick' : '') + '" role="group" aria-label="Pick a day">' + Array.from({ length: 7 }, (_, i) => addDays(t0, i)).map((d, i) => {
+    const strip = '<div class="wk-strip' + (pick ? ' has-pick' : '') + '" role="group" aria-label="Pick a day">' + Array.from({ length: 7 }, (_, i) => addDays(start, i)).map((d) => {
       const e = all.filter((x) => +dayOf(x.d) === +d), a = e.filter((x) => x.k === 'arr').length, s = e.length - a, on = !!pick && +pick === +d;
-      return '<button type="button" class="wk-day' + (i === 0 ? ' is-today' : '') + (e.length ? '' : ' is-none') + (on ? ' is-on' : '') + '" data-wkday="' + isoOf(d) + '" aria-pressed="' + on + '" title="' + esc(DOW[d.getDay()] + ' ' + d.getDate() + ' ' + MON91[d.getMonth()] + ' · ' + (s ? s + ' sailing' : 'none sailing') + ', ' + (a ? a + ' arriving' : 'none arriving')) + '">' +
+      return '<button type="button" class="wk-day' + (+d === +t0 ? ' is-today' : d < t0 ? ' is-past' : '') + (e.length ? '' : ' is-none') + (on ? ' is-on' : '') + '" data-wkday="' + isoOf(d) + '" aria-pressed="' + on + '" title="' + esc(DOW[d.getDay()] + ' ' + dm93(d) + ' · ' + (s ? s + ' sailing' : 'none sailing') + ', ' + (a ? a + ' arriving' : 'none arriving')) + '">' +
         '<em>' + DOW_UP[d.getDay()] + '</em><b>' + d.getDate() + '</b><span class="wk-n">' + (s ? '<i class="is-dep">' + s + '</i>' : '') + (a ? '<i class="is-arr">' + a + '</i>' : '') + '</span></button>';
     }).join('') + '</div>';
-    const tag = (e) => (e.k === 'arr' ? (e.j.mode === 'courier' ? 'DELIVERY' : 'ARRIVES') : e.j.mode === 'air' ? 'DEPARTS' : e.j.mode === 'courier' ? 'PICK-UP' : 'SAILS');
-    let last = -1, list = '';
+    let last = null, list = '';
     ev.slice(0, LIST_MAX).forEach((e, i) => {
       const n = days(t0, e.d);
-      if (n !== last) { last = n; list += '<div class="wk-gh' + (i >= 6 ? ' is-more' : '') + '">' + (n === 0 ? 'TODAY' : n === 1 ? 'TOMORROW' : DOW_UP[e.d.getDay()]) + ' · ' + e.d.getDate() + ' ' + MON91[e.d.getMonth()].toUpperCase() + '</div>'; }
-      list += '<button type="button" class="wk-row li' + (i >= 6 ? ' is-more' : '') + '" data-job="' + esc(e.j.jobNo) + '"><span class="wk-tag is-' + e.k + '">' + tag(e) + '</span><span class="li-main"><span class="li-job">' + changedDot(e.j) + esc(e.j.jobNo) + '</span><span class="li-sub">' + esc(nice(e.j.route)) + (e.j.cargo ? ' · ' + esc(e.j.cargo) : '') + '</span></span></button>';
+      if (n !== last) { last = n; list += '<div class="wk-gh' + (i >= 6 ? ' is-more' : '') + '">' + (n === 0 ? 'TODAY' : n === 1 ? 'TOMORROW' : n === -1 ? 'YESTERDAY' : DOW_UP[e.d.getDay()]) + ' · ' + e.d.getDate() + ' ' + MON91[e.d.getMonth()].toUpperCase() + '</div>'; }
+      list += '<button type="button" class="wk-row li' + (i >= 6 ? ' is-more' : '') + '" data-job="' + esc(e.j.jobNo) + '"><span class="wk-tag is-' + e.k + (e.d < t0 ? ' is-past' : '') + '">' + wkTag93(e, t0) + '</span><span class="li-main"><span class="li-job">' + changedDot(e.j) + esc(e.j.jobNo) + '</span><span class="li-sub">' + esc(nice(e.j.route)) + (e.j.cargo ? ' · ' + esc(e.j.cargo) : '') + '</span></span></button>';
     });
+    const gone = end < t0;
+    const none = pick ? 'Nothing ' + (pick < t0 ? 'sailed or arrived' : 'sails or arrives') + ' on ' + DOW[pick.getDay()] + ' ' + dm93(pick) + '.'
+      : 'Nothing ' + (gone ? 'sailed or arrived' : 'sails or arrives') + ' ' + (off === 0 ? 'this week' : off === 1 ? 'next week' : off === -1 ? 'last week' : 'from ' + dm93(start) + ' to ' + dm93(end)) + '.';
     return '<section class="tile t-week' + anim + '" style="--d:280ms" aria-labelledby="weekTitle">' +
-      '<div class="tile-head"><h2 class="tile-title" id="weekTitle">THIS WEEK</h2><span class="tile-count">' + ev.length + '</span></div>' +
-      strip + '<div class="wk-legend"><span><i class="is-dep"></i>Sailing ' + nD + '</span><span><i class="is-arr"></i>Arriving ' + nA + '</span>' + (pick ? '<button type="button" class="wk-all" data-wkday="">Whole week</button>' : '') + '</div>' +
-      '<div class="tile-body">' + (list || empty('calendar', pick ? 'Nothing sails or arrives on ' + DOW[pick.getDay()] + ' ' + pick.getDate() + ' ' + MON91[pick.getMonth()] + '.' : 'Nothing sails or arrives in the next 7 days.')) + '</div>' + seeAll('week', ev.length) + '</section>';
+      '<div class="tile-head"><div class="wk-head"><h2 class="tile-title" id="weekTitle">' + wkName93(off, start) + '</h2><span class="wk-nav"><button type="button" class="wk-arrow is-prev" data-wk-off="' + (off - 1) + '" aria-label="Previous week">' + icon('chevron', 15) + '</button><button type="button" class="wk-arrow is-next" data-wk-off="' + (off + 1) + '" aria-label="Next week">' + icon('chevron', 15) + '</button></span></div><span class="tile-count">' + ev.length + '</span></div>' +
+      strip + '<div class="wk-legend"><span><i class="is-dep"></i>Sailing ' + nD + '</span><span><i class="is-arr"></i>Arriving ' + nA + '</span>' +
+        (pick || off ? '<span class="wk-links">' + (pick ? '<button type="button" class="wk-all" data-wkday="">Whole week</button>' : '') + (off ? '<button type="button" class="wk-all" data-wk-off="0">This week</button>' : '') + '</span>' : '') + '</div>' +
+      '<div class="tile-body">' + (list || empty('calendar', none)) + '</div>' + seeAll('week', ev.length) + '</section>';
   }
-  // the picked day (a Date at local midnight) while it is still inside the coming seven days, else null
-  function wkPick92(t0) {
+  // the picked day (a Date at local midnight) while it is inside the week shown, else null
+  function wkPick92() {
     const k = state.wkDay92; if (!k) return null;
-    for (let i = 0; i < 7; i++) { const d = addDays(t0 || today0(), i); if (isoOf(d) === k) return d; }
+    const start = wkStart93();
+    for (let i = 0; i < 7; i++) { const d = addDays(start, i); if (isoOf(d) === k) return d; }
     state.wkDay92 = ''; return null;
   }
-  // the side panel for THIS WEEK follows the picked day
+  // the side panel for the week follows the week and the picked day
   function weekPanel92(m) {
-    const pick = wkPick92(today0()), list = m.departing.concat(m.arriving);
-    if (!pick) return ['THIS WEEK', list];
-    return [DOW_UP[pick.getDay()] + ' · ' + pick.getDate() + ' ' + MON91[pick.getMonth()].toUpperCase(), list.filter((j) => (m.departing.includes(j) && j.etd && +dayOf(j.etd) === +pick) || (m.arriving.includes(j) && j.eta && +dayOf(j.eta) === +pick))];
+    const pick = wkPick92(), ev = wkEvents93(m, wkStart93()).filter((e) => !pick || +dayOf(e.d) === +pick);
+    return [pick ? DOW_UP[pick.getDay()] + ' · ' + dm93(pick).toUpperCase() : wkName93(state.wkOff93 || 0, wkStart93()), ev.map((e) => e.j)];
   }
-  // ================================================================ v2.9.1 — Home: POD OFFICE HOURS (v2.9.2: times in Dubai time)
-  // The destination port of each of your jobs, by name: teal = open, amber = closing within the hour, grey = closed.
-  // Open ones by who closes first, then who opens first.
+  // ================================================================ v2.9.3 — Home: OVERSEAS OFFICE HOURS (times in Dubai time)
+  // The far end of every live job — exports: POD; imports: POL; cross-trade: both — not the UAE (Dubai time is shown).
+  // Teal = open, amber = closing within the hour, grey = closed; open ones by who closes first, then who opens first.
+  function farEnds93(j) { return j.cat === 'EXPORT' ? [j.pod] : j.cat === 'IMPORT' ? [j.pol] : j.cat === 'CROSS' ? [j.pol, j.pod] : []; }
   function portList91(t0) {
     const now = new Date(), map = new Map();
-    liveJobs91().forEach((j) => {
-      const p = j.pod, z = p && portZone(p); if (!z) return;
-      const k = upq(p), e = map.get(k) || { port: k, z, jobs: [] }; e.jobs.push(j); map.set(k, e);
-    });
+    liveJobs91().forEach((j) => farEnds93(j).forEach((p) => {
+      const z = p && portZone(p); if (!z || z.cc === 'AE') return;
+      const k = upq(p), e = map.get(k) || { port: k, z, jobs: [] }; if (!e.jobs.includes(j)) e.jobs.push(j); map.set(k, e);
+    }));
     return Array.from(map.values()).map((e) => Object.assign(e, { o: officeState(e.z, now) })).filter((e) => e.o)
       .sort((a, b) => (a.o.open !== b.o.open ? (a.o.open ? -1 : 1) : a.o.open ? a.o.toClose - b.o.toClose : a.o.toOpen - b.o.toOpen) || b.jobs.length - a.jobs.length);
   }
@@ -5075,25 +5138,49 @@
   function portOffices(anim) {
     const t0 = today0(), now = new Date(), L = portList91(t0);
     return '<section class="ports glass' + (anim || '') + '" id="portOffices" aria-labelledby="poTitle" style="--d:20ms">' +
-      '<div class="po-head"><h2 class="po-k" id="poTitle">POD OFFICE HOURS</h2><span class="po-now" title="Every time here is Dubai time. Ethix office hours 09:00–18:00, Monday–Friday.">DUBAI TIME <b>' + yourTime91(now) + '</b></span></div>' +
-      (L.length ? '<div class="po-chips">' + L.map((e) => portChip91(e, now)).join('') + '<button type="button" class="po-chip is-more" data-act="ports-all" hidden>+0 more</button></div>'
-        : '<p class="po-none">The ports of your jobs show here, with their office hours in Dubai time.</p>') + '</section>';
+      '<div class="po-head"><h2 class="po-k" id="poTitle">OVERSEAS OFFICE HOURS</h2><span class="po-now" title="Every time here is Dubai time. Ethix office hours 09:00–18:00, Monday–Friday.">DUBAI TIME <b>' + yourTime91(now) + '</b></span></div>' +
+      (L.length ? '<div class="po-chips" id="poChips" aria-live="polite">' + L.map((e) => portChip91(e, now)).join('') + '</div>' +
+        '<div class="po-foot"><span class="po-dots" id="poDots"></span><button type="button" class="po-all" data-act="offices-all">All ' + L.length + (L.length === 1 ? ' office' : ' offices') + '</button></div>'
+        : '<p class="po-none">The overseas ports of your jobs show here, with their office hours in Dubai time.</p>') + '</section>';
   }
-  // keep the chips to two rows (three on the phone); the rest are counted in "+N more"
+  // the chips in pages of two rows (three on the phone); the pages turn by themselves (pause while pointed at or touched)
   function fitPorts91() {
-    const box = $('#portOffices .po-chips'); if (!box) return;
-    const chips = Array.from(box.querySelectorAll('.po-chip[data-port91]')), more = box.querySelector('.po-chip.is-more');
-    if (!more || !chips.length) return;
-    chips.forEach((c) => { c.hidden = false; }); more.hidden = true;
+    const box = $('#poChips'), dots = $('#poDots'); if (!box) return;
+    const chips = Array.from(box.querySelectorAll('.po-chip[data-port91]')); if (!chips.length) return;
+    box.style.minHeight = ''; box.classList.remove('is-paged');
+    chips.forEach((c) => { c.hidden = false; });
     const rows = window.innerWidth < 760 ? 3 : 2, top0 = chips[0].offsetTop, rowH = chips[0].offsetHeight + 6;
-    const fits = (el) => Math.round((el.offsetTop - top0) / rowH) < rows;
-    let n = chips.findIndex((c) => !fits(c)); if (n < 0) return;
-    for (let k = n; k < chips.length; k++) chips[k].hidden = true;
-    const say = () => { more.textContent = '+' + (chips.length - n) + ' more'; };
-    more.hidden = false; say();
-    while (n > 0 && !fits(more)) { n--; chips[n].hidden = true; say(); }
+    chips.forEach((c) => { c.dataset.page = String(Math.floor(Math.round((c.offsetTop - top0) / rowH) / rows)); });
+    const n = +chips[chips.length - 1].dataset.page + 1;
+    state.poPages93 = n;
+    if (!(state.poPage93 < n)) state.poPage93 = 0;
+    if (n > 1) { box.style.minHeight = (rows * rowH - 6) + 'px'; box.classList.add('is-paged'); }
+    if (dots) dots.innerHTML = n > 1 ? Array.from({ length: n }, (_, i) => '<button type="button" class="po-dot" data-po-page="' + i + '" aria-label="Offices, page ' + (i + 1) + ' of ' + n + '"></button>').join('') : '';
+    showPorts93(state.poPage93, false);
   }
-  const portsPop91 = () => () => { const now = new Date(); return '<div class="pop-title">POD office hours</div><div class="po-chips is-all">' + portList91(today0()).map((e) => portChip91(e, now)).join('') + '</div>'; };
+  function showPorts93(p, turn) {
+    const box = $('#poChips'); if (!box) return;
+    state.poPage93 = p;
+    box.querySelectorAll('.po-chip[data-port91]').forEach((c) => { c.hidden = +c.dataset.page !== p; });
+    $$('#poDots .po-dot').forEach((d, i) => { d.classList.toggle('is-on', i === p); d.setAttribute('aria-current', i === p ? 'true' : 'false'); });
+    if (turn) { box.classList.remove('is-turn'); void box.offsetWidth; box.classList.add('is-turn'); }
+  }
+  // every overseas office in the side panel: open now · closed, with local time and the jobs there
+  function openOffices93(opener) {
+    const now = new Date(), L = portList91(today0());
+    const row = (e) => {
+      const c = portState91(e.o, now);
+      return '<div class="of-row is-' + c.tone + '"><div class="of-top"><i></i><b>' + esc(portName91(e.port)) + '</b><span class="of-state">' + esc(c.txt) + '</span></div>' +
+        '<div class="of-sub">' + hhmm(e.o.t) + ' local · ' + esc(weekTxt(e.z)) + '</div><div class="of-jobs">' + e.jobs.map((j) => '<button type="button" class="of-job" data-fl-open="' + esc(j.jobNo) + '" title="' + esc((j.customer || '') + ' · ' + j.route) + '">' + changedDot(j) + esc(j.jobNo) + '</button>').join('') + '</div></div>';
+    };
+    const group = (label, list, tone) => (list.length ? '<div class="dr-gh' + (tone ? ' is-' + tone : '') + '"><span>' + label + '</span><b>' + list.length + '</b></div>' + list.map(row).join('') : '');
+    closeOverlays(true);
+    $('#drawerKicker').textContent = L.length + (L.length === 1 ? ' OFFICE' : ' OFFICES');
+    $('#drawerBody').innerHTML = '<h2 class="peek-job list-title" id="drawerTitle">OVERSEAS OFFICE HOURS</h2><p class="of-intro">Dubai time ' + yourTime91(now) + ' · offices work 09:00–17:00 their own time</p>' +
+      (L.length ? group('OPEN NOW', L.filter((e) => e.o.open), 'teal') + group('CLOSED', L.filter((e) => !e.o.open)) : '<p class="of-intro">No overseas ports on your jobs.</p>');
+    showDrawer(opener);
+    state.overlay = 'drawer';
+  }
   const portJobsPop91 = (port) => () => {
     const e = portList91(today0()).find((x) => x.port === port); if (!e) return '<p class="pop-text">No jobs.</p>';
     const c = portState91(e.o, new Date());
@@ -5155,9 +5242,9 @@
     } else if (kind === 'watch') {
       html = m.watch.map((w) => row(w.j, '<span class="dr-next"><span class="dr-what">' + esc(w.say) + '</span></span>', '<span class="dr-side is-' + (w.level === 'urgent' ? 'red' : 'amber') + '"><b>' + esc(w.when) + '</b></span>')).join('');
     } else if (kind === 'week') {
-      const pick = wkPick92(t0);
-      const ev = m.departing.map((j) => ({ j, d: j.etd, k: 'dep' })).concat(m.arriving.map((j) => ({ j, d: j.eta, k: 'arr' }))).filter((e) => !pick || +dayOf(e.d) === +pick).sort((a, b) => a.d - b.d);
-      html = ev.map((e) => row(e.j, '', side(e.k === 'arr' ? 'ARRIVES' : e.j.mode === 'air' ? 'DEPARTS' : 'SAILS', e.d, rel91(e.d, t0), e.k === 'arr' ? 'teal' : ''))).join('');
+      const pick = wkPick92();
+      const ev = wkEvents93(m, wkStart93()).filter((e) => !pick || +dayOf(e.d) === +pick);   // v2.9.3: the week shown on Home
+      html = ev.map((e) => row(e.j, '', side(wkTag93(e, t0), e.d, rel91(e.d, t0), e.k === 'arr' ? 'teal' : ''))).join('');
     } else if (kind === 'atsea') {
       html = list.map((j) => row(j, '<span class="dr-note">Day ' + j.dayN + ' of ' + j.dayT + '</span>', side('ETA', j.eta, rel91(j.eta, t0)))).join('');
     } else {
@@ -5183,7 +5270,8 @@
       : /^CONFIRMED/.test(v) ? (air || cr ? k + ' confirmed' : v.slice(10) + ' confirmed') : /ISSUED$/.test(v) ? (air || cr ? k + ' issued' : v.slice(0, 3) + ' issued') : nice(v);
     const cs = costState(j), cost = cs === 'none' ? '' : 'Costing ' + (cs === 'draft' ? 'draft' : cs === 'done' ? 'done' : 'pending');
     const dgpc = j.cat === 'EXPORT' && j.dg === 'DG' && j.mode === 'sea' && j.dgpc !== NA ? (['SUBMITTED', 'APPROVED'].includes(j.dgpc) ? '' : 'DGPC pending') : '';
-    return { hold: j.hold, where, rest: [bl, dgpc, cost].filter(Boolean) };
+    const sw = swOn93(j) ? 'Switch BL ' + (j.switchBl === 'CONFIRMATION PENDING' ? 'to confirm' : j.switchBl.toLowerCase()) : '';   // v2.9.3
+    return { hold: j.hold, where, rest: [bl, sw, dgpc, cost].filter(Boolean) };
   }
   async function jobsWord91() {
     const t0 = today0(), X = XL.X, jobs = scoped().filter((j) => j.active);
@@ -5268,6 +5356,319 @@
     } catch (e) { toast('The Word file could not be made: ' + e.message, { error: true }); }
   }
 
+  // ================================================================ v2.9.3 — from Amal's use of v2.9.2
+  // ---------- switch BL (sea jobs): one column SWITCH BL — NO, or where the switch BL stands. The main BL is then an OBL.
+  const SW_TYPES93 = ['SFEF', 'SFEL', 'SFIF', 'SFIL', 'SFC'];
+  const SBL93 = ['CONFIRMED SBL', 'SBL ISSUED'];
+  const swOn93 = (j) => !!j && SW_TYPES93.includes(j.type) && !!j.switchBl && j.switchBl !== 'NO';
+  const toObl93 = (v) => (v === 'CONFIRMED SBL' ? 'CONFIRMED OBL' : v === 'SBL ISSUED' ? 'OBL ISSUED' : v);
+  function swBl93(j, all) {
+    if (!swOn93(j)) return;
+    all.forEach((st) => { if (st.field === 'bl' && st.def) st.def = Object.assign({}, st.def, { choices: (st.def.choices || OPTS.bl).filter((v) => !SBL93.includes(v)), primary: toObl93(st.def.primary) }); });
+  }
+  const optsFor93 = (j, f) => (f === 'bl' && swOn93(j) ? OPTS.bl.filter((v) => !SBL93.includes(v)) : OPTS[f]);
+  // turning switch BL on while the main BL is an SBL: the main BL moves to the OBL in the same save
+  function swFix93(j, field, val) { return field === 'switchBl' && val && val !== 'NO' && SBL93.includes(j.bl) ? { bl: toObl93(j.bl) } : {}; }
+  // Edit details: the BL list follows switch BL
+  function swForm93(form) {
+    if (!form) return;
+    const sw = form.querySelector('[name="switchBl"]'), bl = form.querySelector('[name="bl"]'); if (!sw || !bl) return;
+    if (!bl.dataset.all) bl.dataset.all = JSON.stringify([...bl.options].map((o) => [o.value, o.textContent]));
+    const on = !!sw.value && sw.value !== 'NO', cur = bl.value;
+    bl.innerHTML = JSON.parse(bl.dataset.all).filter(([v]) => !on || !SBL93.includes(v)).map(([v, t]) => '<option value="' + esc(v) + '">' + esc(t) + '</option>').join('');
+    bl.value = on ? toObl93(cur) : cur;
+    const f = bl.closest('.field'); let h = f && f.querySelector('.sw-hint');
+    if (on && f && !h) { h = document.createElement('p'); h.className = 'sw-hint'; h.textContent = 'Switch BL: the main BL is an OBL.'; f.appendChild(h); }
+    if (!on && h) h.remove();
+  }
+
+  // ---------- tap a job number to copy it (job page, Jobs, Follow-ups, the costing page)
+  const copyNo93 = (no) => '<span class="copy-no" data-copy="' + esc(no) + '" role="button" tabindex="0" title="Copy ' + esc(no) + '">' + esc(no) + '</span>';
+  async function copyText93(no, el) {
+    let ok = false;
+    try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(no); ok = true; } } catch (e) { ok = false; }
+    if (!ok) {
+      const ta = document.createElement('textarea'); ta.value = no; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
+      document.body.appendChild(ta); ta.select(); try { ok = document.execCommand('copy'); } catch (e) { ok = false; } ta.remove();
+    }
+    if (el) { el.classList.remove('is-copied'); void el.offsetWidth; el.classList.add('is-copied'); setTimeout(() => el.classList.remove('is-copied'), 1400); }
+    toast(ok ? 'Copied ' + no : 'Could not copy — select the number instead', ok ? {} : { error: true });
+  }
+
+  // ---------- remarks on the job page (under the customer name; edit them there)
+  function remarksLine93(j) {
+    const can = canEditJob(j) && !j.closed;
+    if (!j.remarks) return can ? '<button type="button" class="vh-rm-add" data-act="remarks93">' + icon('plus', 14) + 'Add remarks</button>' : '';
+    return '<div class="vh-remarks"><span class="vh-rm-k">REMARKS</span><p class="vh-rm-text" id="vhRemarks">' + esc(j.remarks) + '</p>' +
+      '<span class="vh-rm-act"><button type="button" class="link-btn vh-rm-more" data-act="remarks-more" hidden>More</button>' + (can ? '<button type="button" class="icon-btn vh-rm-edit" data-act="remarks93" aria-label="Edit remarks" title="Edit remarks">' + icon('edit', 15) + '</button>' : '') + '</span></div>';
+  }
+  function remarksFit93() {   // "More" only when the remarks run past two lines
+    const p = $('#vhRemarks'), b = $('.vh-rm-more'); if (!p || !b) return;
+    b.hidden = p.classList.contains('is-open') ? false : p.scrollHeight <= p.clientHeight + 2;
+    b.textContent = p.classList.contains('is-open') ? 'Less' : 'More';
+  }
+  const remarksPop93 = (no) => () => {
+    const j = findJob(no); if (!j) return '';
+    return '<div class="pop-title">Remarks</div><form class="pop-form" data-remarks-form="' + esc(j.jobNo) + '"><label class="pop-label" for="rmText93">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</label>' +
+      '<textarea id="rmText93" rows="4" maxlength="500" placeholder="Type the remarks">' + esc(j.remarks || '') + '</textarea>' +
+      '<button type="submit" class="btn-brutal pop-main" data-primary>SAVE REMARKS</button>' + (j.remarks ? '<button type="button" class="link-btn quiet pop-clear" data-remarks-clear="' + esc(j.jobNo) + '">Clear remarks</button>' : '') + '</form>' + SAVE_NOTE;
+  };
+  function saveRemarks93(no, text) {
+    const j = findJob(no); if (!j) return;
+    const v = String(text || '').trim();
+    closeOverlays();
+    if (v === String(j.raw.remarks || '').trim()) return;
+    saveJob(j.jobNo, { remarks: v }, { toast: v ? 'Remarks saved' : 'Remarks cleared' });
+  }
+
+  // ---------- follow-up plans: daily · every 2 days · weekly · every Monday … · next check on a date (then back) · paused
+  const DOW3_93 = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  const DOWFULL93 = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  function planParse93(p) {
+    p = String(p || '').toUpperCase().trim();
+    if (EVERY_N[p] !== undefined) return p === 'PAUSED' ? { kind: 'paused' } : { kind: 'n', n: EVERY_N[p], base: p };
+    let m = p.match(/^EVERY (SUN|MON|TUE|WED|THU|FRI|SAT)$/);
+    if (m) return { kind: 'dow', dow: DOW3_93.indexOf(m[1]), base: p };
+    m = p.match(/^ON (\d{4}-\d{2}-\d{2}) THEN (.+)$/);
+    if (m && parseDate(m[1])) { const then = planParse93(m[2]); if (then && (then.kind === 'n' || then.kind === 'dow')) return { kind: 'on', date: parseDate(m[1]), iso: m[1], then, base: then.base }; }
+    return null;
+  }
+  const planOk93 = (p) => !!planParse93(p);
+  function everyLabel93(p, t0) {
+    const P = planParse93(p); if (!P) return 'Daily';
+    if (P.kind === 'paused') return 'Paused';
+    if (P.kind === 'dow') return 'Every ' + DOWFULL93[P.dow];
+    if (P.kind === 'on') return (t0 && P.date <= t0 ? '' : 'Next ') + 'check ' + dm93(P.date);
+    return EVERY_LABEL[P.base];
+  }
+  function followState93(j, t0, every, checks, last) {
+    const P = planParse93(every) || { kind: 'n', n: 1, base: 'DAILY' };
+    const lastDay = last ? dayOf(last[0]) : null, since = last ? days(lastDay, t0) : null, today = since === 0;
+    const mineToday = checks.find((c) => days(dayOf(c[0]), t0) === 0 && c[1] === state.user) || null;
+    const out = (due, nextIn, label) => ({ every, checks, last, since, today, mineToday, due, nextIn, label: label || everyLabel93(every, t0) });
+    if (P.kind === 'paused') return out(false, null);
+    let Q = P;
+    if (P.kind === 'on') {
+      if (t0 < P.date) return out(false, days(t0, P.date), 'Next check ' + dm93(P.date));
+      if (!lastDay || lastDay < P.date) return out(!today, 0, 'Check ' + dm93(P.date));   // the day has come: due until checked
+      Q = P.then;                                                                          // checked on or after the day: back to the usual plan
+    }
+    if (Q.kind === 'dow') {
+      const back = (t0.getDay() - Q.dow + 7) % 7, target = addDays(t0, -back);
+      const due = !today && (!lastDay || lastDay < target);
+      return out(due, due ? 0 : (Q.dow - t0.getDay() + 7) % 7 || 7, 'Every ' + DOWFULL93[Q.dow]);
+    }
+    const n = Q.n;
+    return out(!today && (since === null || since >= n), today ? n : since === null ? 0 : Math.max(0, n - since), EVERY_LABEL[Q.base]);
+  }
+  const everyMenu93 = (no) => () => {
+    const j = findJob(no); if (!j) return '';
+    const cur = planFor(j), P = planParse93(cur) || { kind: 'n', base: 'DAILY' }, base = P.kind === 'on' ? P.then.base : P.kind === 'paused' ? 'DAILY' : P.base;
+    const t0 = today0(), btn = (val, label) => '<button type="button" class="choice' + (val === cur ? ' is-on' : '') + '" data-set-every="' + esc(val) + '" data-no="' + esc(j.jobNo) + '" aria-pressed="' + (val === cur) + '">' + label + '</button>';
+    const onIso = P.kind === 'on' ? P.iso : '';
+    return '<div class="pop-title">How often?</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p>' +
+      '<div class="choice-row">' + btn('DAILY', 'Daily') + btn('2 DAYS', 'Every 2 days') + btn('WEEKLY', 'Weekly') + '</div>' +
+      '<div class="pop-label">Every week on</div><div class="choice-row ev-days">' + [1, 2, 3, 4, 5, 6, 0].map((d) => btn('EVERY ' + DOW3_93[d], DOW[d])).join('') + '</div>' +
+      '<form class="pop-form ev-on" data-plan-date="' + esc(j.jobNo) + '" data-base="' + esc(base) + '"><label class="pop-label" for="evOn93">Next check on</label>' +
+        '<div class="date-row"><input type="date" id="evOn93" min="' + isoOf(addDays(t0, 1)) + '" value="' + esc(onIso) + '">' + [7, 10, 14].map((n) => '<button type="button" class="choice" data-plan-in="' + n + '">+' + n + ' days</button>').join('') + '</div>' +
+        '<button type="submit" class="btn-ghost pop-wide">Set the date</button>' +
+        '<div class="pop-hint">Out of Due now until that day; after that check it goes back to ' + esc((planParse93(base) && planParse93(base).kind === 'dow' ? 'every ' + DOWFULL93[planParse93(base).dow] : EVERY_LABEL[base] || 'Daily').toLowerCase()) + '.</div></form>' +
+      '<div class="choice-row">' + btn('PAUSED', 'Paused') + '</div><div class="pop-hint">Paused jobs leave Follow-ups until you change it back.</div>';
+  };
+  function setPlanDate93(no, iso, base) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) { toast('Choose a day', { error: true }); return; }
+    const d = parseDate(iso); if (!d || d <= today0()) { toast('Choose a day after today', { error: true }); return; }
+    followPlan(no, 'ON ' + iso + ' THEN ' + (base || 'DAILY'));
+  }
+
+  // ---------- reminders: a weekly one says its day
+  function remRep93(r, long) {
+    const d = parseDate(r.due);
+    if (r.repeat === 'WEEKLY' && d) return long ? 'Every ' + DOWFULL93[d.getDay()] : 'Weekly · ' + DOW[d.getDay()];
+    if (r.repeat === 'MONTHLY' && d) return long ? 'Every month on the ' + d.getDate() + (['th', 'st', 'nd', 'rd'][(d.getDate() % 100 - 20) % 10] || ['th', 'st', 'nd', 'rd'][d.getDate() % 100] || 'th') : 'Monthly';
+    if (r.repeat === 'DAILY') return long ? 'Every day' : 'Daily';
+    return REPEAT_NAME[r.repeat] || '';
+  }
+
+  // ---------- Home on laptop screens: one screen only when it is tall enough; otherwise it flows like the phone
+  const homeFit93 = () => window.innerWidth >= 1024 && window.innerHeight >= 900;
+  function homeMode93() {
+    const view = $('#view'); if (!view || !state.route || state.route.name !== 'home') return;
+    const fit = homeFit93();
+    if (view.classList.contains('is-fit') !== fit) { view.classList.toggle('is-fit', fit); view.classList.toggle('is-flow', !fit); fitPorts91(); }
+    moreBars93();
+  }
+  // a tall screen keeps one screen: a tile with rows out of sight says how many, and opens them
+  function moreBars93() {
+    $$('#view .home .tile').forEach((t) => {
+      const body = t.querySelector('.tile-body'); let bar = t.querySelector('.more-bar');
+      const fit = $('#view').classList.contains('is-fit');
+      if (!body || !fit) { if (bar) bar.remove(); return; }
+      const B = body.getBoundingClientRect();
+      const rows = Array.from(body.querySelectorAll('[data-job], .rm')).filter((r) => r.offsetParent !== null);
+      const n = rows.filter((r) => r.getBoundingClientRect().bottom > B.bottom + 2).length;   // not fully in sight
+      if (!n) { if (bar) bar.remove(); return; }
+      const list = t.classList.contains('t-watch') ? 'watch' : t.classList.contains('t-week') ? 'week' : '';
+      if (!bar) { bar = document.createElement('button'); bar.type = 'button'; bar.className = 'more-bar'; body.after(bar); }
+      if (list) bar.dataset.list = list; else bar.dataset.moreScroll = '1';
+      bar.innerHTML = '<span>' + n + ' more</span>' + icon('chevron', 14);
+    });
+  }
+
+  // ---------- delivery note (sea / air imports, clearance): a one-page Word file, the rest filled in by hand
+  const DN_TYPES93 = ['SFIF', 'SFIL', 'AFI', 'CND'];
+  async function deliveryNote93(j) {
+    if (!j) return;
+    const X = XL.X, t0 = today0(), air = j.mode === 'air';
+    const logo = await costLogo(), sz = logo ? XL.pngSize(logo) : null;
+    const day = (d) => (d ? d.getDate() + ' ' + MON91[d.getMonth()] + ' ' + d.getFullYear() : '');
+    const NAVY = '1C5179', INK = '0B1B2B', INK2 = '3E4C5E', MUTE = '6B7A8A', HAIR = 'C5CFD9', FOG = 'F1F4F8', TEAL = '0E7C7B';
+    const W = 10206;
+    const rPr = (o) => '<w:rPr>' + (o.b ? '<w:b/><w:bCs/>' : '') + (o.i ? '<w:i/><w:iCs/>' : '') + (o.caps ? '<w:caps/>' : '') + '<w:color w:val="' + (o.c || INK) + '"/>' + (o.sp ? '<w:spacing w:val="' + o.sp + '"/>' : '') + '<w:sz w:val="' + (o.sz || 19) + '"/><w:szCs w:val="' + (o.sz || 19) + '"/></w:rPr>';
+    const run = (t, o) => '<w:r>' + rPr(o || {}) + '<w:t xml:space="preserve">' + X(t) + '</w:t></w:r>';
+    const para = (runs, o) => { o = o || {}; return '<w:p><w:pPr>' + (o.keep ? '<w:keepNext/>' : '') + (o.rule ? '<w:pBdr><w:bottom w:val="single" w:sz="4" w:space="1" w:color="' + HAIR + '"/></w:pBdr>' : '') + '<w:spacing w:before="' + (o.before || 0) + '" w:after="' + (o.after || 0) + '" w:line="' + (o.line || 252) + '" w:lineRule="auto"/>' + (o.jc ? '<w:jc w:val="' + o.jc + '"/>' : '') + '</w:pPr>' + (runs || '') + '</w:p>'; };
+    const bd = (c, w) => '<w:top w:val="single" w:sz="' + (w || 4) + '" w:space="0" w:color="' + c + '"/><w:left w:val="single" w:sz="' + (w || 4) + '" w:space="0" w:color="' + c + '"/><w:bottom w:val="single" w:sz="' + (w || 4) + '" w:space="0" w:color="' + c + '"/><w:right w:val="single" w:sz="' + (w || 4) + '" w:space="0" w:color="' + c + '"/>';
+    const tbl = (cols, rows, o) => { o = o || {}; return '<w:tbl><w:tblPr><w:tblW w:w="' + cols.reduce((a, b) => a + b, 0) + '" w:type="dxa"/>' +
+      (o.lines ? '<w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="' + HAIR + '"/><w:right w:val="nil"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="' + HAIR + '"/><w:insideV w:val="nil"/></w:tblBorders>'
+        : o.none ? '<w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders>'
+        : '<w:tblBorders>' + bd(HAIR) + '<w:insideH w:val="single" w:sz="4" w:space="0" w:color="' + HAIR + '"/><w:insideV w:val="single" w:sz="4" w:space="0" w:color="' + HAIR + '"/></w:tblBorders>') +
+      '<w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="' + (o.none ? 0 : 60) + '" w:type="dxa"/><w:left w:w="' + (o.none ? 0 : 110) + '" w:type="dxa"/><w:bottom w:w="' + (o.none ? 0 : 60) + '" w:type="dxa"/><w:right w:w="' + (o.none ? 0 : 110) + '" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="0000" w:firstRow="0" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/></w:tblPr>' +
+      '<w:tblGrid>' + cols.map((c) => '<w:gridCol w:w="' + c + '"/>').join('') + '</w:tblGrid>' + rows.join('') + '</w:tbl>'; };
+    const tc = (w, content, o) => { o = o || {}; return '<w:tc><w:tcPr><w:tcW w:w="' + w + '" w:type="dxa"/>' + (o.span ? '<w:gridSpan w:val="' + o.span + '"/>' : '') + (o.under ? '<w:tcBorders><w:bottom w:val="single" w:sz="8" w:space="0" w:color="' + NAVY + '"/></w:tcBorders>' : '') + (o.fill ? '<w:shd w:val="clear" w:color="auto" w:fill="' + o.fill + '"/>' : '') + '<w:vAlign w:val="' + (o.v || 'center') + '"/></w:tcPr>' + (content || para('')) + '</w:tc>'; };
+    const tr = (cells, h) => '<w:tr><w:trPr><w:cantSplit/>' + (h ? '<w:trHeight w:val="' + h + '" w:hRule="atLeast"/>' : '') + '</w:trPr>' + cells.join('') + '</w:tr>';
+    const K = (t, o) => para(run(t, Object.assign({ b: true, c: INK2, sz: 14, sp: 12 }, o || {})));
+    const V = (t, o) => para(t ? run(t, Object.assign({ b: true, sz: 19 }, o || {})) : '');
+    const box = j.c20 || j.c40 ? [j.c20 ? j.c20 + ' × 20′' : '', j.c40 ? j.c40 + ' × 40′' : ''].filter(Boolean).join(' · ') : j.type === 'SFIL' ? 'LCL' : '';
+    const route = (j.pol ? portName91(j.pol) : '—') + ' → ' + (j.pod ? portName91(j.pod) : '—');
+    // 1 · the job (filled in from the workspace) and what you fill in by hand
+    const C4 = [1750, 3353, 1750, 3353];
+    const info = tbl(C4, [
+      tr([tc(C4[0], K('DEL-ADV NO.'), { fill: FOG }), tc(C4[1], V(j.jobNo)), tc(C4[2], K('DATE'), { fill: FOG }), tc(C4[3], V(day(t0)))], 400),
+      tr([tc(C4[0], K('JOB NO.'), { fill: FOG }), tc(C4[1], V(j.jobNo)), tc(C4[2], K('ETA'), { fill: FOG }), tc(C4[3], V(day(j.eta)))], 400),
+      tr([tc(C4[0], K(air ? 'AWB NO.' : 'B/L NO.'), { fill: FOG }), tc(C4[1], V('')), tc(C4[2], K('B/E DEC NO.'), { fill: FOG }), tc(C4[3], V(''))], 400),
+      tr([tc(C4[0], K(air ? 'AIRLINE' : 'LINE'), { fill: FOG }), tc(C4[1], V(j.vendor || '')), tc(C4[2], K('LOT NO.'), { fill: FOG }), tc(C4[3], V(''))], 400),
+      tr([tc(C4[0], K('POL → POD'), { fill: FOG }), tc(C4[1], V(route)), tc(C4[2], K(air ? 'PACKAGES' : 'CONTAINERS'), { fill: FOG }), tc(C4[3], V(box))], 400),
+      tr([tc(C4[0], K('CONSIGNEE'), { fill: FOG }), tc(C4[1] + C4[2] + C4[3], V(j.customer || ''), { span: 3 })], 400),
+      tr([tc(C4[0], K('ADDRESS'), { fill: FOG, v: 'top' }), tc(C4[1] + C4[2] + C4[3], V(''), { span: 3 })], 760)
+    ]);
+    // 2 · the cargo, by hand
+    const C6 = [700, 4306, 1100, 1100, 1500, 1500];
+    const ch = (t, jc) => para(run(t, { b: true, c: INK2, sz: 14, sp: 10 }), { jc: jc || 'left' });
+    const cargo = tbl(C6, [
+      tr(['NO.', 'DESCRIPTION & MARKS', 'QTY', 'UNIT', 'WEIGHT (KGS)', 'VOLUME (CBM)'].map((h, i) => tc(C6[i], ch(h, i === 0 || i > 1 ? 'center' : 'left'), { fill: FOG, under: true })), 380)
+    ].concat([1, 2, 3, 4, 5].map((n) => tr(C6.map((w, i) => tc(w, i === 0 ? para(run(String(n), { c: MUTE, sz: 17 }), { jc: 'center' }) : para(''))), 430)),
+      [tr([tc(C6[0] + C6[1], para(run('TOTAL', { b: true, sz: 17, sp: 12 }), { jc: 'right' }), { span: 2, fill: FOG }), tc(C6[2], para(''), { fill: FOG }), tc(C6[3], para(''), { fill: FOG }), tc(C6[4], para(''), { fill: FOG }), tc(C6[5], para(''), { fill: FOG })], 430)]));
+    // 3 · delivery details (containers one by one) and who received it
+    const n20 = Math.min(j.c20 || 0, 20), n40 = Math.min(j.c40 || 0, 20);
+    const boxes = [].concat(Array.from({ length: n20 }, () => '20′'), Array.from({ length: n40 }, () => '40′')).slice(0, 12);
+    const crows = boxes.length ? boxes : [air ? '' : j.type === 'SFIL' ? 'LCL' : '', '', ''];
+    const L2 = [1900, 3003], R2 = [1800, 3103];
+    const left = tbl(L2, [
+      tr([tc(L2[0] + L2[1], para(run('DELIVERY DETAILS', { b: true, c: NAVY, sz: 16, sp: 20 })), { span: 2, fill: FOG, under: true })], 380),
+      tr([tc(L2[0], K('DELIVERY AT')), tc(L2[1], V(j.pod ? portName91(j.pod) : ''))], 400)
+    ].concat(crows.map((b, i) => tr([tc(L2[0], K(air ? 'PACKAGES' : 'CONTAINER ' + (i + 1)) + (b && !air ? para(run(b, { c: MUTE, sz: 14 })) : '')), tc(L2[1], para(''))], 420))));
+    const right = tbl(R2, [
+      tr([tc(R2[0] + R2[1], para(run('RECEIVED BY', { b: true, c: NAVY, sz: 16, sp: 20 })), { span: 2, fill: FOG, under: true })], 380),
+      tr([tc(R2[0], K('VEHICLE NO.')), tc(R2[1], para(''))], 420),
+      tr([tc(R2[0], K('DRIVER NAME')), tc(R2[1], para(''))], 420),
+      tr([tc(R2[0], K('TEL. NO.')), tc(R2[1], para(''))], 420),
+      tr([tc(R2[0], K('DATE & TIME')), tc(R2[1], para(''))], 420),
+      tr([tc(R2[0], K('SIGN & STAMP'), { v: 'top' }), tc(R2[1], para(''))], 1300)
+    ]);
+    const pair = tbl([4903, 400, 4903], [tr([tc(4903, left + para(''), { v: 'top' }), tc(400, para('')), tc(4903, right + para(''), { v: 'top' })])], { none: true });
+    const body = info + para('', { after: 160 }) +
+      para(run('CARGO', { b: true, c: NAVY, sz: 16, sp: 20 }), { after: 80, keep: true }) + cargo +
+      para(run('We hereby acknowledge that we have received the above said cargo in good condition.', { i: true, c: INK2, sz: 18 }), { before: 160, after: 200 }) +
+      pair +
+      para(run('NOTE', { b: true, c: NAVY, sz: 16, sp: 20 }), { before: 220, after: 0, keep: true }) + tbl([W], [tr([tc(W, para(''))], 440), tr([tc(W, para(''))], 440), tr([tc(W, para(''))], 440)], { lines: true });   // three lines to write on
+    const sect = '<w:sectPr><w:headerReference w:type="default" r:id="rIdH"/><w:footerReference w:type="default" r:id="rIdF"/><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1500" w:right="850" w:bottom="1000" w:left="850" w:header="420" w:footer="420" w:gutter="0"/><w:cols w:space="720"/></w:sectPr>';
+    const NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const DNS = NS + ' xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"';
+    const XMLH = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+    const doc = XMLH + '<w:document ' + NS + '><w:body>' + body + para('') + sect + '</w:body></w:document>';
+    const E = 360000, lh = Math.round(1.05 * E), lw = sz ? Math.round(lh * sz[0] / sz[1]) : 0;
+    const pic = sz ? '<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="' + lw + '" cy="' + lh + '"/><wp:docPr id="1" name="ETHIX logo"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>' +
+      '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="logo.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdLogo"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>' +
+      '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + lw + '" cy="' + lh + '"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>' : run('ETHIX SHIPPING', { b: true, c: NAVY, sz: 24 });
+    const hc = (w, content) => '<w:tc><w:tcPr><w:tcW w:w="' + w + '" w:type="dxa"/><w:vAlign w:val="bottom"/></w:tcPr>' + content + '</w:tc>';
+    const header = XMLH + '<w:hdr ' + DNS + '><w:tbl><w:tblPr><w:tblW w:w="' + W + '" w:type="dxa"/><w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="single" w:sz="12" w:space="0" w:color="' + NAVY + '"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/><w:bottom w:w="110" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="0000" w:firstRow="0" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/></w:tblPr>' +
+      '<w:tblGrid><w:gridCol w:w="' + (W / 2) + '"/><w:gridCol w:w="' + (W / 2) + '"/></w:tblGrid><w:tr>' +
+      hc(W / 2, para(pic)) + hc(W / 2, para(run('DELIVERY NOTE', { b: true, c: INK, sz: 32, sp: 30 }), { jc: 'right' }) + para(run('DEL-ADV NO. ' + j.jobNo, { b: true, c: TEAL, sz: 16, sp: 12 }), { jc: 'right' })) +
+      '</w:tr></w:tbl><w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p></w:hdr>';
+    const footer = XMLH + '<w:ftr ' + NS + '><w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:space="6" w:color="' + HAIR + '"/></w:pBdr><w:tabs><w:tab w:val="right" w:pos="' + W + '"/></w:tabs><w:spacing w:before="0" w:after="0"/></w:pPr>' +
+      run('ETHIX Shipping · Delivery note · ' + j.jobNo, { c: MUTE, sz: 15 }) + '<w:r>' + rPr({ c: MUTE, sz: 15 }) + '<w:tab/></w:r>' + run('Issued ' + day(t0) + ' · ' + nice(state.user), { c: MUTE, sz: 15 }) + '</w:p></w:ftr>';
+    const styles = XMLH + '<w:styles ' + NS + '><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/><w:color w:val="' + INK + '"/><w:sz w:val="19"/><w:szCs w:val="19"/><w:lang w:val="en-GB"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="0" w:line="252" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>' +
+      '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style><w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:uiPriority w:val="99"/><w:semiHidden/><w:tblPr><w:tblInd w:w="0" w:type="dxa"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style></w:styles>';
+    const settings = XMLH + '<w:settings ' + NS + '><w:defaultTabStop w:val="720"/><w:characterSpacingControl w:val="doNotCompress"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>';
+    const rel = (id, type, target) => '<Relationship Id="' + id + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/' + type + '" Target="' + target + '"/>';
+    const RELS = (inner) => XMLH + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + inner + '</Relationships>';
+    const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const files = [
+      { name: '[Content_Types].xml', data: XMLH + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>' + (sz ? '<Default Extension="png" ContentType="image/png"/>' : '') +
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>' +
+        '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>' +
+        '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>' },
+      { name: '_rels/.rels', data: RELS('<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>') },
+      { name: 'docProps/core.xml', data: XMLH + '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>ETHIX delivery note ' + X(j.jobNo) + '</dc:title><dc:creator>' + X(state.user) + '</dc:creator><cp:lastModifiedBy>' + X(state.user) + '</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">' + now + '</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">' + now + '</dcterms:modified></cp:coreProperties>' },
+      { name: 'docProps/app.xml', data: XMLH + '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>ETHIX</Application></Properties>' },
+      { name: 'word/document.xml', data: doc },
+      { name: 'word/styles.xml', data: styles },
+      { name: 'word/settings.xml', data: settings },
+      { name: 'word/header1.xml', data: header },
+      { name: 'word/footer1.xml', data: footer },
+      { name: 'word/_rels/document.xml.rels', data: RELS(rel('rIdS', 'styles', 'styles.xml') + rel('rIdT', 'settings', 'settings.xml') + rel('rIdH', 'header', 'header1.xml') + rel('rIdF', 'footer', 'footer1.xml')) }
+    ];
+    if (sz) { files.push({ name: 'word/_rels/header1.xml.rels', data: RELS(rel('rIdLogo', 'image', 'media/logo.png')) }); files.push({ name: 'word/media/logo.png', data: logo }); }
+    try {
+      const blob = XL.zip(files, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      const name = 'ETHIX_Delivery_note_' + String(j.jobNo).replace(/[^A-Za-z0-9-]+/g, '-') + '.docx';
+      const url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = url; a.download = name; document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 4000);
+      toast('Delivery note ready · ' + name);
+    } catch (e) { toast('The delivery note could not be made: ' + e.message, { error: true }); }
+  }
+
+  function initV293() {
+    // tap a job number: copied (before any row opens the job)
+    document.addEventListener('click', (e) => {
+      const c = e.target.closest('[data-copy]'); if (!c || !state.signedIn) return;
+      e.preventDefault(); e.stopPropagation(); copyText93(c.dataset.copy, c);
+    }, true);
+    document.addEventListener('keydown', (e) => {
+      const c = e.target.closest && e.target.closest('[data-copy]'); if (!c || (e.key !== 'Enter' && e.key !== ' ')) return;
+      e.preventDefault(); e.stopPropagation(); copyText93(c.dataset.copy, c);
+    }, true);
+    document.addEventListener('click', (e) => {
+      if (!state.signedIn) return;
+      const pg = e.target.closest('[data-po-page]'); if (pg) { state.poHold93 = Date.now() + 15000; showPorts93(+pg.dataset.poPage, true); return; }
+      const mb = e.target.closest('.more-bar[data-more-scroll]'); if (mb) { const b = mb.previousElementSibling; if (b) b.scrollBy({ top: b.clientHeight * 0.8, behavior: 'smooth' }); return; }
+      if (e.target.closest('[data-act="dnote"]')) { const j = state.route && findJob(state.route.jobNo); if (j) deliveryNote93(j); return; }
+      if (e.target.closest('[data-act="remarks93"]')) { const j = state.route && findJob(state.route.jobNo); if (j) openPop(e.target.closest('[data-act="remarks93"]'), 'REMARKS', remarksPop93(j.jobNo)); return; }
+      if (e.target.closest('[data-act="remarks-more"]')) { const p = $('#vhRemarks'); if (p) { p.classList.toggle('is-open'); remarksFit93(); } return; }
+      const rc = e.target.closest('[data-remarks-clear]'); if (rc) { saveRemarks93(rc.dataset.remarksClear, ''); return; }
+      const pin = e.target.closest('[data-plan-in]'); if (pin) { const f = pin.closest('[data-plan-date]'), inp = f && f.querySelector('#evOn93'); if (inp) { inp.value = isoOf(addDays(today0(), +pin.dataset.planIn)); $$('[data-plan-in]', f).forEach((b) => b.classList.toggle('is-on', b === pin)); } return; }
+    });
+    document.addEventListener('submit', (e) => {
+      const rf = e.target.closest('[data-remarks-form]');
+      if (rf) { e.preventDefault(); saveRemarks93(rf.dataset.remarksForm, ($('#rmText93') || {}).value); return; }
+      const pf = e.target.closest('[data-plan-date]');
+      if (pf) { e.preventDefault(); setPlanDate93(pf.dataset.planDate, ($('#evOn93') || {}).value, pf.dataset.base); }
+    });
+    document.addEventListener('change', (e) => { if (e.target.name === 'switchBl' && e.target.form && e.target.form.id === 'editForm') swForm93(e.target.form); });
+    // the office pages turn by themselves (not while pointed at, focused or just touched; never with reduced motion)
+    const calm = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
+    setInterval(() => {
+      if (calm.matches || document.hidden || !state.route || state.route.name !== 'home' || (state.poPages93 || 1) < 2 || (state.poHold93 || 0) > Date.now()) return;
+      if (document.querySelector('#portOffices:hover, #portOffices:focus-within')) return;
+      showPorts93(((state.poPage93 || 0) + 1) % state.poPages93, true);
+    }, 6000);
+    document.addEventListener('touchstart', (e) => { if (e.target.closest && e.target.closest('#portOffices')) state.poHold93 = Date.now() + 15000; }, { passive: true });
+    // Home: one screen on tall screens, flowing on short ones; the "N more" bars follow the rows in sight
+    window.addEventListener('resize', () => { homeMode93(); remarksFit93(); });
+    document.addEventListener('scroll', (e) => { if (e.target.classList && e.target.classList.contains('tile-body')) moreBars93(); }, true);
+  }
+
   function initV291() {
     // the port offices move with the clock
     setInterval(() => { const po = $('#portOffices'); if (po && state.route && state.route.name === 'home') { po.outerHTML = portOffices(''); fitPorts91(); } }, 60000);
@@ -5275,8 +5676,8 @@
     document.addEventListener('click', (e) => {
       if (!state.signedIn) return;
       const op = e.target.closest('[data-fl-open]'); if (op) { closeOverlays(true); openJob(op.dataset.flOpen); return; }
-      const pc = e.target.closest('[data-port91]'); if (pc) { openPop(pc, 'POD OFFICE', portJobsPop91(pc.dataset.port91)); return; }
-      const pa = e.target.closest('[data-act="ports-all"]'); if (pa) { openPop(pa, 'POD OFFICE HOURS', portsPop91()); return; }
+      const pc = e.target.closest('[data-port91]'); if (pc) { openPop(pc, 'OVERSEAS OFFICE', portJobsPop91(pc.dataset.port91)); return; }
+      const pa = e.target.closest('[data-act="offices-all"]'); if (pa) { openOffices93(pa); return; }
       if (e.target.closest('[data-act="changed"]')) { openPop(e.target.closest('[data-act="changed"]'), 'MY DAY', changedMenu()); return; }
       if (e.target.closest('[data-act="seen-all"]')) {
         const keep = state.seen; state.seen = { _base: Date.now() }; closeOverlays(true); rerender();
@@ -5285,6 +5686,7 @@
       }
       if (e.target.closest('[data-act="rem-late"]')) { go('#/follow-ups'); return; }
       if (e.target.closest('[data-act="jobs-word"]')) { jobsWord91(); return; }
+      const wo = e.target.closest('[data-wk-off]'); if (wo) { state.wkOff93 = +wo.dataset.wkOff || 0; state.wkDay92 = ''; rerender(); return; }
       const wd = e.target.closest('[data-wkday]');
       if (wd) { state.wkDay92 = wd.dataset.wkday && wd.dataset.wkday !== state.wkDay92 ? wd.dataset.wkday : ''; rerender(); return; }
       const ra = e.target.closest('[data-act="rem-add"]'); if (ra && canNote()) { remOpenForm(ra, null, ra.dataset.remJob || ''); return; }
@@ -5304,6 +5706,7 @@
       e.preventDefault();
       if (state.remForm) remSave(state.remForm);
     });
+    initV293();
   }
 
   // ------------------------------------------------------------ lists & menus
