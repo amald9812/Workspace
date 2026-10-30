@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders — v2.9.4)
+   enquiries, follow-ups, delays, close & archive, costing, reminders — v2.9.6)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -358,7 +358,7 @@
     const active = jobs.filter((j) => j.active);
     const watch = watchItems91(active, t0);   // v2.9.1: every open task before sailing, overdue after it, free time
 
-    const atSea = active.filter((j) => j.atSea).sort((a, b) => a.eta - b.eta);
+    const atSea = active.filter((j) => j.atSea || (j.eta && cndWay95(j, t0))).sort((a, b) => a.eta - b.eta);   // v2.9.5: + CND on its way in
     const costing = active.filter(isCostingPending);
     const sied = active.filter((j) => j.cat === 'EXPORT' && (PENDING(j.sido) || PENDING(j.ed)));
     const cut24 = sied.filter((j) => [j.siCut, j.edCut].some((c) => c && days(t0, c) <= 1 && days(t0, c) >= 0)).length;
@@ -1128,6 +1128,13 @@
   }
   const stopList = (list, cls) => list.length ? '<ol class="stops">' + list.map((s) => '<li>' + stopBtn(s, cls) + '</li>').join('') + '</ol>' : '';
 
+  // v2.9.5: a CND has no ETD — until its ETA the vessel is on its way in. Gives { n: days to the ETA (null = ETA to
+  // confirm), p: where the ship sits on the water, closer to the destination as the ETA nears }; null for any other job.
+  function cndWay95(j, t0) {
+    if (j.type !== 'CND' || j.etd || j.arrived || j.hold || !j.active) return null;
+    const n = j.eta ? Math.max(1, days(t0, j.eta)) : null;
+    return { n, p: n === null ? 0.25 : 0.25 + 0.6 * (1 - Math.min(n, 21) / 21) };
+  }
   function voyageText(j, t0) {
     const W = MODE_WORDS[j.mode] || MODE_WORDS.sea;
     const total = j.etd && j.eta ? Math.max(1, days(j.etd, j.eta)) : null;
@@ -1135,11 +1142,13 @@
     if (j.hold) return { kicker: 'ON HOLD', title: 'Waiting', sub: j.remarks ? j.remarks.toUpperCase().slice(0, 48) : 'NEXT STEP TO BE CONFIRMED', bubble: '' };
     if (j.arrived) return { kicker: W[4] + ' COMPLETE', title: total ? total + ' of ' + total + ' days' : 'Arrived', sub: 'ARRIVED ' + fmt(j.eta, true), bubble: W[3] + ' ' + fmt(j.eta) };
     if (j.atSea) return { kicker: W[0], title: j.dayN + ' of ' + j.dayT + ' days', sub: days(t0, j.eta) + (days(t0, j.eta) === 1 ? ' DAY' : ' DAYS') + ' TO ARRIVAL', bubble: 'DAY ' + j.dayN + ' OF ' + j.dayT };
+    const cw = cndWay95(j, t0);   // v2.9.5
+    if (cw) return { kicker: 'VESSEL ARRIVING', title: cw.n === null ? 'ETA to confirm' : cw.n === 1 ? 'Tomorrow' : 'In ' + cw.n + ' days', sub: j.eta ? 'ETA ' + fmt(j.eta, true) : '', bubble: '' };
     const sub = j.cat === 'EXPORT' ? (j.mode === 'air' ? 'SI, ED AND AWB BEFORE ETD' : j.dg === 'DG' ? 'SI, ED, DGPC AND BL BEFORE ETD' : 'SI, ED AND BL BEFORE ETD') : j.etd ? W[2] + ' ' + fmt(j.etd, true) : 'DATES TO CONFIRM';
     return { kicker: 'NOT ' + (j.mode === 'air' ? 'DEPARTED' : j.mode === 'courier' ? 'PICKED UP' : 'SAILED') + ' YET', title: total ? total + '-day ' + W[4].toLowerCase() : 'Dates to confirm', sub, bubble: j.etd ? W[2] + ' ' + fmt(j.etd) : '' };
   }
   function portLine(j, which) {
-    if (which === 'o') return j.etd ? (j.mode === 'courier' ? 'PICK-UP ' : 'ETD ') + fmt(j.etd, true) : 'ETD TO CONFIRM';
+    if (which === 'o') return j.etd ? (j.mode === 'courier' ? 'PICK-UP ' : 'ETD ') + fmt(j.etd, true) : j.type === 'CND' ? '' : 'ETD TO CONFIRM';   // v2.9.5: a CND has no ETD
     return j.eta ? (j.arrived ? (j.mode === 'courier' ? 'DELIVERED ' : 'ARRIVED ') : (j.mode === 'courier' ? 'DELIVERY ' : 'ETA ')) + fmt(j.eta, true) : 'ETA TO CONFIRM';
   }
 
@@ -1147,7 +1156,8 @@
   function hero(j, jr, t0) {
     const vt = voyageText(j, t0);
     const w = jr.w;
-    const p = j.hold || !j.etd ? 0 : j.arrived ? 1 : j.atSea ? j.pct : 0;
+    const cw = cndWay95(j, t0);   // v2.9.5: arrived = at the destination, ETD or not; a CND on its way in is on the water
+    const p = j.hold ? 0 : j.arrived ? 1 : cw ? cw.p : !j.etd ? 0 : j.atSea ? j.pct : 0;
     const mode = j.mode === 'air' ? 'air' : j.mode === 'courier' ? 'road' : 'sea';
     const moverW = mode === 'air' ? 54 : mode === 'road' ? 76 : 124;
     const pos = p >= 1 ? 'calc(' + (w[0] + w[1]) + '% - ' + (moverW + 6) + 'px)' : p <= 0 ? 'calc(' + w[0] + '% + 6px)' : 'calc(' + w[0] + '% + ' + (w[1] * p).toFixed(2) + '% - ' + (moverW / 2) + 'px)';
@@ -1155,9 +1165,9 @@
     const travelled = (w[1] * p).toFixed(2) + '%';
     const dgDone = j.mode === 'sea' && ['SUBMITTED', 'APPROVED'].includes(j.dgpc);   // v2.9.2
     const dg = j.dg === 'DG' && j.dgCut && j.cat === 'EXPORT' && !(j.etd && j.etd <= t0) ? '<div class="vh-dg' + (dgDone ? ' is-done' : '') + '">' + (dgDone ? 'DGPC ' + esc(j.dgpc) : 'DG CUTOFF ' + fmt(j.dgCut)) + '</div>' : '';
-    return '<section class="vhero is-' + mode + (j.hold ? ' is-hold' : '') + (j.arrived ? ' is-arrived' : '') + (j.atSea ? ' is-moving' : '') + '" style="--o:' + w[0] + '%;--s:' + w[1] + '%;--d:' + w[2] + '%" aria-label="' + esc('Voyage for job ' + j.jobNo + ' from ' + (j.pol || 'origin') + ' to ' + (j.pod || 'destination') + ': ' + vt.kicker.toLowerCase()) + '">' +
+    return '<section class="vhero is-' + mode + (j.hold ? ' is-hold' : '') + (j.arrived ? ' is-arrived' : '') + (j.atSea || cw ? ' is-moving' : '') + '" style="--o:' + w[0] + '%;--s:' + w[1] + '%;--d:' + w[2] + '%" aria-label="' + esc('Voyage for job ' + j.jobNo + ' from ' + (j.pol || 'origin') + ' to ' + (j.pod || 'destination') + ': ' + vt.kicker.toLowerCase()) + '">' +
       '<div class="vh-sky">' +
-        '<div class="vh-port vh-pol"><div class="kicker">ORIGIN · POL</div><div class="vh-name">' + esc(j.pol || '—') + '</div><div class="vh-date">' + esc(portLine(j, 'o')) + '</div>' + portClock(j.pol, 'hero') + dg + '</div>' +
+        '<div class="vh-port vh-pol"><div class="kicker">ORIGIN · POL</div><div class="vh-name">' + esc(j.pol || '—') + '</div><div class="vh-date">' + esc(portLine(j, 'o') || '\u00a0') + '</div>' + portClock(j.pol, 'hero') + dg + '</div>' +
         '<div class="vh-mid"><div class="kicker">' + esc(vt.kicker) + '</div><div class="vh-name">' + esc(vt.title) + '</div><div class="vh-date">' + esc(vt.sub) + '</div></div>' +
         '<div class="vh-port vh-pod"><div class="kicker">DESTINATION · POD</div><div class="vh-name">' + esc(j.pod || '—') + '</div><div class="vh-date">' + esc(portLine(j, 'd')) + '</div>' + portClock(j.pod, 'hero') + '</div>' +
         '<span class="crane crane-o" aria-hidden="true"><i></i><b></b></span><span class="crane crane-d" aria-hidden="true"><i></i><b></b></span>' +
@@ -1183,7 +1193,7 @@
       '<div class="vc-port"><div class="kicker">ORIGIN · POL</div><div class="vc-row"><span class="vc-name">' + esc(j.pol || '—') + '</span><span class="vc-date">' + esc(portLine(j, 'o')) + '</span></div>' + portClock(j.pol, 'card') + '</div>' +
       rail(jr.origin) +
       '<div class="vc-sea" aria-hidden="false">' +
-        '<div class="vc-progress" style="height:' + Math.round((j.hold ? 0 : j.arrived ? 1 : j.atSea ? j.pct : 0) * 100) + '%"></div>' +
+        '<div class="vc-progress" style="height:' + Math.round((j.hold ? 0 : j.arrived ? 1 : cndWay95(j, t0) ? cndWay95(j, t0).p : j.atSea ? j.pct : 0) * 100) + '%"></div>' +
         '<div class="vc-label"><span class="kicker">' + esc(vt.kicker) + '</span><span class="vc-title">' + esc(vt.title) + '</span><span class="vc-sub">' + esc(vt.sub) + '</span></div>' +
         (jr.transit.length ? '<div class="vchips">' + jr.transit.map((s) => stopBtn(s, 'vchip')).join('') + '</div>' : '') +
         '<div class="vc-mover is-' + mode + '">' + (mode === 'air' ? PLANE_BIG : mode === 'road' ? VAN_BIG : SHIP_BIG) + '</div>' +
@@ -2406,14 +2416,19 @@
     if (mine) return '<button type="button" class="rr-check is-on' + (state.justChecked === keyOf(j) ? ' is-new' : '') + '" data-check-menu="' + esc(j.jobNo) + '" aria-label="' + esc(j.jobNo + ' checked at ' + hm(mine[0]) + '. Add a remark or undo') + '" title="Checked ' + hm(mine[0]) + ' — remark or undo">' + TICK + '</button><span class="rr-time">' + hm(mine[0]) + '</span>';
     return '<button type="button" class="rr-check' + (other ? ' is-other' : '') + '" data-check="' + esc(j.jobNo) + '" aria-label="' + esc(other ? nice(other[1]) + ' checked ' + j.jobNo + ' at ' + hm(other[0]) + '. Add your check' : 'Mark ' + j.jobNo + ' as checked today') + '" title="' + esc(other ? nice(other[1]) + ' checked at ' + hm(other[0]) + ' — tap to add yours' : 'Mark as checked today') + '">' + TICK + '</button>';
   }
+  // v2.9.5: the job's own REMARKS on its Follow-ups row (read only — all of it on hover; the job page edits them)
+  const rmk95 = (j) => String(j.remarks || '').trim();
+  const rowRemarks95 = (j) => rmk95(j) ? '<span class="rr-rmk-in" title="' + esc(rmk95(j)) + '"><span class="rr-rmk-k">REMARKS</span><span class="rr-rmk-t">' + esc(rmk95(j)) + '</span></span>' : '';
+  // a job on hold: the chip says "On hold", its remarks are in the REMARKS column (not twice)
+  const rrNext95 = (j) => { const n = rowNext(j); return j.hold && n && n.tone === 'hold' ? Object.assign({}, n, { text: 'On hold' }) : n; };
   function roundRow(x, t0) {
     const j = x.j, f = x.f;
-    return '<li class="rr' + (f.today ? ' is-done' : '') + (f.mineToday ? ' is-mine' : '') + (f.due ? ' is-due' : '') + '">' +
+    return '<li class="rr' + (f.today ? ' is-done' : '') + (f.mineToday ? ' is-mine' : '') + (f.due ? ' is-due' : '') + (rmk95(j) ? ' has-rmk' : '') + '">' +
       '<button type="button" class="rr-main" data-job="' + esc(j.jobNo) + '"><span class="rr-job">' + changedDot(j) + copyNo93(j.jobNo) + '<span class="badge">' + esc(j.type) + '</span></span>' +
         '<span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span></button>' +
-      '<span class="rr-next">' + toneChip(rowNext(j)) + cutChips(j) + rowClock(j, t0) + '</span>' +
+      '<span class="rr-next">' + toneChip(rrNext95(j)) + cutChips(j) + rowClock(j, t0) + '</span>' +
       '<span class="rr-last"><span>' + esc(lastCheckText(f, t0)) + '</span>' + ((lr) => (lr ? '<span class="rr-remark">“' + esc(lr.text) + '”' + (lr.n > 1 ? ' <b>+' + (lr.n - 1) + '</b>' : '') + '</span>' : ''))(lastRemark(f)) + '</span>' +
-      '<span class="rr-strip">' + dotStrip(j, t0, 14) + '</span>' +
+      '<span class="rr-rmk">' + rowRemarks95(j) + '</span>' +
       '<span class="rr-every"><button type="button" class="every-pill" data-every="' + esc(j.jobNo) + '">' + esc(f.label) + icon('chevron', 13) + '</button></span>' +
       '<span class="rr-act">' + checkCircle(j, f) + '</span>' +
     '</li>';
@@ -3123,7 +3138,9 @@
   // This week as an agenda; Fleet removed. v2.9.2: Dubai time everywhere, offices 09:00–17:00 (Ethix till 18:00),
   // DGPC for DG sea exports, pick a day in This week. v2.9.3: overseas office hours, calendar weeks, switch BL, sea import
   // BL steps, remarks on the job page, copy a job number, follow-ups by weekday or date, preponed, delivery note
-  // (at the end of this module). v2.9.4: the cost sheet's PROFIT and PROFIT / BOX in AED and USD.
+  // (at the end of this module). v2.9.4: the cost sheet's PROFIT and PROFIT / BOX in AED and USD. v2.9.5: a CND on its
+  // way in counts as at sea (it has no ETD). v2.9.6: the Active jobs Word file shows the job type, the shipping line and
+  // the ETA once sailed.
   const BASIS = [['SHIP', 'Per shipment'], ['BOX', 'Per box'], ['B20', 'Per 20′'], ['B40', 'Per 40′'], ['DOC', 'Per document'], ['UNIT', 'Per unit']];
   const BASIS_SHORT = { SHIP: 'Per shipment', BOX: 'Per box', B20: 'Per 20′', B40: 'Per 40′', DOC: 'Per document', UNIT: 'Per unit' };
   const ABBR = new Set(['THC', 'OTHC', 'DPC', 'ISPS', 'VGM', 'BL', 'DG', 'DO', 'ED', 'TLUC', 'ITT', 'FOB', 'VAT', 'MECRC', 'IMCO', 'AWB', 'LCL', 'FCL']);
@@ -4671,7 +4688,7 @@
     return '<div class="pclock pc-' + where + ' is-' + c.tone + '" data-clock="' + esc(port) + '" title="' + esc(clockTitle(port, z, c)) + '">' + icon('clock', 12) + '<b>' + c.time + '</b><span>' + esc(c.state) + '</span></div>';
   }
   // Follow-ups: the port whose office matters now — origin before sailing, destination after.
-  function clockPort(j, t0) { if (j.mode === 'misc') return ''; return j.atSea || j.arrived || (j.etd && j.etd <= t0) ? j.pod : j.pol; }
+  function clockPort(j, t0) { if (j.mode === 'misc') return ''; return j.atSea || j.arrived || (j.etd && j.etd <= t0) || cndWay95(j, t0) ? j.pod : j.pol; }   // v2.9.5: CND on its way in
   function rowClock(j, t0) {
     const p = clockPort(j, t0), z = p && portZone(p); if (!z) return '';
     const c = clockBits(z); if (!c) return '';
@@ -4853,7 +4870,7 @@
   // ================================================================ v2.9.1 — where a shipment is (before sailing · at sea · arrived)
   const STAGES91 = [['before', 'BEFORE SAILING'], ['sea', 'AT SEA'], ['arrived', 'ARRIVED'], ['nodate', 'DATES TO CONFIRM']];
   const MON91 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  function stageOf91(j, t0) { if (!j.etd && !j.eta) return 'nodate'; if (j.eta && j.eta <= t0) return 'arrived'; if (j.etd && j.etd <= t0) return 'sea'; return 'before'; }
+  function stageOf91(j, t0) { if (!j.etd && !j.eta) return 'nodate'; if (j.eta && j.eta <= t0) return 'arrived'; if (j.etd && j.etd <= t0) return 'sea'; if (cndWay95(j, t0)) return 'sea'; return 'before'; }   // v2.9.5: CND on its way in
   function liveJobs91() { return scoped().filter((j) => j.active && j.mode !== 'misc'); }
   const portName91 = (p) => nice(p).replace(/\(([^)]+)\)/g, (x, a) => '(' + a.toUpperCase() + ')');
 
@@ -5268,6 +5285,7 @@
     if (j.mode === 'misc') where = 'Costing only';
     else if (j.eta && j.eta <= t0) where = (cr ? 'Delivered ' : 'Arrived ') + d(j.eta);
     else if (j.etd && j.etd <= t0) where = (air ? 'Departed ' : cr ? 'Picked up ' : 'Sailed ') + d(j.etd);
+    else if (j.type === 'CND') where = 'Vessel arriving';   // v2.9.6: a CND has no ETD — its vessel is on the way in
     else if (j.etd) where = (air ? 'Departs ' : cr ? 'Pick-up ' : 'Sails ') + d(j.etd);
     else where = (cr ? 'Pick-up' : 'ETD') + ' to confirm';
     const k = air ? 'AWB' : cr ? 'Tracking' : 'BL', v = j.bl;
@@ -5276,7 +5294,10 @@
     const cs = costState(j), cost = cs === 'none' ? '' : 'Costing ' + (cs === 'draft' ? 'draft' : cs === 'done' ? 'done' : 'pending');
     const dgpc = j.cat === 'EXPORT' && j.dg === 'DG' && j.mode === 'sea' && j.dgpc !== NA ? (['SUBMITTED', 'APPROVED'].includes(j.dgpc) ? '' : 'DGPC pending') : '';
     const sw = swOn93(j) ? 'Switch BL ' + (j.switchBl === 'CONFIRMATION PENDING' ? 'to confirm' : j.switchBl.toLowerCase()) : '';   // v2.9.3
-    return { hold: j.hold, where, rest: [bl, sw, dgpc, cost].filter(Boolean) };
+    // v2.9.6: once sailed (or a CND on its way in) and not arrived yet, the ETA follows where it is
+    const onWay = j.mode !== 'misc' && !(j.eta && j.eta <= t0) && ((j.etd && j.etd <= t0) || j.type === 'CND');
+    const eta = onWay ? (cr ? 'Delivery ' : 'ETA ') + (j.eta ? d(j.eta) : 'to confirm') : '';
+    return { hold: j.hold, where, eta, rest: [bl, sw, dgpc, cost].filter(Boolean) };
   }
   async function jobsWord91() {
     const t0 = today0(), X = XL.X, jobs = scoped().filter((j) => j.active);
@@ -5296,12 +5317,12 @@
     const headRow = '<w:tr><w:trPr><w:cantSplit/><w:tblHeader/></w:trPr>' + head.map((h, i) => cell(COLS[i], para(run(h, { b: true, c: INK2, sz: 14, sp: 10 }), { jc: i === 0 ? 'center' : 'left' }), { fill: FOG, border: true, v: 'bottom' })).join('') + '</w:tr>';
     const jobRow = (j, n) => {
       const st = jobStatus91(j, t0);
-      const status = (st.hold ? run('On hold', { b: true, c: RED }) + run(' · ', { c: MUTE }) : '') + run(st.where, { b: true, c: NAVY }) + st.rest.map((x) => run(' · ', { c: MUTE }) + run(x, { c: INK2 })).join('');
+      const status = (st.hold ? run('On hold', { b: true, c: RED }) + run(' · ', { c: MUTE }) : '') + run(st.where, { b: true, c: NAVY }) + (st.eta ? run(' · ', { c: MUTE }) + run(st.eta, { b: true, c: NAVY }) : '') + st.rest.map((x) => run(' · ', { c: MUTE }) + run(x, { c: INK2 })).join('');
       const route = j.mode === 'misc' ? 'Costing only' : !j.pol && !j.pod ? '—' : (j.pol ? portName91(j.pol) : '—') + ' → ' + (j.pod ? portName91(j.pod) : '—');
       return '<w:tr><w:trPr><w:cantSplit/></w:trPr>' +
-        cell(COLS[0], para(run(String(n), { c: MUTE }), { jc: 'center' })) + cell(COLS[1], para(run(j.jobNo, { b: true }))) +
+        cell(COLS[0], para(run(String(n), { c: MUTE }), { jc: 'center' })) + cell(COLS[1], para(run(j.jobNo, { b: true })) + para(run(j.type || '—', { b: true, c: MUTE, sz: 14, sp: 10 }), { before: 20 })) +
         cell(COLS[2], para(run(j.customer || '—'))) + cell(COLS[3], para(run(j.cargo || (j.mode === 'air' ? 'Air' : j.mode === 'courier' ? 'Courier' : '—'), { c: INK2 }))) +
-        cell(COLS[4], para(run(route, { c: INK2 }))) + cell(COLS[5], para(status)) + '</w:tr>';
+        cell(COLS[4], para(run(route, { c: INK2 })) + (String(j.vendor || '').trim() ? para(run(String(j.vendor).trim().toUpperCase(), { b: true, c: MUTE, sz: 14, sp: 6 }), { before: 20 }) : '')) + cell(COLS[5], para(status)) + '</w:tr>';
     };
     const table = (list) => '<w:tbl><w:tblPr><w:tblW w:w="' + W + '" w:type="dxa"/><w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="' + HAIR + '"/><w:right w:val="nil"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="' + HAIR + '"/><w:insideV w:val="nil"/></w:tblBorders>' +
       '<w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="70" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="70" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="0420" w:firstRow="1" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/></w:tblPr>' +
