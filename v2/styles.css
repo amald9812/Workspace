@@ -115,7 +115,6 @@ body.is-signin { background: var(--fog); }
 @keyframes stepIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 .card-title { margin: 6px 0 0; font-family: var(--f-display); font-stretch: 110%; font-weight: 800; font-size: clamp(22px, 3.8vh, 30px); letter-spacing: -0.01em; line-height: 1.1; }
 
-
 .disc {
   width: var(--disc, 64px); height: var(--disc, 64px); flex: none; border-radius: 50%; background: var(--fog);
   box-shadow: 7px 7px 14px var(--neu-dark), -7px -7px 14px var(--neu-light);
@@ -218,7 +217,7 @@ body.is-signin { background: var(--fog); }
 
 /* Bento — scrolling layout by default; fixed to one screen on laptops (see FIT below) */
 .bento { display: grid; gap: clamp(12px, 1.7vh, 16px); grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-areas: "watch watch" "kpis kpis" "sea hold" "week act"; }
-.t-watch { grid-area: watch; } .kpis { grid-area: kpis; } .t-sea { grid-area: sea; } .t-hold { grid-area: hold; } .t-week { grid-area: week; } .t-act { grid-area: act; }
+.t-watch { grid-area: watch; } .kpis { grid-area: kpis; } .t-week { grid-area: week; } .t-act { grid-area: act; }
 
 .tile { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); padding: clamp(16px, 2.6vh, 22px) clamp(18px, 1.7vw, 24px); min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .tile-title { margin: 0; font-family: var(--f-mono); font-weight: 600; font-size: 12px; letter-spacing: 0.2em; color: var(--ink-2); white-space: nowrap; }
@@ -236,17 +235,10 @@ body.is-signin { background: var(--fog); }
 .tile-ink .tile-empty { color: #9FB0C2; }
 .tile-ink .tile-empty svg { color: var(--teal); }
 .watch-sub { font-size: 13px; color: #C9D4E0; text-align: right; }
-.watch-item { width: 100%; display: flex; align-items: center; gap: 16px; padding: 12px 0; border: none; border-top: 1px solid #22384D; background: none; color: #FFFFFF; text-align: left; }
-.watch-item:hover .watch-cust { color: #FFFFFF; }
-.watch-job { width: 104px; flex: none; font-family: var(--f-mono); font-size: 15px; font-weight: 600; }
-.watch-text { flex: 1; min-width: 0; }
-.watch-what, .watch-cust { display: block; }
-.watch-what { font-size: 12px; font-weight: 800; letter-spacing: 0.12em; color: #7FD6D5; }
-.watch-cust { font-size: 14px; color: #E3EAF1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 .chip { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; font-weight: 800; font-size: 12px; white-space: nowrap; }
 .chip-urgent { background: var(--red); color: #FFFFFF; }
-.chip-soon-dark { border: 2px solid #F97066; color: #FFB4AB; padding: 4px 10px; }
-.chip-calm-dark { border: 2px solid #3B5670; color: #E3EAF1; padding: 4px 10px; font-weight: 700; }
+
 .chip-soon { border: 2px solid var(--red); color: var(--red-text); padding: 4px 10px; }
 .chip-calm { border: 1.5px solid #C3CDD7; color: var(--ink-2); padding: 4px 10px; font-weight: 700; }
 .chip-done { background: var(--teal-tint); color: var(--teal-text); }
@@ -264,12 +256,8 @@ body.is-signin { background: var(--fog); }
 .kpi.is-urgent .kpi-num { color: var(--red); }
 .kpi.is-urgent .kpi-sub { color: var(--red-dark); }
 
-.t-watch, .t-sea { container-type: inline-size; }
-.sea-item { width: 100%; display: grid; grid-template-columns: 96px minmax(0, 1fr) 72px; grid-template-areas: "job route day" "job track day"; align-items: center; gap: 0 16px; padding: 10px 0; border: none; border-top: 1px solid var(--line-2); background: none; text-align: left; }
-.sea-job { grid-area: job; font-family: var(--f-mono); font-size: 14px; font-weight: 600; }
-.sea-route { grid-area: route; font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sea-day { grid-area: day; text-align: right; font-family: var(--f-mono); font-size: 12px; color: var(--ink-2); }
-.sea-item .track { grid-area: track; }
+.t-watch { container-type: inline-size; }
+
 .track { position: relative; height: 30px; }
 .track-ahead { position: absolute; left: 0; right: 0; top: 19px; border-top: 2px dashed var(--teal-dash); }
 .track-done { position: absolute; left: 0; top: 19px; height: 2px; background: var(--navy); }
@@ -278,17 +266,10 @@ body.is-signin { background: var(--fog); }
 .track-b { right: 0; background: #FFFFFF; border: 2px solid var(--navy); }
 .track-ship { position: absolute; top: 2px; }
 
-.list-item { width: 100%; display: flex; align-items: center; gap: 14px; padding: 10px 0; border: none; border-top: 1px solid var(--line-2); background: none; text-align: left; }
-.date-chip { width: 46px; flex: none; text-align: center; padding: 6px 0; border-radius: 10px; background: var(--teal-tint); }
-.date-chip .dow { display: block; font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.1em; color: var(--teal-text); }
-.date-chip .day { display: block; font-family: var(--f-display); font-weight: 800; font-size: 18px; }
-.date-chip.is-dark { background: var(--navy); }
-.date-chip.is-dark .dow { color: #C8EDEC; }
-.date-chip.is-dark .day { color: #FFFFFF; }
 .li-main { min-width: 0; flex: 1; }
 .li-job { display: block; font-family: var(--f-mono); font-size: 13px; font-weight: 600; }
 .li-sub { display: block; font-size: 12px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.li-note { color: var(--ink-2); font-style: italic; }
+
 .act { display: flex; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line-2); }
 .act .avatar { width: 28px; height: 28px; font-size: 12px; background: var(--teal-tint); color: var(--teal-text); }
 .act-text { font-size: 13px; line-height: 1.45; min-width: 0; }
@@ -301,12 +282,6 @@ body.is-signin { background: var(--fog); }
 @container (max-width: 440px) {
   .sea-item { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "job day" "route route" "track track"; gap: 2px 12px; }
   .sea-item .track { margin-top: 4px; }
-}
-@container (max-width: 500px) {
-  .watch-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "job chip" "text chip"; gap: 3px 12px; }
-  .watch-job { grid-area: job; width: auto; font-size: 12px; color: #9FB0C2; }
-  .watch-text { grid-area: text; }
-  .watch-item > .chip { grid-area: chip; }
 }
 
 /* ---------- FIT: laptops and desktops — Home fills exactly one screen ---------- */
@@ -951,7 +926,6 @@ body.is-signin { background: var(--fog); }
 .nt-head { font-size: 13.5px; line-height: 1.4; }
 .nt-job { display: inline-block; padding: 1px 6px; border-radius: 6px; background: var(--line-2); font-family: var(--f-mono); font-size: 11.5px; font-weight: 600; }
 .nt-text { font-size: 13px; color: var(--ink-2); word-break: break-word; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.nt-when { font-family: var(--f-mono); font-size: 11px; color: var(--ink-3); }
 
 /* ---------- Side panel: boxes keep their full height; the panel scrolls instead ---------- */
 .drawer-body > * { flex-shrink: 0; }
@@ -1080,10 +1054,6 @@ span.status-pill { cursor: default; padding: 7px 13px; }
 .every-pill { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 10px; border-radius: 999px; border: 1.5px solid #C3CDD7; background: #FFFFFF; font-size: 12px; font-weight: 700; color: var(--ink-2); white-space: nowrap; }
 .every-pill:hover { border-color: var(--navy); color: var(--navy); }
 .every-pill.is-ro { cursor: default; }
-.dots { display: inline-flex; gap: 3px; align-items: center; }
-.dots i { width: 7px; height: 7px; border-radius: 2px; background: #E1E7ED; }
-.dots i.on { background: var(--teal); }
-.dots i.is-today { outline: 1.5px solid var(--navy); outline-offset: 1px; }
 
 /* ---------- Morning round ---------- */
 .round-page { gap: 16px; }
@@ -1145,10 +1115,7 @@ span.status-pill { cursor: default; padding: 7px 13px; }
   .rr { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "main act" "next every" "last strip"; row-gap: 10px; column-gap: 12px; padding: 14px 16px; }
   .rr-act { align-self: start; justify-self: end; width: 44px; }
   .rr-check { width: 44px; height: 44px; }
-  .rr-main { grid-area: main; } .rr-act { grid-area: act; } .rr-next { grid-area: next; } .rr-last { grid-area: last; } .rr-strip { grid-area: strip; align-self: center; justify-self: end; } .rr-every { grid-area: every; justify-self: end; }
-}
-@container (max-width: 560px) {
-  .rr-strip .dots i:nth-child(-n+7) { display: none; }            /* phones: the last 7 days */
+  .rr-main { grid-area: main; } .rr-act { grid-area: act; } .rr-next { grid-area: next; } .rr-last { grid-area: last; } .rr-every { grid-area: every; justify-self: end; }
 }
 
 /* ---------- follow-up card + calendar (job page) ---------- */
@@ -2089,7 +2056,7 @@ body:has(#savePill:not([hidden])) .toasts { bottom: calc(68px + env(safe-area-in
 .copy-no:hover { background: rgba(72, 190, 191, 0.14); box-shadow: 0 0 0 3px rgba(72, 190, 191, 0.14); }
 .copy-no:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
 .copy-no.is-copied { background: rgba(72, 190, 191, 0.28); box-shadow: 0 0 0 3px rgba(72, 190, 191, 0.28); }
-.job-row.is-dark .copy-no:hover, .t-watch .copy-no:hover { background: rgba(127, 214, 213, 0.18); }
+.t-watch .copy-no:hover { background: rgba(127, 214, 213, 0.18); }
 
 /* ---------- job page: remarks under the customer name ---------- */
 .vh-remarks { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; column-gap: 10px; max-width: 680px; margin-top: 8px; padding: 8px 8px 8px 12px; border: 1px solid var(--line); border-left: 3px solid var(--teal); border-radius: 10px; background: rgba(255, 255, 255, 0.72); }

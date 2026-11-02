@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders — v2.9.6)
+   enquiries, follow-ups, delays, close & archive, costing, reminders — v2.9.7)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -347,12 +347,6 @@
   // ---------------------------------------------------------- what matters
   const PENDING = (v) => v === 'PENDING';
   const isCostingPending = (j) => ['', 'PENDING', 'JOB UPDATED'].includes(j.costing);
-  function whenText(d) {
-    if (d < 0) return -d + (d === -1 ? ' day' : ' days') + ' overdue';
-    if (d === 0) return 'Today';
-    if (d === 1) return 'Tomorrow';
-    return 'in ' + d + ' days';
-  }
 
   function computeHome(jobs, t0) {
     const active = jobs.filter((j) => j.active);
@@ -378,10 +372,8 @@
   const I = {
     home: '<rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/>',
     jobs: '<path d="M3 6h18M3 12h18M3 18h12"/>',
-    fleet: '<path d="M3 7h10M3 12h16M3 17h7"/><circle cx="17" cy="7" r="2"/><circle cx="14" cy="17" r="2"/>',
     enq: '<path d="M4 4h16v12H8l-4 4z"/>',
     costing: '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 7h6M9 11h6M9 15h3"/>',
-    analysis: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
     admin: '<path d="M12 3l7 3v6c0 4.5-3 8-7 9-4-1-7-4.5-7-9V6z"/>',
     more: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
@@ -414,7 +406,7 @@
   // device only remembers the last username used on it.
   const LAST_USER = 'ethix.v2.lastUser';
   ['ethix.v2.team', 'ethix.v2.tab', 'ethix.v2.recent'].forEach((k) => { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } });
-  const ROLE_NAMES = { CS: 'CUSTOMER SERVICE', SALES: 'SALES', ADMIN: 'ADMIN', ACCOUNTS: 'ACCOUNTS' };
+  const ROLE_NAMES = { CS: 'CUSTOMER SERVICE', SALES: 'SALES', ADMIN: 'ADMIN' };
   const initials = (n) => { const p = String(n || '?').trim().split(/\s+/); return (p.length > 1 ? p[0][0] + p[p.length - 1][0] : String(n || '?').slice(0, 1)).toUpperCase(); };
   const EYE = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
   function pwProblem(pw, user) {
@@ -537,11 +529,6 @@
     let fitTimer = 0;
     window.addEventListener('resize', () => { clearTimeout(fitTimer); fitTimer = setTimeout(() => { if (!state.signedIn) fitMap(); }, 120); });
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (!state.signedIn) fitMap(); });   // the headline's size depends on its font
-  }
-
-  async function legacyBoot(name, role) {
-    const [jobs, users] = await Promise.all([api.call('getSheetData'), api.call('getAllUsers')]);
-    return { me: { user: name, role: String(role || '').toUpperCase() }, jobs, users, recent: [], serverTime: Date.now() };
   }
 
   // ------------------------------------------------------------ sign-in map
@@ -681,10 +668,9 @@
   function normRole(r, user) {
     r = String(r || '').toUpperCase().trim();
     if (user === 'MASTER' || ['ADMIN', 'CO-ADMIN', 'MASTER'].includes(r)) return 'ADMIN';
-    if (r === 'SALES' || r === 'ACCOUNTS') return r;
+    if (r === 'SALES') return r;
     return 'CS';
   }
-  const FIELD_KEYS = RULES.map((r) => r[0]);
 
   // Server rows are kept as they came from the sheet; edits waiting to be
   // confirmed are laid on top, so the screen updates the moment you tap.
@@ -874,12 +860,6 @@
   }
   function scoped() { return scopedJobs8(); }   // v2.8: your own jobs (Customer Service); sales get their own from the server
 
-  function track(j, w) {
-    const pct = Math.round((j.pct || 0) * 1000) / 10;
-    const left = j.pct >= 1 ? 'calc(100% - ' + w + 'px)' : j.pct <= 0 ? '0px' : 'calc(' + pct + '% - ' + (w / 2) + 'px)';
-    const mover = j.mode === 'air' ? PLANE(20) : j.mode === 'courier' ? VAN(20) : SHIP(w);
-    return '<div class="track" aria-hidden="true"><span class="track-ahead"></span><span class="track-done" style="width:' + pct + '%"></span><span class="track-a"></span><span class="track-b"></span><span class="track-ship" style="left:' + left + '">' + mover + '</span></div>';
-  }
 
   // Lists show everything on laptops (the tile scrolls inside itself) and the
   // first 6 elsewhere, with a "See all" link that opens the full list.
@@ -887,69 +867,10 @@
   const seeAll = (id, n, dark) => n > 6 ? '<button type="button" class="tile-link see-all"' + (dark ? ' style="color:#7FD6D5"' : '') + ' data-list="' + id + '">See all ' + n + '</button>' : '';
   const empty = (iconName, text) => '<div class="tile-empty">' + icon(iconName, 22) + '<span>' + esc(text) + '</span></div>';
 
-  function watchTile(m, anim) {
-    const chip = (w) => w.level === 'urgent' ? 'chip chip-urgent' : w.level === 'soon' ? 'chip chip-amber-dark' : 'chip chip-calm-dark';
-    return '<section class="tile tile-ink t-watch' + anim + '" style="--d:60ms" aria-labelledby="watchTitle">' +
-      '<div class="tile-head"><h2 class="tile-title" id="watchTitle">TODAY’S WATCH</h2><span class="watch-sub">' +
-      (m.deadlines ? m.deadlines + (m.deadlines === 1 ? ' deadline' : ' deadlines') + ' · next 3 days' : 'Nothing urgent · next 3 days') + '</span></div>' +
-      '<div class="tile-body">' +
-      (m.watch.length ? m.watch.slice(0, LIST_MAX).map((w) =>
-        '<button type="button" class="watch-item li" data-job="' + esc(w.j.jobNo) + '">' +
-        '<span class="watch-job">' + changedDot(w.j) + esc(w.j.jobNo) + '</span>' +
-        '<span class="watch-text"><span class="watch-what">' + esc(w.what) + '</span><span class="watch-cust">' + esc(w.j.customer || '—') + ' · ' + esc(nice(w.j.route)) + '</span></span>' +
-        '<span class="' + chip(w) + '">' + (w.level === 'urgent' ? icon('alert', 13) : '') + esc(w.when) + '</span></button>'
-      ).join('') : empty('check', 'No cutoffs, sailings or free-time deadlines in the next 3 days.')) +
-      '</div>' + seeAll('watch', m.watch.length, true) + '</section>';
-  }
 
-  function kpiTiles(m, anim) {
-    const k = (id, label, n, sub, urgent, d) =>
-      '<button type="button" class="kpi' + (urgent ? ' is-urgent' : '') + anim + '" style="--d:' + d + 'ms" data-list="' + id + '">' +
-      '<span class="kpi-label">' + label + '</span><span class="kpi-num">' + n + '</span><span class="kpi-sub">' + esc(sub) + '</span></button>';
-    return '<div class="kpis">' +
-      k('active', 'ACTIVE JOBS', m.active.length, m.atSea.length + ' at sea now', false, 100) +
-      k('costing', 'COSTING DUE', m.costing.length, m.costingSailed + ' already sailed', false, 130) +
-      k('sied', 'SI / ED DUE', m.sied.length, m.cut24 + (m.cut24 === 1 ? ' cutoff' : ' cutoffs') + ' in 24 h', false, 160) +
-      k('free', 'FREE TIME', m.freeJobs.length, m.freeJobs.length ? 'ending in ≤ 2 days' : 'all clear', m.freeJobs.length > 0, 190) +
-      '</div>';
-  }
 
-  function seaTile(m, anim) {
-    return '<section class="tile t-sea' + anim + '" style="--d:220ms" aria-labelledby="seaTitle">' +
-      '<div class="tile-head"><h2 class="tile-title" id="seaTitle">AT SEA NOW</h2><span class="tile-count">' + m.atSea.length + '</span></div>' +
-      '<div class="tile-body">' +
-      (m.atSea.length ? m.atSea.slice(0, LIST_MAX).map((j) =>
-        '<button type="button" class="sea-item li" data-job="' + esc(j.jobNo) + '"><span class="sea-job">' + changedDot(j) + esc(j.jobNo) + '</span><span class="sea-route">' + esc(j.route) + '</span>' + track(j, 30) +
-        '<span class="sea-day">DAY ' + j.dayN + '/' + j.dayT + '</span></button>'
-      ).join('') : empty('anchor', 'Nothing at sea or in the air right now.')) +
-      '</div>' + seeAll('atsea', m.atSea.length) + '</section>';
-  }
 
-  function holdTile(m, anim) {
-    return '<section class="tile t-hold' + anim + '" style="--d:250ms" aria-labelledby="holdTitle">' +
-      '<div class="tile-head"><h2 class="tile-title" id="holdTitle">ON HOLD</h2><span class="chip chip-hold">' + m.hold.length + '</span></div>' +
-      '<div class="tile-body">' +
-      (m.hold.length ? m.hold.slice(0, LIST_MAX).map((j) =>
-        '<button type="button" class="list-item li" data-job="' + esc(j.jobNo) + '"><span class="li-main"><span class="li-job">' + changedDot(j) + esc(j.jobNo) + ' · ' + esc(j.type) + '</span><span class="li-sub">' + esc(j.customer || '—') + ' · ' + esc(nice(j.route)) + '</span>' +
-        (j.remarks ? '<span class="li-sub li-note">“' + esc(j.remarks) + '”</span>' : '') + '</span></button>'
-      ).join('') : empty('check', 'No jobs on hold.')) +
-      '</div>' + seeAll('hold', m.hold.length) + '</section>';
-  }
 
-  function weekTile(m, anim) {
-    const dep = state.week === 'dep';
-    const list = dep ? m.departing : m.arriving;
-    const field = dep ? 'etd' : 'eta';
-    return '<section class="tile t-week' + anim + '" style="--d:280ms" aria-labelledby="weekTitle">' +
-      '<div class="tile-head"><h2 class="tile-title" id="weekTitle">THIS WEEK</h2>' +
-      '<div class="seg seg-mini" role="group" aria-label="Arriving or departing"><button type="button" data-week="arr" aria-pressed="' + !dep + '">Arriving ' + m.arriving.length + '</button><button type="button" data-week="dep" aria-pressed="' + dep + '">Departing ' + m.departing.length + '</button></div></div>' +
-      '<div class="tile-body">' +
-      (list.length ? list.slice(0, LIST_MAX).map((j) =>
-        '<button type="button" class="list-item li" data-job="' + esc(j.jobNo) + '"><span class="date-chip' + (dep ? ' is-dark' : '') + '"><span class="dow">' + DOW_UP[j[field].getDay()] + '</span><span class="day">' + j[field].getDate() + '</span></span>' +
-        '<span class="li-main"><span class="li-job">' + changedDot(j) + esc(j.jobNo) + '</span><span class="li-sub">' + esc(nice(j.route)) + (j.cargo ? ' · ' + esc(j.cargo) : '') + '</span></span></button>'
-      ).join('') : empty('calendar', dep ? 'Nothing departing in the next 7 days.' : 'Nothing arriving in the next 7 days.')) +
-      '</div>' + seeAll(dep ? 'departing' : 'arriving', list.length) + '</section>';
-  }
 
   function activityTile(anim) {
     const rows = state.recent.slice(0, 10);
@@ -1234,31 +1155,6 @@
     '</section>';
   }
 
-  function keyDates(j, t0) {
-    const cut = (d, field) => {
-      if (!d) return '—';
-      const met = j[field] && ['SUBMITTED', 'APPROVED', 'PASSED/PAID', 'PASSED'].includes(j[field]);
-      if (met) return fmt(d) + ' · MET';
-      const dd = days(t0, d);
-      return fmt(d) + (dd < 0 ? ' · PASSED' : dd === 0 ? ' · TODAY' : dd === 1 ? ' · TOMORROW' : '');
-    };
-    const rows = [['Job opened', fmt(j.opened, true)]];
-    if (['EXPORT', 'CROSS'].includes(j.cat) && j.type !== 'CRR') rows.push(['SI cutoff', cut(j.siCut, 'sido')]);
-    if (j.cat === 'EXPORT') rows.push(['ED cutoff', cut(j.edCut, 'ed')]);
-    if (j.dg === 'DG' && j.cat === 'EXPORT') rows.push(['DG cutoff', j.dgCut ? fmt(j.dgCut, true) : '—']);
-    if (j.mode !== 'misc') {
-      rows.push([(j.mode === 'courier' ? 'Pick-up' : 'ETD') + (j.pol ? ' ' + nice(j.pol) : ''), fmt(j.etd, true)]);
-      rows.push([(j.mode === 'courier' ? 'Delivery' : 'ETA') + (j.pod ? ' ' + nice(j.pod) : ''), fmt(j.eta, true)]);
-    }
-    if (j.cat === 'IMPORT') {
-      rows.push(['Delivered', j.raw.delivery === NA ? 'NOT NEEDED' : fmt(j.delivery, true)]);
-      if (j.lineFreeRaw) rows.push(['Line free time', /^\d+$/.test(j.lineFreeRaw) ? j.lineFreeRaw + ' DAYS' : j.lineFreeRaw]);
-      if (j.portFreeRaw) rows.push(['Port free time', /^\d+$/.test(j.portFreeRaw) ? j.portFreeRaw + ' DAYS' : j.portFreeRaw]);
-      if (j.type !== 'AFI') rows.push(['Original docs', j.docs || '—']);
-    }
-    return '<section class="tile side-card" aria-labelledby="datesTitle"><div class="tile-head"><h2 class="tile-title" id="datesTitle">KEY DATES</h2></div>' +
-      rows.map((r) => '<div class="kv"><span class="kv-k">' + esc(r[0]) + '</span><span class="kv-v">' + esc(r[1]) + '</span></div>').join('') + '</section>';
-  }
   function cargoCard(j) {
     const big = j.cargo || (j.mode === 'air' ? 'AIR' : j.mode === 'courier' ? 'COURIER' : j.mode === 'misc' ? 'COSTING' : '—');
     return '<section class="cargo-card" aria-labelledby="cargoTitle"><h2 class="tile-title" id="cargoTitle">CARGO</h2>' +
@@ -1318,14 +1214,6 @@
     items.sort((a, b) => b.t - a.t || b.k - a.k || b.seq - a.seq);
     items.forEach((x) => { x.at = x.t ? new Date(x.t) : null; });
     return items;
-  }
-  function storyList(no, limit) {
-    const items = storyItems(no);
-    if (!items) return '<div class="story-loading"><span class="sk"></span><span class="sk"></span><span class="sk short"></span></div>';
-    if (!items.length) return '<div class="tile-empty">' + icon('clock', 22) + '<span>' + (canNote() ? 'No notes or changes yet. Add the first note above.' : 'No notes or changes yet.') + '</span></div>';
-    const list = limit ? items.slice(0, limit) : items;
-    return '<ol class="story">' + list.map((e) => '<li><div class="st-when">' + esc(stampText(e.at)) + '</div><span class="avatar' + (e.who === state.user ? '' : ' is-other') + '">' + esc(initials(e.who || '?')) + '</span><div class="st-body"><div><strong>' + esc(e.who || '—') + '</strong> ' + (e.note !== undefined ? 'added a note' : esc(e.what)) + '</div>' + (e.note !== undefined ? '<div class="st-note">' + esc(e.note) + '</div>' : '') + '</div></li>').join('') + '</ol>' +
-      (limit && items.length > limit ? '<button type="button" class="tile-link" data-tab="story">See all ' + items.length + '</button>' : '');
   }
   function noteBox() {
     if (!canNote()) return '';
@@ -1997,16 +1885,6 @@
     if (x.kind === 'transfer') return '<strong>' + esc(x.from) + '</strong> transferred';
     return '<strong>' + esc(x.from) + '</strong> updated';
   }
-  function notifPanel() {
-    const n = state.notif || { items: [] };
-    const seen = state.notifSeenShown || 0;
-    return '<h2 class="peek-job list-title" id="drawerTitle">Notifications</h2>' +
-      (n.items && n.items.length ? '<ol class="notif-list">' + n.items.map((x) => '<li><button type="button" class="notif' + (x.t > seen ? ' is-new' : '') + (x.kind === 'delay' ? ' is-delay' : '') + '" ' + (/^EQ-/.test(x.job) ? 'data-enq' : x.kind === 'costing' ? 'data-cost' : 'data-job') + '="' + esc(x.job) + '">' +
-        '<span class="avatar' + (x.kind === 'note' ? ' is-other' : '') + '">' + esc(initials(x.from)) + '</span>' +
-        '<span class="nt-body"><span class="nt-head">' + notifText(x) + ' <span class="nt-job">' + esc(x.job) + '</span></span>' +
-        '<span class="nt-text">' + esc(x.text) + '</span><span class="nt-when">' + esc(ago(x.t)) + '</span></span></button></li>').join('') + '</ol>'
-        : '<div class="tile-empty">' + icon('bell', 22) + '<span>' + (state.role === 'SALES' ? 'Updates, delays and enquiry replies from Customer Service show here.' : 'Notes and enquiries from sales show here.') + '</span></div>');
-  }
   function openNotifications() {               // v2.7: notifications are a page of their own
     closeOverlays(true);
     go('#/notifications');
@@ -2052,7 +1930,7 @@
   }
 
   // ================================================================ ADMIN
-  const ROLE_CHIP = { CS: ['Customer Service', 'chip-teal'], SALES: ['Sales', 'chip-sales'], ADMIN: ['Admin', 'chip-hold'], ACCOUNTS: ['Accounts', 'chip-calm'] };
+  const ROLE_CHIP = { CS: ['Customer Service', 'chip-teal'], SALES: ['Sales', 'chip-sales'], ADMIN: ['Admin', 'chip-hold'], NONE: ['No access', 'chip-calm'] };   // v2.9.7: the Accounts role is retired
   const PW_TEXT = { SET: 'Password set', TEMPORARY: 'Temporary — must change at sign-in', 'PIN ONLY': 'Old PIN — sets a password at next sign-in', NONE: 'No password' };
   function tempPassword() {
     const a = new Uint32Array(4); window.crypto.getRandomValues(a);
@@ -2279,16 +2157,6 @@
     const d = days(dayOf(f.last[0]), t0);
     return (d === 0 ? 'Today ' + hm(f.last[0]) : d === 1 ? 'Yesterday' : d + ' days ago') + ' · ' + f.last[1];
   };
-  function dotStrip(j, t0, n) {
-    const by = {};
-    checksFor(j).forEach((c) => { const k = days(dayOf(c[0]), t0); (by[k] = by[k] || []).push(c); });
-    let out = '';
-    for (let i = n - 1; i >= 0; i--) {
-      const c = by[-i], d = addDays(t0, -i);
-      out += '<i class="' + (c ? 'on' : '') + (i === 0 ? ' is-today' : '') + '" title="' + esc(fmt(d) + (c ? ' · ' + c.map((x) => x[1] + ' ' + hm(x[0])).join(', ') : ' · not checked')) + '"></i>';
-    }
-    return '<span class="dots" aria-hidden="true">' + out + '</span>';
-  }
   // A tap = checked today (once). A remark fills today's check, or is added as one more line with its own time (v2.7).
   async function followCheck(no, remark) {
     const j = findJob(no); if (!j || !canEdit()) return;
@@ -2337,13 +2205,6 @@
     catch (e) { if (prev === undefined) delete state.follow.plan[K]; else state.follow.plan[K] = prev; rerender(); updateNav(); if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'Follow-ups need the Phase 4 Code.gs update.' : e.message, { error: true }); }
     finally { setSaving(-1); }
   }
-  const everyMenu = (no) => () => {
-    const j = findJob(no); if (!j) return '';
-    const cur = planFor(j);
-    return '<div class="pop-title">How often?</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p><div class="choice-row is-stack">' +
-      Object.keys(EVERY_N).map((k) => '<button type="button" class="choice' + (k === cur ? ' is-on' : '') + '" data-set-every="' + esc(k) + '" data-no="' + esc(j.jobNo) + '" aria-pressed="' + (k === cur) + '">' + EVERY_LABEL[k] + '</button>').join('') + '</div>' +
-      '<div class="pop-hint">Paused jobs leave Follow-ups until you change it back.</div>';
-  };
   const checkedMenu = (no) => () => {
     const j = findJob(no); if (!j) return '';
     const f = followState(j, today0());
@@ -3173,7 +3034,6 @@
   const fxOk = (v) => { const n = num6(v); return n >= 3 && n <= 4.5; };
   const fxIs = (v) => (fxOk(v) ? num6(v) : COMPANY_FX());          // a rate box left empty → the company rate
   const lineAmt = (l, k) => amtOf(l.qty, l[k + 'r'], l[k + 'c'], fxIs(l[k + 'x']));
-  const allIn = () => true;                                         // v2.8: costing is all-in only
   const sellsNothing = (l) => !num6(l.sr);
   const newLineId = () => (Math.random().toString(36).slice(2, 10) + 'k0x9').slice(0, 8);
   const boxesOf = (j) => (j.c20 || 0) + (j.c40 || 0);
@@ -3229,7 +3089,6 @@
     if (state.lists || state.listsLoading) return;
     state.listsLoading = true;
     api.call('ethixLists')
-      .catch((e) => (/not available/i.test(e.message) ? api.call('getMasterLists') : Promise.reject(e)))
       .then((l) => { state.lists = Object.assign({ customers: [], vendors: [], ports: [], charges: [] }, l || {}); })
       .catch(() => { state.lists = state.lists || { customers: [], vendors: [], ports: [], charges: [] }; })
       .finally(() => { state.listsLoading = false; });
@@ -5790,9 +5649,7 @@
     const btn = $('#refreshBtn'), sync = $('#sync');
     if (btn) btn.classList.add('is-busy'); if (sync) sync.classList.add('is-busy');
     try {
-      let boot;
-      try { boot = await api.call('ethixBootstrap'); }
-      catch (e) { if (e.kind === 'server' && /not available/i.test(e.message)) boot = await legacyBoot(state.user, state.role); else throw e; }
+      const boot = await api.call('ethixBootstrap');
       const before = notifUnread(), newest = state.notif && state.notif.items[0] ? state.notif.items[0].t : 0;
       applyBoot(boot);
       if (['form', 'pop', 'sheet', 'admin', 'delay', 'enqform', 'close'].includes(state.overlay)) state.dirty = true;
