@@ -2319,3 +2319,112 @@ body:has(#savePill:not([hidden])) .toasts { bottom: calc(68px + env(safe-area-in
 .cost-banner.is-locked .inv-chip.is-calm { color: #C9D6E2; border-color: rgba(201, 214, 226, 0.5); }
 /* the Jobs list: on laptops the CS column names the colleague you cover; on phones a tag beside the job number does */
 @media (min-width: 760px) { .jr-job .own-tag { display: none; } }
+
+/* =========================================================================================== v2.9.9 */
+/* ---------- one glass capsule for every message: "Saving…" → what was done (with Undo) → fades ---------- */
+.sp-news { position: relative; display: none; width: 18px; height: 18px; flex: none; border-radius: 50%; background: var(--navy); align-items: center; justify-content: center; }
+.sp-news svg { fill: none; stroke: #FFFFFF; stroke-width: 2.2; }
+.save-pill.is-news .sp-tick { display: none; }
+.save-pill.is-news .sp-news { display: inline-flex; }
+.save-pill.is-news #savePillText { color: var(--ink); }
+.save-pill.is-msg { width: max-content; max-width: min(560px, calc(100vw - 32px)); background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.84));
+  -webkit-backdrop-filter: blur(28px) saturate(190%); backdrop-filter: blur(28px) saturate(190%); }
+.save-pill.is-msg #savePillText { white-space: normal; line-height: 1.35; }
+.save-pill.has-act { padding: 6px 6px 6px 11px; gap: 10px; }
+.sp-act { position: relative; flex: none; height: 28px; padding: 0 13px; border-radius: 999px; border: 1px solid rgba(28, 81, 121, 0.16); background: rgba(255, 255, 255, 0.82);
+  color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 800; letter-spacing: 0.01em; box-shadow: 0 1px 2px rgba(11, 27, 43, 0.06); cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
+.sp-act[hidden] { display: none; }
+.sp-act:hover { border-color: var(--teal); box-shadow: 0 0 0 3px rgba(72, 190, 191, 0.16); }
+.sp-act:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+
+/* ---------- Follow-ups: both ports' local times on the route ---------- */
+.rr { grid-template-columns: minmax(180px, 1.25fr) minmax(120px, 190px) minmax(120px, 0.85fr) minmax(150px, 1.15fr) 112px 96px; }
+.rr-main .rr-route.r99 { align-self: flex-start; width: max-content; max-width: 100%; display: inline-grid; grid-template-columns: minmax(0, auto) auto minmax(0, auto);
+  column-gap: 7px; row-gap: 4px; align-items: center; justify-items: start; white-space: nowrap; overflow: visible; margin-top: 1px; }
+.r99 .rp-n { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.r99 .rp-ar { color: #8A99A8; }
+.rt99 { display: inline-flex; align-items: center; gap: 5px; height: 18px; padding: 0 7px 0 0; font-family: var(--f-mono); font-size: 10.5px; font-weight: 600; letter-spacing: 0.03em; color: #7A8898; }
+.rt99 i { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #A3B1BF; }
+.rt99 b { font-weight: inherit; }
+.rt99.is-open i { background: var(--teal); }
+.rt99.is-amber i { background: #F79009; }
+.rt99.is-lead { margin-left: -6px; padding: 0 7px 0 6px; border-radius: 999px; color: var(--ink); font-weight: 700; background: #FFFFFF; border: 1px solid rgba(72, 190, 191, 0.55); box-shadow: 0 1px 2px rgba(11, 27, 43, 0.06); }
+.rt99.is-lead.is-open i { box-shadow: 0 0 0 2.5px rgba(72, 190, 191, 0.22); }
+.rt99.is-lead.is-closed { border-color: #C9D4DE; }
+.rt99.is-lead.is-amber { border-color: rgba(247, 144, 9, 0.55); }
+.rr.is-done .rt99.is-lead { color: var(--ink-2); }
+
+/* ---------- Follow-ups: the remark button beside the check circle ---------- */
+.rr-act { flex-direction: row; align-items: flex-start; justify-content: flex-end; gap: 10px; }
+.rr-chk { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.rr-note { position: relative; flex: none; width: 34px; height: 34px; margin-top: 3px; padding: 0; border-radius: 50%; border: 1px solid #D3DCE5; background: rgba(255, 255, 255, 0.78);
+  color: var(--ink-2); display: grid; place-items: center; box-shadow: 0 1px 2px rgba(11, 27, 43, 0.05); cursor: pointer; transition: border-color 0.18s, box-shadow 0.18s, color 0.18s, transform 0.12s; }
+.rr-note.has-note { color: var(--teal-text); border-color: rgba(72, 190, 191, 0.55); background: #FFFFFF; }
+.rr-note b { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px; background: var(--teal); color: var(--ink);
+  font-family: var(--f-mono); font-size: 9.5px; font-weight: 700; display: grid; place-items: center; border: 1.5px solid #FFFFFF; }
+@media (hover: hover) { .rr-note:hover { border-color: var(--teal); color: var(--teal-text); box-shadow: 0 0 0 4px rgba(72, 190, 191, 0.14); } }
+.rr-note:active { transform: scale(0.92); }
+.rr-note:focus-visible { outline: 2px solid var(--navy); outline-offset: 3px; }
+.rr-last[data-rmk-cell] .rr-remark { cursor: pointer; }
+@media (hover: hover) { .rr-last[data-rmk-cell]:hover .rr-remark { color: var(--ink-2); text-decoration: underline dotted rgba(28, 81, 121, 0.4); text-underline-offset: 3px; } }
+@container (max-width: 880px) {   /* narrow rows: the remark button under the check circle, so the route keeps its width */
+  .rr { grid-template-columns: minmax(0, 1fr) auto; }
+  .rr-act { width: 44px; flex-direction: column-reverse; align-items: center; justify-content: flex-start; gap: 8px; }
+  .rr-note { width: 40px; height: 40px; margin-top: 0; }
+}
+
+/* the remark card: today's and earlier remarks, Edit on your own, Add remark, Undo */
+#pop:has(.rk-list), #pop:has(.rk-none) { width: 360px; }
+.rk-list { display: flex; flex-direction: column; gap: 8px; max-height: 340px; overflow-y: auto; margin: 2px -4px 0; padding: 0 4px 2px; overscroll-behavior: contain; }
+.rk-day { margin-top: 4px; font-family: var(--f-mono); font-size: 10px; font-weight: 600; letter-spacing: 0.18em; color: var(--ink-3); }
+.rk-item { padding: 10px 12px; border-radius: 14px; background: rgba(255, 255, 255, 0.82); border: 1px solid #E6ECF1; }
+.rk-item.is-edit { border-color: rgba(72, 190, 191, 0.6); box-shadow: 0 0 0 3px rgba(72, 190, 191, 0.14); }
+.rk-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 3px; }
+.rk-when { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.04em; color: var(--ink-2); }
+.rk-when b { font-weight: 700; color: var(--ink); }
+.rk-edit { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 999px; border: 1px solid #D3DCE5; background: #FFFFFF;
+  font: inherit; font-size: 12px; font-weight: 700; color: var(--navy); cursor: pointer; }
+@media (hover: hover) { .rk-edit:hover { border-color: var(--teal); } }
+.rk-text { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--ink); white-space: pre-line; overflow-wrap: anywhere; }
+.rk-form textarea { display: block; width: 100%; min-height: 66px; resize: vertical; padding: 8px 10px; border-radius: 12px; border: 1px solid #C3CDD7; background: #FFFFFF;
+  font: inherit; font-size: 13.5px; line-height: 1.45; color: var(--ink); outline: none; }
+.rk-form textarea:focus { border-color: var(--navy); box-shadow: 0 0 0 3px rgba(72, 190, 191, 0.35); }
+.rk-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.rk-acts .btn-ghost, .rk-acts .btn-brutal { height: 36px; padding: 0 14px; font-size: 13px; }
+.rk-form .pop-hint { margin-top: 6px; }
+.rk-add { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+.rk-undo, .rk-more { align-self: center; font-size: 12.5px; }
+.rk-none { margin: 2px 0 0; }
+
+/* ---------- Follow-ups on a laptop: the keyboard ---------- */
+.rr.is-kb { outline: 2px solid rgba(72, 190, 191, 0.7); outline-offset: -2px; border-radius: 12px; }
+.rp-kbd { display: inline-flex; align-items: center; gap: 4px; }
+.rp-kbd kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 5px; border: 1px solid rgba(255, 255, 255, 0.3);
+  font-family: var(--f-mono); font-size: 10px; line-height: 1; color: #FFFFFF; background: rgba(255, 255, 255, 0.06); }
+@media (max-width: 759px), (hover: none) { .rp-kbd { display: none; } }
+
+/* ---------- back to a list: the job you opened glows for a moment ---------- */
+.is-back99 { outline: 2px solid rgba(72, 190, 191, 0); outline-offset: -2px; animation: back99 1.7s var(--ease); }
+@keyframes back99 {
+  0% { outline-color: rgba(72, 190, 191, 0); box-shadow: inset 0 0 0 999px rgba(72, 190, 191, 0); }
+  16% { outline-color: rgba(72, 190, 191, 0.8); box-shadow: inset 0 0 0 999px rgba(72, 190, 191, 0.13); }
+  100% { outline-color: rgba(72, 190, 191, 0); box-shadow: inset 0 0 0 999px rgba(72, 190, 191, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .is-back99 { animation: none; outline-color: rgba(72, 190, 191, 0.8); } }
+
+/* ---------- a choice card away from the job page (TODAY'S WATCH, the SI / ED panel) ---------- */
+.q99-back { display: inline-flex; align-items: center; gap: 6px; margin: -2px 0 12px; padding: 5px 11px 5px 7px; border-radius: 999px; border: 1px solid #D3DCE5; background: #FFFFFF;
+  font-family: var(--f-mono); font-size: 11px; font-weight: 600; letter-spacing: 0.12em; color: var(--ink-2); cursor: pointer; }
+@media (hover: hover) { .q99-back:hover { border-color: var(--teal); color: var(--ink); } }
+.q99-job { margin: 0 0 4px; font-size: 13px; color: var(--ink-2); }
+.q99-job b { font-family: var(--f-mono); font-weight: 700; letter-spacing: 0.04em; color: var(--ink); }
+.q99-open { display: inline-flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px; }
+.q99-open svg { transform: rotate(-90deg); }
+.cut-chip.is-q99 { cursor: pointer; transition: box-shadow 0.15s; }
+@media (hover: hover) { .cut-chip.is-q99:hover { box-shadow: 0 0 0 3px rgba(72, 190, 191, 0.3); } }
+.cut-chip.is-q99:focus-visible { outline: 2px solid var(--navy); outline-offset: 2px; }
+
+/* phones: while a bottom sheet is open, the capsule shows at the top (as messages did) so it never covers the sheet's buttons */
+@media (max-width: 759px) {
+  body:has(#drawer:not([hidden])) .save-pill { bottom: auto; top: calc(14px + env(safe-area-inset-top)); }
+}

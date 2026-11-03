@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders, cover — v2.9.8)
+   enquiries, follow-ups, delays, close & archive, costing, reminders, cover — v2.9.9)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -243,6 +243,7 @@
     if (d < 0) return 'CUTOFF PASSED · ' + (-d) + (d === -1 ? ' DAY' : ' DAYS');
     if (d === 0) return 'CUTOFF TODAY';
     if (d === 1) return 'CUTOFF TOMORROW';
+    if (d === 2 && fri99()) return 'CUTOFF SUNDAY';   // v2.9.9
     return 'CUTOFF ' + fmt(addDays(today0(), d));
   }
   function soonText(d, date) {
@@ -326,10 +327,16 @@
     if (late) return { text: late.def.next + ' · cutoff passed', tone: 'urgent', rank: 0 };
     const cut = jr.all.filter((s) => s.cutDays !== undefined && s.state !== 'done' && s.state !== 'skip').sort((a, b) => a.cutDays - b.cutDays)[0];
     if (cut && cut.cutDays === 0) return { text: cut.def.next.replace(/ to .*/, '') + ' cutoff today', tone: 'urgent', rank: 0 };
+    if (cut && fri99(t0) && (cut.cutDays === 1 || cut.cutDays === 2)) return { text: cut.def.next.replace(/ to .*/, '') + ' cutoff ' + (cut.cutDays === 1 ? 'Saturday' : 'Sunday'), tone: 'urgent', rank: 0 };   // v2.9.9: Friday
     if (j.cat === 'IMPORT' && j.arrived && !j.delivery && j.lineFreeEnd) {
       const d = days(t0, j.lineFreeEnd);
-      if (d < 0 && d >= -30) return { text: 'Free time over · ' + (-d) + (d === -1 ? ' day' : ' days'), tone: 'urgent', rank: 0 };
+      if (d < 0) return { text: 'Free time over · ' + (-d) + (d === -1 ? ' day' : ' days'), tone: 'urgent', rank: 0 };
       if (d <= 2) return { text: 'Free time: ' + (d === 0 ? 'ends today' : d + (d === 1 ? ' day left' : ' days left')), tone: 'urgent', rank: 0 };
+    }
+    if (j.cat === 'IMPORT' && j.arrived && !j.delivery && j.portFreeEnd) {   // v2.9.9: port free time too
+      const d = days(t0, j.portFreeEnd);
+      if (d < 0) return { text: 'Port free over · ' + (-d) + (d === -1 ? ' day' : ' days'), tone: 'urgent', rank: 0 };
+      if (d <= 2) return { text: 'Port free: ' + (d === 0 ? 'ends today' : d + (d === 1 ? ' day left' : ' days left')), tone: 'urgent', rank: 0 };
     }
     if (cut && cut.cutDays === 1) return { text: cut.def.next.replace(/ to .*/, '') + ' cutoff tomorrow', tone: 'soon', rank: 1 };
     const n = jr.next;
@@ -364,6 +371,7 @@
     const hold = active.filter((j) => j.hold);
     return {
       active, watch, atSea, costing, sied, cut24, freeJobs, arriving, departing, hold,
+      costingDue: costing.filter((j) => costDueBy99(j, t0)), siedDue: sied.filter((j) => siedD99(j, t0) <= due99(t0)),   // v2.9.9: due by tomorrow (Friday: Sunday)
       costingSailed: costing.filter((j) => j.etd && j.etd < t0).length,
       deadlines: watch.filter((w) => w.level !== 'calm').length
     };
@@ -771,13 +779,14 @@
     state.route = r;
     const view = $('#view');
     const changed = !prev || prev.name !== r.name || prev.jobNo !== r.jobNo;
+    const back99 = back99Save(prev, r, changed);   // v2.9.9: back to the list you came from — the same place
     view.classList.toggle('is-fit', r.name === 'home' ? homeFit93() : r.name === 'jobs');
     view.classList.toggle('is-flow', r.name === 'home' && !homeFit93());   // v2.9.3: short laptop screens scroll, six rows + See all
     document.body.classList.toggle('on-voyage', r.name === 'job' && canEdit());
     if (r.name === 'admin') renderAdmin(changed || first);
     else if (r.name === 'activity') renderActivity(changed || first);
     else if (r.name === 'jobs') renderJobs(changed || first);
-    else if (r.name === 'round') renderRound(changed || first);
+    else if (r.name === 'round') renderRound(back99 ? 'back99' : (changed || first));
     else if (r.name === 'enquiries') renderEnquiries(changed || first);
     else if (r.name === 'costing') renderCostList(changed || first);
     else if (r.name === 'costjob') renderCostJob(r.jobNo, changed || first);
@@ -785,7 +794,7 @@
     else if (r.name === 'cover') renderCover98(changed || first);
     else if (r.name === 'job') { if (changed || first) { seenOpen9(r.jobNo); costAheadSoon98(r.jobNo); } renderVoyage(r.jobNo, changed || first); fitNames(); remarksFit93(); }
     else { renderHome(changed || first); fitNames(); fitPorts91(); moreBars93(); }
-    if (changed) view.scrollTop = 0;
+    if (changed && !back99Restore(back99, view)) view.scrollTop = 0;
     updateNav();
     covReq98();   // v2.9.8: a cover request waiting for you (Home)
   }
@@ -827,7 +836,7 @@
     $('#navList').innerHTML = navItems().map((n) =>
       '<button type="button" class="nav-item" data-nav="' + n.id + '"' + (n.soon ? ' disabled title="Coming soon"' : n.act ? ' data-act="' + n.act + '"' : ' data-href="' + n.href + '"') + ' aria-label="' + esc(n.label) + '">' +
       '<span class="nav-ic">' + icon(n.icon) + (n.act === 'notif' ? '<span class="badge-dot" hidden></span>' : '') + '</span><span class="nav-label">' + esc(n.label) + '</span>' +
-      (n.soon ? '<span class="soon">SOON</span>' : n.count !== undefined ? '<span class="count' + (['round', 'enquiries', 'costing'].includes(n.id) ? ' is-pill' : '') + '"' + (n.count ? '' : ' hidden') + '>' + n.count + '</span>' : '') + '</button>'
+      (n.soon ? '<span class="soon">SOON</span>' : n.count !== undefined ? '<span class="count' + (['round', 'enquiries'].includes(n.id) ? ' is-pill' : '')   /* v2.9.9: Costing is a plain count */ + '"' + (n.count ? '' : ' hidden') + '>' + n.count + '</span>' : '') + '</button>'
     ).join('');
     $('#sideAvatar').textContent = initials(state.user);
     $('#sideName').textContent = state.user === 'MASTER' ? 'ADMIN' : state.user;
@@ -1420,8 +1429,9 @@
   function closeOverlays(silent) {
     const had = !$('#pop').hidden || !$('#drawer').hidden;
     $('#pop').hidden = true; popAnchor = null; popKey = null; popRender = null;
+    $('#pop').classList.remove('is-peek99');
     if (!$('#drawer').hidden) hideDrawer(silent);
-    state.overlay = null;
+    state.overlay = null; state.quick99 = null; state.rmk99 = null;   // v2.9.9
     if (had && state.dirty) { state.dirty = false; rerender(); }
   }
 
@@ -1510,10 +1520,10 @@
   function onSet(no, field, val) {
     if (!canEdit()) return;
     const j = findJob(no); if (!j) return;
-    if ((j.raw[field] || '') === val && field !== 'status') { closeOverlays(); return; }
+    if ((j.raw[field] || '') === val && field !== 'status') { if (state.quick99) quickDone99(); else closeOverlays(); return; }
     const label = fieldLabel(j, field);
     const holdNote = $('#holdNote') ? $('#holdNote').value.trim() : '';
-    if (state.overlay !== 'quick') closeOverlays();
+    if (state.quick99) quickDone99(); else if (state.overlay !== 'quick') closeOverlays();   // v2.9.9: back to the panel's list
     const shown = /^\d{4}-\d{2}-\d{2}$/.test(val) ? fmt(parseDate(val), true) : val === NA ? 'not needed' : val;
     saveJob(j.jobNo, Object.assign({ [field]: val }, swFix93(j, field, val)), { toast: (val === '' ? label + ' cleared' : label + ' → ' + shown) });   // v2.9.3: switch BL keeps an OBL
     if (field === 'status' && holdNote) postNote(j.jobNo, (val === 'HOLD' ? 'On hold: ' : 'Status ' + val.toLowerCase() + ': ') + holdNote);
@@ -1569,7 +1579,7 @@
     });
     // inside the popover / sheet
     const onOverlayClick = (e) => {
-      const r = state.route; const no = r && r.jobNo;
+      const r = state.route; const no = (state.quick99 && state.quick99.no) || (r && r.jobNo);   // v2.9.9: a quick card names its job
       if (e.target.closest('[data-act="pop-close"]')) { closeOverlays(); return; }
       if (e.target.closest('[data-act="edit"]') && no) { closeOverlays(); openEdit(no); return; }
       const set = e.target.closest('[data-set]');
@@ -1578,7 +1588,7 @@
       if (day) { const inp = $('#popDate'); if (inp) inp.value = iso(addDays(today0(), +day.dataset.day)); }
     };
     const onOverlaySubmit = (e) => {
-      const r = state.route; const no = r && r.jobNo; if (!no) return;
+      const r = state.route; const no = (state.quick99 && state.quick99.no) || (r && r.jobNo); if (!no) return;   // v2.9.9
       const df = e.target.closest('[data-date]');
       if (df) { e.preventDefault(); const v = $('#popDate').value; if (!v) { toast('Pick a date first.', { error: true }); return; } onSet(no, df.dataset.date, v); return; }
       const tf = e.target.closest('[data-text]');
@@ -2306,17 +2316,17 @@
     const j = x.j, f = x.f;
     return '<li class="rr' + (f.today ? ' is-done' : '') + (f.mineToday ? ' is-mine' : '') + (f.due ? ' is-due' : '') + (rmk95(j) ? ' has-rmk' : '') + '">' +
       '<button type="button" class="rr-main" data-job="' + esc(j.jobNo) + '"><span class="rr-job">' + changedDot(j) + copyNo93(j.jobNo) + '<span class="badge">' + esc(j.type) + '</span>' + ownTag98(j) + '</span>' +
-        '<span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span></button>' +
-      '<span class="rr-next">' + toneChip(rrNext95(j)) + cutChips(j) + rowClock(j, t0) + '</span>' +
-      '<span class="rr-last"><span>' + esc(lastCheckText(f, t0)) + '</span>' + ((lr) => (lr ? '<span class="rr-remark">“' + esc(lr.text) + '”' + (lr.n > 1 ? ' <b>+' + (lr.n - 1) + '</b>' : '') + '</span>' : ''))(lastRemark(f)) + '</span>' +
+        '<span class="rr-cust">' + esc(j.customer || '—') + '</span>' + rrRoute99(j, t0) + '</button>' +   // v2.9.9: both ports' times
+      '<span class="rr-next">' + toneChip(rrNext95(j)) + cutChips(j) + '</span>' +
+      '<span class="rr-last" data-rmk-cell="' + esc(j.jobNo) + '"><span>' + esc(lastCheckText(f, t0)) + '</span>' + ((lr) => (lr ? '<span class="rr-remark">“' + esc(lr.text) + '”' + (lr.n > 1 ? ' <b>+' + (lr.n - 1) + '</b>' : '') + '</span>' : ''))(lastRemark(f)) + '</span>' +
       '<span class="rr-rmk">' + rowRemarks95(j) + '</span>' +
       '<span class="rr-every"><button type="button" class="every-pill" data-every="' + esc(j.jobNo) + '">' + esc(f.label) + icon('chevron', 13) + '</button></span>' +
-      '<span class="rr-act">' + checkCircle(j, f) + '</span>' +
+      '<span class="rr-act">' + rmkBtn99(j, f) + '<span class="rr-chk">' + checkCircle(j, f) + '</span></span>' +   // v2.9.9: the remark button
     '</li>';
   }
   function renderRound(first) {
     const t0 = today0();
-    const anim = first ? ' reveal' : '';
+    const anim = first && first !== 'back99' ? ' reveal' : '';   // v2.9.9: coming back from a job: no regrouping, no reveal
     const q = (state.roundQ || '').trim().toUpperCase();
     const R = roundRows(t0);
     const match = (x) => !q || (x.j.jobNo + ' ' + x.j.customer + ' ' + x.j.route + ' ' + x.j.cs + ' ' + x.j.sales).toUpperCase().includes(q);
@@ -2324,7 +2334,7 @@
     const pct = total ? Math.round((R.done.length / total) * 100) : 100;
     // Jobs you check stay in place while you work down the list (nothing jumps under the mouse).
     // They regroup when you come back to the page, switch My jobs / Everyone, or press Refresh.
-    if (first || !state.roundSnap) state.roundSnap = R.due.map((x) => keyOf(x.j));
+    if ((first && first !== 'back99') || !state.roundSnap) state.roundSnap = R.due.map((x) => keyOf(x.j));
     const inSnap = new Set(state.roundSnap), byKey = new Map(R.all.map((x) => [keyOf(x.j), x]));
     const dueRows = state.roundSnap.map((k) => byKey.get(k)).filter((x) => x && (x.f.due || x.f.today)).concat(R.due.filter((x) => !inSnap.has(keyOf(x.j))));
     const doneRows = R.done.filter((x) => !inSnap.has(keyOf(x.j)));
@@ -2340,7 +2350,7 @@
         '<div class="rp-num"><b>' + R.done.length + '</b><span>/ ' + total + '</span></div>' +
         '<div class="rp-main"><div class="rp-label">' + (total && R.due.length === 0 ? 'All followed up — every job due today is checked.' : 'checked today · ' + R.due.length + ' still due') + '</div>' +
           '<div class="rp-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '"><i style="width:' + pct + '%"></i></div>' +
-          '<div class="rp-chips"><span>' + R.later.length + ' not due today</span><span>' + R.paused.length + ' paused</span><span>Tap the circle once you’ve followed a job up · set how often per job</span></div></div>' +
+          '<div class="rp-chips"><span>' + R.later.length + ' not due today</span><span>' + R.paused.length + ' paused</span><span>Tap the circle once you’ve followed a job up · set how often per job</span>' + kbdHint99() + '</div></div>' +
       '</section>' +
       remSection(anim) +
       section('due', 'DUE NOW', dueRows.filter(match), '', dueRows.filter((x) => x.f.due && match(x)).length) +
@@ -2350,6 +2360,7 @@
       (!R.all.length ? '<section class="tile">' + empty('check', 'No active jobs in this view.') + '</section>' : '') +
       '</div>';
     if (keepQ && state.roundFocus) { const s = $('#roundSearch'); s.focus(); s.setSelectionRange(keepQ.length, keepQ.length); }
+    kbMark99(false);   // v2.9.9: the keyboard's row stays marked
   }
 
   // ---------- delays ----------
@@ -2678,7 +2689,7 @@
       const b = e.target.closest('[data-check], [data-check-menu], [data-every], [data-cal], [data-enq], [data-enq-tab], [data-act="delay"], [data-act="delays"], [data-delay-rm]');
       if (!b) return;
       if (b.dataset.check && canEdit()) { followCheck(b.dataset.check); return; }
-      if (b.dataset.checkMenu && canEdit()) { openPop(b, 'FOLLOW-UP', checkedMenu(b.dataset.checkMenu)); return; }
+      if (b.dataset.checkMenu && canEdit()) { if (r === 'round') openPop(b, 'FOLLOW-UP', undoCard99(b.dataset.checkMenu)); else rmkOpen99(b, b.dataset.checkMenu, { add: true }); return; }   // v2.9.9: remarks have their own card
       if (b.dataset.every && canEdit()) { openPop(b, 'FOLLOW-UP', everyMenu93(b.dataset.every)); return; }
       if (b.dataset.cal) { const K = String(b.dataset.calJob).toUpperCase(); state.calOffset[K] = Math.min(0, (state.calOffset[K] || 0) + +b.dataset.cal); rerender(); return; }
       if (b.dataset.enq) { openEnquiry(b.dataset.enq, b); return; }
@@ -3175,7 +3186,7 @@
       notes: keepNotes && C.draft ? C.draft.notes : []
     };
     C.dirty = false; C.err = '';
-    if (data.status !== 'NEW' && !data.legacy) state.costing[C.no] = [data.status, data.sell, data.buy, data.profit, data.version, data.at, data.by, data.lockedBy];
+    if (data.status !== 'NEW' && !data.legacy) state.costing[C.no] = [data.status, data.sell, data.buy, data.profit, data.version, data.at, data.by, data.lockedBy, data.lockedAt || 0];   // v2.9.9: + locked at
   }
   function loadCost(no, force) {
     const K = String(no).toUpperCase();
@@ -4007,8 +4018,8 @@
 
   // ================================================================ v2.7 — cutoffs, every open one, coloured
   // red: passed, today or tomorrow (inside 24 h) · amber: in 2–3 days · calm: later
-  const cutTone = (d) => (d <= 1 ? 'red' : d <= 3 ? 'amber' : 'calm');
-  const cutWhen = (d, date) => (d < 0 ? 'PASSED' : d === 0 ? 'TODAY' : d === 1 ? 'TOMORROW' : fmt(date));
+  const cutTone = (d) => (d <= due99() ? 'red' : d <= 3 ? 'amber' : 'calm');   // v2.9.9: Friday — the weekend is red too
+  const cutWhen = (d, date) => (d < 0 ? 'PASSED' : d === 0 ? 'TODAY' : d === 1 ? 'TOMORROW' : d === 2 && fri99() ? 'SUNDAY' : fmt(date));
   function cutsFor(j, t0) {
     if (!j.active || j.hold || (j.etd && j.etd <= t0)) return [];
     const out = [], open = (v) => !v || v === 'PENDING';
@@ -4577,16 +4588,11 @@
     return '<span class="pclock pc-mini is-' + c.tone + '" data-clock="' + esc(p) + '" data-mini="1" title="' + esc(clockTitle(p, z, c)) + '"><i></i><b>' + c.time + '</b>' + esc(upq(p)) + '</span>';
   }
   // urgent first (cutoff passed / today, free time) — then whose office closes soonest; closed offices by who opens first
-  function dueSort8(t0) {
+  function dueSort8(t0) {   // v2.9.9: overdue / cutoff today / free time first, then cutoff tomorrow, then the rest — inside each, office hours
     const now = new Date(), memo = new Map();
-    const score = (j) => {
-      if (memo.has(j)) return memo.get(j);
-      const p = clockPort(j, t0), z = (p && portZone(p)) || HOME_ZONE, o = officeState(z, now);
-      const v = !o ? 5000 : o.open ? o.toClose : 1000 + o.toOpen;
-      memo.set(j, v); return v;
-    };
+    const score = (j) => { if (!memo.has(j)) memo.set(j, officeScore99(j, now, t0)); return memo.get(j); };
     const since = (x) => (x.f.since === null ? 1e9 : x.f.since);
-    return (a, b) => ((a.j.next.rank === 0 ? 0 : 1) - (b.j.next.rank === 0 ? 0 : 1)) || score(a.j) - score(b.j) || a.j.next.rank - b.j.next.rank || since(b) - since(a);
+    return (a, b) => dueTier99(a.j) - dueTier99(b.j) || score(a.j) - score(b.j) || a.j.next.rank - b.j.next.rank || since(b) - since(a);
   }
   function tickClocks() {
     const els = document.querySelectorAll('[data-clock]'); if (!els.length) return;
@@ -4889,40 +4895,57 @@
   // ================================================================ v2.9.1 — TODAY'S WATCH: what still has to happen, and by when
   // Before sailing: SI, ED and BL confirmation — by their cutoff, or by the sailing date when there is no cutoff
   // (v2.9.2: DGPC for DG sea exports, the DG cutoff for air). Still open after the ship sailed = overdue. Imports: the line free time ending or over.
-  function watchItems91(active, t0) {
-    const out = [];
-    const cutW = (d) => (d < 0 ? (-d) + (d === -1 ? ' day' : ' days') + ' overdue' : d === 0 ? 'cutoff today' : d === 1 ? 'cutoff tomorrow' : 'cutoff in ' + d + ' days');
-    const add = (j, what, say, d, when, extra) => out.push(Object.assign({ j, what, say, d, when, level: d <= 1 ? 'urgent' : 'soon' }, extra || {}));
+  function watchItems91(active, t0) {   // v2.9.9: open tasks stay until done · original docs · port free time · invoice · Friday = the weekend too · office hours within a day
+    const out = [], D = due99(t0);
+    const cutW = (d) => (d < 0 ? (-d) + (d === -1 ? ' day' : ' days') + ' overdue' : 'cutoff ' + dayWord99(d, t0));
+    const add = (j, what, say, d, when, extra) => out.push(Object.assign({ j, what, say, d, when, level: d <= D ? 'urgent' : 'soon' }, extra || {}));
+    const ago = (d) => (d === -1 ? 'yesterday' : (-d) + ' days ago');
     active.forEach((j) => {
       if (j.hold || j.mode === 'misc') return;
       if ((j.cat === 'EXPORT' || j.cat === 'CROSS') && j.type !== 'CRR') {
         const air = j.mode === 'air', sd = j.etd ? days(t0, j.etd) : null;
         const verb = air ? 'departs' : 'sails', past = air ? 'departed ' : 'sailed ';
-        const task = (open, cut, what, say) => {
+        const task = (open, cut, what, say, field) => {
           if (!open) return;
-          if (sd !== null && sd < 0) { if (sd >= -21) add(j, what, say, sd, past + (sd === -1 ? 'yesterday' : (-sd) + ' days ago')); return; }
-          if (cut) { const dc = days(t0, cut); if (dc <= 3) add(j, what, say, dc, cutW(dc)); return; }
-          if (sd !== null && sd <= 3) add(j, what, say, sd, sd === 0 ? verb + ' today' : sd === 1 ? verb + ' tomorrow' : verb + ' in ' + sd + ' days');
+          if (sd !== null && sd < 0) { add(j, what, say, sd, past + ago(sd), { field }); return; }   // stays until it is done
+          if (cut) { const dc = days(t0, cut); if (dc <= 3) add(j, what, say, dc, cutW(dc), { field }); return; }
+          if (sd !== null && sd <= 3) add(j, what, say, sd, verb + ' ' + dayWord99(sd, t0), { field });
         };
-        task(!j.sido || j.sido === 'PENDING', j.siCut, 'SI NOT SUBMITTED', 'SI not submitted');
-        if (j.cat === 'EXPORT') task(!j.ed || j.ed === 'PENDING', j.edCut, 'ED NOT PASSED', 'ED not passed');
-        task(j.bl !== NA && !BL_OK.includes(j.bl), null, air ? 'AWB NOT CONFIRMED' : 'BL NOT CONFIRMED', air ? 'AWB not confirmed' : 'BL not confirmed');
-        if (j.cat === 'EXPORT' && j.dg === 'DG' && j.mode === 'sea') task(!j.dgpc || j.dgpc === 'PENDING', j.dgCut, 'DGPC NOT SUBMITTED', 'DGPC not submitted');   // v2.9.2
-        else if (j.cat === 'EXPORT' && j.dg === 'DG' && j.dgCut && !(sd !== null && sd < 0)) { const dc = days(t0, j.dgCut); if (dc >= -1 && dc <= 3) add(j, 'DG CUTOFF', 'DG cutoff', dc, dc < 0 ? 'passed yesterday' : dc === 0 ? 'today' : dc === 1 ? 'tomorrow' : 'in ' + dc + ' days'); }
+        task(!j.sido || j.sido === 'PENDING', j.siCut, 'SI NOT SUBMITTED', 'SI not submitted', 'sido');
+        if (j.cat === 'EXPORT') task(!j.ed || j.ed === 'PENDING', j.edCut, 'ED NOT PASSED', 'ED not passed', 'ed');
+        task(j.bl !== NA && !BL_OK.includes(j.bl), null, air ? 'AWB NOT CONFIRMED' : 'BL NOT CONFIRMED', air ? 'AWB not confirmed' : 'BL not confirmed', 'bl');
+        if (j.cat === 'EXPORT' && j.dg === 'DG' && j.mode === 'sea') task(!j.dgpc || j.dgpc === 'PENDING', j.dgCut, 'DGPC NOT SUBMITTED', 'DGPC not submitted', 'dgpc');   // v2.9.2
+        else if (j.cat === 'EXPORT' && j.dg === 'DG' && j.dgCut && !(sd !== null && sd < 0)) { const dc = days(t0, j.dgCut); if (dc >= -1 && dc <= 3) add(j, 'DG CUTOFF', 'DG cutoff', dc, dc < 0 ? 'passed yesterday' : dayWord99(dc, t0)); }
       }
-      if (j.type === 'SFIF' || j.type === 'SFIL') {   // v2.9.3: sea imports — BL confirmation by the sailing date, overdue after it
+      if (j.type === 'SFIF' || j.type === 'SFIL') {   // sea imports: BL confirmation by the sailing date, overdue after it — arrived too (v2.9.9)
         const sd = j.etd ? days(t0, j.etd) : null;
         if (j.bl !== NA && !BL_OK.includes(j.bl)) {
-          if (sd !== null && sd < 0) { if (sd >= -21 && !j.arrived) add(j, 'BL NOT CONFIRMED', 'BL not confirmed', sd, 'sailed ' + (sd === -1 ? 'yesterday' : (-sd) + ' days ago')); }
-          else if (sd !== null && sd <= 3) add(j, 'BL NOT CONFIRMED', 'BL not confirmed', sd, sd === 0 ? 'sails today' : sd === 1 ? 'sails tomorrow' : 'sails in ' + sd + ' days');
+          if (sd !== null && sd < 0) add(j, 'BL NOT CONFIRMED', 'BL not confirmed', sd, 'sailed ' + ago(sd), { field: 'bl' });
+          else if (sd !== null && sd <= 3) add(j, 'BL NOT CONFIRMED', 'BL not confirmed', sd, 'sails ' + dayWord99(sd, t0), { field: 'bl' });
         }
       }
-      if (j.cat === 'IMPORT' && j.arrived && !j.delivery && j.lineFreeEnd) {
-        const d = days(t0, j.lineFreeEnd);
-        if (d <= 2 && d >= -30) add(j, d < 0 ? 'FREE TIME OVER' : 'FREE TIME ENDS', d < 0 ? 'Free time over' : 'Free time ends', d, d < 0 ? 'over by ' + (-d) + (d === -1 ? ' day' : ' days') : d === 0 ? 'ends today' : d === 1 ? 'ends tomorrow' : 'ends in 2 days', { free: true });
+      if ((j.type === 'SFIF' || j.type === 'SFIL' || j.type === 'CND') && j.docs === 'PENDING' && !j.delivery && j.eta) {   // v2.9.9: no originals, no DO
+        const d = days(t0, j.eta);
+        if (d <= 2) add(j, 'ORIGINAL DOCS NOT RECEIVED', 'Original docs not received', d, d < 0 ? 'arrived ' + ago(d) : 'arrives ' + dayWord99(d, t0), { field: 'docs' });
+      }
+      if (j.cat === 'IMPORT' && j.arrived && !j.delivery) {   // free time (line, and port — v2.9.9) ending or over, until delivered
+        const free = (end, port) => {
+          if (!end) return;
+          const d = days(t0, end); if (d > 2) return;
+          const P = port ? 'PORT ' : '', p = port ? 'Port free time' : 'Free time';
+          add(j, P + (d < 0 ? 'FREE TIME OVER' : 'FREE TIME ENDS'), p + (d < 0 ? ' over' : ' ends'), d, d < 0 ? 'over by ' + (-d) + (d === -1 ? ' day' : ' days') : 'ends ' + dayWord99(d, t0), { free: true, port, field: 'delivery' });
+        };
+        free(j.lineFreeEnd, false); free(j.portFreeEnd, true);
+      }
+      const inv = invOf98(j), cs = costSum(j);   // v2.9.9: the invoice, 3 days after costing was marked done here
+      if (inv.open && inv.value === 'INVOICE NOT ISSUED' && cs && cs[0] === 'LOCKED' && cs[8]) {
+        const n = days(dayOf(cs[8]), t0);
+        if (n >= 3) add(j, 'INVOICE NOT ISSUED', 'Invoice not issued', 3 - n, 'costing done ' + n + ' days ago', { field: 'invoice' });
       }
     });
-    return out.sort((a, b) => a.d - b.d || (a.level === b.level ? 0 : a.level === 'urgent' ? -1 : 1));
+    const now = new Date(), memo = new Map(), sc = (j) => { if (!memo.has(j)) memo.set(j, officeScore99(j, now, t0)); return memo.get(j); };
+    const long = (w) => (w.d < -21 ? 1 : 0);   // overdue 3+ weeks: kept, after today's work (the most recent of them first)
+    return out.sort((a, b) => long(a) - long(b) || (long(a) ? b.d - a.d : a.d - b.d) || (a.level === b.level ? 0 : a.level === 'urgent' ? -1 : 1) || sc(a.j) - sc(b.j));
   }
 
   // ================================================================ v2.9.1 — Home: five counters (each opens the side panel)
@@ -4933,8 +4956,8 @@
     const holdSoon = m.hold.filter((j) => j.etd && j.etd >= t0 && j.etd <= wk).length;
     return '<div class="kpis is-5">' +
       k('active', 'ACTIVE JOBS', m.active.length, m.atSea.length + ' at sea now', false, 100) +
-      k('costing', 'COSTING DUE', m.costing.length, m.costing.filter((j) => costDue91(j, t0)).length + ' sailed or arrived', false, 130) +
-      k('sied', 'SI / ED DUE', m.sied.length, m.cut24 + (m.cut24 === 1 ? ' cutoff' : ' cutoffs') + ' in 24 h', false, 160) +
+      k('costing', 'COSTING DUE', m.costingDue.length, m.costing.length ? 'of ' + m.costing.length + ' pending' : 'nothing pending', false, 130) +   // v2.9.9: what is due now
+      k('sied', 'SI / ED DUE', m.siedDue.length, m.sied.length ? 'of ' + m.sied.length + ' pending' : 'nothing pending', false, 160) +
       k('free', 'FREE TIME', m.freeJobs.length, m.freeJobs.length ? 'ending in ≤ 2 days' : 'all clear', m.freeJobs.length > 0, 190) +
       k('hold', 'ON HOLD', m.hold.length, !m.hold.length ? 'all jobs moving' : holdSoon ? holdSoon + ' due to sail this week' : 'none due to sail this week', false, 220) +
       '</div>';
@@ -4943,10 +4966,11 @@
   // ================================================================ v2.9.1 — Home: four tall tiles, each made for its job
   function watchTile91(m, anim) {
     const chip = (w) => (w.level === 'urgent' ? 'chip chip-urgent' : 'chip chip-amber-dark');
-    const item = (w, more) => '<button type="button" class="wt li' + (more ? ' is-more' : '') + '" data-job="' + esc(w.j.jobNo) + '">' +
+    const item = (w, more) => '<button type="button" class="wt li' + (more ? ' is-more' : '') + '" ' + wtAttr99(w) + '>' +   // v2.9.9: tap → its choice card
       '<span class="wt-top"><span class="wt-job">' + changedDot(w.j) + esc(w.j.jobNo) + ownTag98(w.j) + '</span><span class="' + chip(w) + '">' + (w.level === 'urgent' ? icon('alert', 12) : '') + esc(w.when) + '</span></span>' +
       '<span class="wt-what">' + esc(w.what) + '</span><span class="wt-cust">' + esc(w.j.customer || '—') + ' · ' + esc(nice(w.j.route)) + '</span></button>';
-    const G = [['over', 'OVERDUE', (w) => w.d < 0], ['today', 'TODAY', (w) => w.d === 0], ['soon', 'NEXT 3 DAYS', (w) => w.d > 0]];
+    const F = fri99(today0()) ? 2 : 0;   // v2.9.9: Friday — the weekend is today's
+    const G = [['over', 'OVERDUE', (w) => w.d < 0 && w.d >= -21], ['today', F ? 'TODAY + WEEKEND' : 'TODAY', (w) => w.d >= 0 && w.d <= F], ['soon', 'NEXT 3 DAYS', (w) => w.d > F], ['long', 'OVERDUE 3+ WEEKS', (w) => w.d < -21]];
     let n = 0;
     const body = G.map(([id, label, f]) => { const L = m.watch.filter(f).slice(0, LIST_MAX); if (!L.length) return ''; const head = '<div class="wt-gh is-' + id + (n >= 6 ? ' is-more' : '') + '">' + label + '<b>' + L.length + '</b></div>'; return head + L.map((w) => item(w, n++ >= 6)).join(''); }).join('');
     return '<section class="tile tile-ink t-watch' + anim + '" style="--d:250ms" aria-labelledby="watchTitle">' +
@@ -5120,32 +5144,32 @@
       const tag = (j) => { const s = costState(j); return '<span class="dr-tag is-' + s + '">' + (s === 'draft' ? 'Draft' : 'Pending') + '</span>'; };
       const r = (j) => row(j, '', due(j) ? side(j.arrived ? 'ARRIVED' : j.mode === 'air' ? 'DEPARTED' : 'SAILED', j.arrived ? j.eta : j.etd, rel91(j.arrived ? j.eta : j.etd, t0), 'red', tag(j)) : (costByArrival91(j) && j.eta ? side('ETA', j.eta, rel91(j.eta, t0), '', tag(j)) : side('ETD', j.etd, j.etd ? rel91(j.etd, t0) : j.mode === 'misc' ? 'costing only' : 'to confirm', '', tag(j))), 'data-cost="' + esc(j.jobNo) + '"');
       const at = (j) => tm(costByArrival91(j) ? j.eta : j.etd);
-      html = group('SAILED OR ARRIVED', list.filter(due).sort((a, b) => at(a) - at(b)).map(r), 'red') + group('NOT DUE YET', list.filter((j) => !due(j)).sort((a, b) => at(a) - at(b)).map(r));
-    } else if (kind === 'sied') {
+      const soon = (j) => !due(j) && costDueBy99(j, t0);   // v2.9.9: sailing / arriving by tomorrow (Friday: Sunday) is due too
+      html = group('SAILED OR ARRIVED', list.filter(due).sort((a, b) => at(a) - at(b)).map(r), 'red') + group(fri99(t0) ? 'SAILS OR ARRIVES BY SUNDAY' : 'SAILS OR ARRIVES BY TOMORROW', list.filter(soon).sort((a, b) => at(a) - at(b)).map(r), 'amber') +
+        group('NOT DUE YET', list.filter((j) => !costDueBy99(j, t0)).sort((a, b) => at(a) - at(b)).map(r));
+    } else if (kind === 'sied') {   // v2.9.9: the red group is the Home number; no cutoff → the sailing date; tap a chip → its choice card
+      const D = due99(t0);
       const item = (j) => {
-        const sailed = !!(j.etd && j.etd < t0), C = cutsFor(j, t0);
-        const one = (k, v, show, ck) => {
-          if (!show || v === NA) return { h: '', d: 99 };
-          if (v && v !== 'PENDING') return { h: '<span class="cut-chip is-done"><b>' + k + '</b>✓</span>', d: 99 };
-          if (sailed) return { h: '<span class="cut-chip is-red"><b>' + k + '</b>SAILED</span>', d: -99 };
-          const c = C.find((x) => x.k === (ck || k));
-          return c ? { h: '<span class="cut-chip is-' + c.tone + '"><b>' + k + '</b>' + esc(cutWhen(c.d, c.date)) + '</span>', d: c.d } : { h: '<span class="cut-chip is-calm"><b>' + k + '</b>NO CUTOFF</span>', d: 50 };
-        };
-        const si = one('SI', j.sido, true), ed = one('ED', j.ed, j.cat === 'EXPORT'), dg = one('DGPC', j.dgpc, j.cat === 'EXPORT' && j.dg === 'DG' && j.mode === 'sea', 'DG'), d = Math.min(si.d, ed.d, dg.d);
-        return { j, d, h: row(j, '', '<span class="dr-side is-cuts">' + si.h + ed.h + dg.h + '</span>') };
+        const chip = (p) => (p.done ? '<span class="cut-chip is-done"><b>' + p.k + '</b>✓</span>'
+          : '<span class="cut-chip is-' + p.tone + (canEditJob(j) ? ' is-q99" data-q99="' + esc(j.jobNo) + '" data-q99-f="' + p.f + '" role="button" tabindex="0" aria-label="' + esc(p.k + ' · ' + p.text + ' — update') + '"' : '"') + '><b>' + p.k + '</b>' + esc(p.text) + '</span>');
+        return { j, d: siedD99(j, t0), h: row(j, '', '<span class="dr-side is-cuts">' + siedParts99(j, t0).map(chip).join('') + '</span>') };
       };
       const L = list.map(item).sort((a, b) => a.d - b.d);
-      html = group('OVERDUE OR WITHIN 24 H', L.filter((x) => x.d <= 1).map((x) => x.h), 'red') + group('NEXT 3 DAYS', L.filter((x) => x.d > 1 && x.d <= 3).map((x) => x.h), 'amber') + group('LATER', L.filter((x) => x.d > 3).map((x) => x.h));
-    } else if (kind === 'free') {
-      html = list.slice().sort((a, b) => tm(a.lineFreeEnd) - tm(b.lineFreeEnd)).map((j) => {
-        const d = days(t0, j.lineFreeEnd);
-        return row(j, '<span class="dr-note">Arrived ' + esc(fmt(j.eta)) + ' · ' + esc(rel91(j.eta, t0)) + '</span>',
-          '<span class="dr-side is-' + (d <= 1 ? 'red' : 'amber') + '"><span class="dr-k">LINE FREE TIME</span><b>' + (d < 0 ? 'over ' + (-d) + (d === -1 ? ' day' : ' days') : d === 0 ? 'ends today' : d + (d === 1 ? ' day left' : ' days left')) + '</b><span class="dr-s">until ' + esc(fmt(j.lineFreeEnd)) + '</span></span>');
+      html = group(fri99(t0) ? 'OVERDUE, TODAY OR THIS WEEKEND' : 'OVERDUE, TODAY OR TOMORROW', L.filter((x) => x.d <= D).map((x) => x.h), 'red') + group('NEXT 3 DAYS', L.filter((x) => x.d > D && x.d <= 3).map((x) => x.h), 'amber') + group('LATER', L.filter((x) => x.d > 3).map((x) => x.h));
+    } else if (kind === 'free') {   // v2.9.9: line and port free time — the sooner one on the right, the other one below
+      const ends = (j) => [j.lineFreeEnd && { k: 'LINE FREE TIME', e: j.lineFreeEnd }, j.portFreeEnd && { k: 'PORT FREE TIME', e: j.portFreeEnd }].filter(Boolean).sort((a, b) => a.e - b.e);
+      const txt = (d) => (d < 0 ? 'over ' + (-d) + (d === -1 ? ' day' : ' days') : d === 0 ? 'ends today' : d + (d === 1 ? ' day left' : ' days left'));
+      html = list.slice().sort((a, b) => tm((ends(a)[0] || {}).e) - tm((ends(b)[0] || {}).e)).map((j) => {
+        const E = ends(j), first = E[0] || { k: 'FREE TIME', e: null }, other = E[1], d = first.e ? days(t0, first.e) : 0;
+        return row(j, '<span class="dr-note">Arrived ' + esc(fmt(j.eta)) + ' · ' + esc(rel91(j.eta, t0)) + (other ? ' · ' + (other.k === 'PORT FREE TIME' ? 'port' : 'line') + ' free time ' + esc(txt(days(t0, other.e))) : '') + '</span>',
+          '<span class="dr-side is-' + (d <= 1 ? 'red' : 'amber') + '"><span class="dr-k">' + first.k + '</span><b>' + txt(d) + '</b><span class="dr-s">until ' + esc(fmt(first.e)) + '</span></span>');
       }).join('');
     } else if (kind === 'hold') {
       html = list.slice().sort((a, b) => tm(a.etd) - tm(b.etd)).map((j) => row(j, j.remarks ? '<span class="dr-note">“' + esc(j.remarks) + '”</span>' : '', when(j))).join('');
     } else if (kind === 'watch') {
-      html = m.watch.map((w) => row(w.j, '<span class="dr-next"><span class="dr-what">' + esc(w.say) + '</span></span>', '<span class="dr-side is-' + (w.level === 'urgent' ? 'red' : 'amber') + '"><b>' + esc(w.when) + '</b></span>')).join('');
+      const F = fri99(t0) ? 2 : 0, R = (w) => row(w.j, '<span class="dr-next"><span class="dr-what">' + esc(w.say) + '</span></span>', '<span class="dr-side is-' + (w.level === 'urgent' ? 'red' : 'amber') + '"><b>' + esc(w.when) + '</b></span>', wtAttr99(w));   // v2.9.9: tap → its choice card; grouped as on Home
+      html = group('OVERDUE', m.watch.filter((w) => w.d < 0 && w.d >= -21).map(R), 'red') + group(F ? 'TODAY + WEEKEND' : 'TODAY', m.watch.filter((w) => w.d >= 0 && w.d <= F).map(R), 'red') +
+        group('NEXT 3 DAYS', m.watch.filter((w) => w.d > F).map(R), 'amber') + group('OVERDUE 3+ WEEKS', m.watch.filter((w) => w.d < -21).map(R));
     } else if (kind === 'week') {
       const pick = wkPick92();
       const ev = wkEvents93(m, wkStart93()).filter((e) => !pick || +dayOf(e.d) === +pick);   // v2.9.3: the week shown on Home
@@ -5414,7 +5438,7 @@
       const fit = $('#view').classList.contains('is-fit');
       if (!body || !fit) { if (bar) bar.remove(); return; }
       const B = body.getBoundingClientRect();
-      const rows = Array.from(body.querySelectorAll('[data-job], .rm')).filter((r) => r.offsetParent !== null);
+      const rows = Array.from(body.querySelectorAll('[data-job], [data-q99], .rm')).filter((r) => r.offsetParent !== null);   // v2.9.9: + tasks with a choice card
       const n = rows.filter((r) => r.getBoundingClientRect().bottom > B.bottom + 2).length;   // not fully in sight
       if (!n) { if (bar) bar.remove(); return; }
       const list = t.classList.contains('t-watch') ? 'watch' : t.classList.contains('t-week') ? 'week' : '';
@@ -5621,13 +5645,8 @@
   // ------------------------------------------------------------ lists & menus
   function openList(kind, opener) {
     const m = lastMetrics; if (!m) return;
-    const map = {
-      active: ['ACTIVE JOBS', m.active], costing: ['COSTING DUE', m.costing], sied: ['SI / ED DUE', m.sied],
-      free: ['FREE TIME ENDING ≤ 2 DAYS', m.freeJobs], atsea: ['AT SEA NOW', m.atSea], arriving: ['ARRIVING THIS WEEK', m.arriving],
-      departing: ['DEPARTING THIS WEEK', m.departing], hold: ['ON HOLD', m.hold], watch: ['TODAY’S WATCH', m.watch.map((w) => w.j)], week: weekPanel92(m),
-      behind: ['NOT FOLLOWED UP YET', isSales() ? behindList() : []]
-    };
-    const entry = map[kind]; if (!entry) return;
+    const entry = listEntry99(kind, m); if (!entry) return;   // v2.9.9: shared with the panel's way back from a choice card
+    state.list99 = kind;
     const list = Array.from(new Set(entry[1]));
     closeOverlays(true);
     $('#drawerKicker').textContent = (kind === 'watch' ? m.watch.length + (m.watch.length === 1 ? ' TASK' : ' TASKS') : list.length + (list.length === 1 ? ' JOB' : ' JOBS'));
@@ -5682,7 +5701,7 @@
       updateNav();
       const fresh = state.notif ? state.notif.items.filter((x) => x.t > newest && x.t > (state.notif.seen || 0)) : [];
       state.nudged = fresh.length && notifUnread() > before && state.overlay !== 'drawer' && !(state.route && state.route.name === 'notif');
-      if (state.nudged) toast(fresh.length === 1 ? nice(fresh[0].from) + ' · ' + (fresh[0].job ? fresh[0].job + ': ' : '') + fresh[0].text : fresh.length + ' new notifications', { action: { label: 'View', fn: () => openNotifications() } });
+      if (state.nudged) toast(fresh.length === 1 ? nice(fresh[0].from) + ' · ' + (fresh[0].job ? fresh[0].job + ': ' : '') + fresh[0].text : fresh.length + ' new notifications', { news: true, action: { label: 'View', fn: () => openNotifications() } });
       if (state.route && state.route.name === 'job') loadStory(state.route.jobNo, true);
       if (manual && !state.nudged) toast('Up to date');
     } catch (e) {
@@ -5727,6 +5746,7 @@
 
   function toast(text, opts = {}) {
     if (typeof opts === 'boolean') opts = { error: opts };
+    if (!opts.error) { note99(text, opts); return; }   // v2.9.9: the glass capsule (problems stay red, below)
     const t = document.createElement('div');
     t.className = 'toast' + (opts.error ? ' is-error' : '');
     if (opts.error && state.savingCount) state.saveFail98 = true;   // v2.9.8: no "Saved" after a refusal
@@ -5840,24 +5860,20 @@
   function costAheadSoon98(no) { clearTimeout(state.costPreT98); state.costPreT98 = setTimeout(() => { if (state.route && state.route.name === 'job' && String(state.route.jobNo).toUpperCase() === String(no).toUpperCase()) costAhead98(no); }, 700); }
 
   // ---------- the saving pill: frosted glass — "Saving…", then a tick and "Saved" that fades
-  function savePill98(was) {
+  function savePill98(was) {   // v2.9.9: the capsule says what was saved (with Undo), or "Saved"
     const pill = $('#savePill'); if (!pill) return;
-    const txt = $('#savePillText') || pill;
     const n = state.savingCount;
     clearTimeout(state.pillT98);
     if (n > 0) {
-      if (was === 0) state.saveFail98 = false;
-      pill.classList.remove('is-done', 'is-out'); pill.hidden = false;
-      txt.textContent = n > 1 ? 'Saving ' + n + ' changes…' : 'Saving…';
+      if (was === 0) { state.saveFail98 = false; state.pillMsg99 = null; }
+      pill99('saving', n > 1 ? 'Saving ' + n + ' changes…' : 'Saving…');
       return;
     }
-    if (pill.hidden) return;
-    if (state.saveFail98) { pill.hidden = true; pill.classList.remove('is-done', 'is-out'); return; }
-    pill.classList.add('is-done'); txt.textContent = 'Saved';
-    state.pillT98 = setTimeout(() => {
-      pill.classList.add('is-out');
-      state.pillT98 = setTimeout(() => { pill.hidden = true; pill.classList.remove('is-done', 'is-out'); }, 360);
-    }, 1100);
+    const m = state.pillMsg99; state.pillMsg99 = null;
+    if (state.saveFail98) { pillOut99(true); return; }
+    if (pill.hidden && !m) return;
+    pill99(m && m.news ? 'news' : 'done', m ? m.text : 'Saved', m && m.action);
+    pillTimer99(m ? (m.action ? 6000 : 2400) : 1100);
   }
 
   // ---------- Home on a day from the morning email: #/day/yyyy-mm-dd
@@ -5968,7 +5984,7 @@
   function invSave98(no, v) {
     const j = findJob(no); if (!j || !canEdit()) return;
     const s = invOf98(j); if (!s.open) { toast(s.frozen ? 'Costing was unlocked — the invoice status opens again once costing is done.' : 'The invoice status opens once costing is done.', { error: true }); return; }
-    closeOverlays();
+    if (state.quick99) quickDone99(); else closeOverlays();   // v2.9.9
     if ((j.invoice || '') === v) return;
     saveJob(j.jobNo, { invoice: v }, { toast: 'Invoice → ' + INV_LABEL98[v].toLowerCase().replace(/^./, (c) => c.toUpperCase()) });
   }
@@ -6251,6 +6267,443 @@
     window.addEventListener('hashchange', () => setTimeout(covReq98, 0));
   }
 
+  // ================================================================ v2.9.9
+  I.remark = '<path d="M20 12.2c0 3.9-3.6 7-8 7-1.1 0-2.2-.2-3.1-.6L4 20l1.3-3.6C4.5 15.2 4 13.8 4 12.2c0-3.9 3.6-7 8-7s8 3.1 8 7z"/>';
+
+  // ---------- one glass capsule for every message ----------
+  // "Saving…" → what was done, with Undo when there is one → fades. A note on its own (Copied, Excel ready) uses the same
+  // capsule. Problems stay in the red message. Hovering the capsule holds it.
+  function pill99(mode, text, action) {
+    const pill = $('#savePill'); if (!pill) return null;
+    const txt = $('#savePillText') || pill, act = $('#savePillAct');
+    pill.classList.remove('is-out', 'is-done', 'is-news', 'is-msg', 'has-act');
+    if (mode !== 'saving') pill.classList.add('is-done');
+    if (mode === 'news') pill.classList.add('is-news');
+    if (mode !== 'saving' && text !== 'Saved') pill.classList.add('is-msg');
+    txt.textContent = text;
+    if (act) {
+      act.hidden = !action;
+      if (action) {
+        pill.classList.add('has-act');
+        act.textContent = action.label;
+        act.onclick = () => { clearTimeout(state.pillT98); pillOut99(true); action.fn(); };
+      } else act.onclick = null;
+    }
+    pill.hidden = false;
+    return pill;
+  }
+  function pillOut99(now) {
+    const pill = $('#savePill'); if (!pill || pill.hidden) return;
+    const done = () => { pill.hidden = true; pill.classList.remove('is-done', 'is-out', 'is-news', 'is-msg', 'has-act'); const a = $('#savePillAct'); if (a) a.hidden = true; };
+    if (now) { done(); return; }
+    pill.classList.add('is-out');
+    state.pillT98 = setTimeout(done, 360);
+  }
+  function pillTimer99(ms) {
+    clearTimeout(state.pillT98);
+    state.pillMs99 = ms;
+    if (state.pillHover99) return;
+    state.pillT98 = setTimeout(() => pillOut99(false), ms);
+  }
+  function note99(text, opts) {
+    const m = { text: String(text || ''), action: opts.action || null, news: !!opts.news };
+    if (state.savingCount > 0) { state.pillMsg99 = m; return; }   // shown when the save lands
+    clearTimeout(state.pillT98);
+    if (!pill99(m.news ? 'news' : 'done', m.text, m.action)) return;
+    pillTimer99(m.action ? 6000 : 2400);
+  }
+
+  // ---------- Friday: Saturday and Sunday count as due today ----------
+  function fri99(t0) { return (t0 || today0()).getDay() === 5; }
+  function due99(t0) { return fri99(t0) ? 2 : 1; }
+  const dayWord99 = (d, t0) => (d === 0 ? 'today' : d === 1 ? (fri99(t0) ? 'Saturday' : 'tomorrow') : fri99(t0) && d === 2 ? 'Sunday' : 'in ' + d + ' days');
+
+  // ---------- Home: what is due now (overdue, today, tomorrow — Friday: the weekend too) ----------
+  // Costing: an export once it has sailed or sails by then; an import / clearance once it has arrived or arrives by then.
+  function costDueBy99(j, t0) {
+    if (costDue91(j, t0)) return true;
+    const at = costByArrival91(j) ? j.eta : j.etd;
+    return !!(at && days(t0, at) <= due99(t0));
+  }
+  // SI / ED (and DGPC): each open one by its cutoff; with no cutoff, by the sailing date; still open after sailing = overdue.
+  function siedParts99(j, t0) {
+    const sailed = !!(j.etd && j.etd < t0), C = cutsFor(j, t0), air = j.mode === 'air', out = [];
+    const one = (k, f, v, show, ck) => {
+      if (!show || v === NA) return;
+      if (v && v !== 'PENDING') { out.push({ k, f, done: true, d: 99 }); return; }
+      if (sailed) { out.push({ k, f, tone: 'red', text: air ? 'DEPARTED' : 'SAILED', d: -99 }); return; }
+      const c = C.find((x) => x.k === (ck || k));
+      if (c) { out.push({ k, f, tone: c.tone, text: cutWhen(c.d, c.date), d: c.d }); return; }
+      if (j.etd) { const d = days(t0, j.etd); out.push({ k, f, tone: cutTone(d), text: 'NO CUTOFF · ' + (air ? 'DEPARTS ' : 'SAILS ') + (d === 0 ? 'TODAY' : d === 1 ? 'TOMORROW' : fmt(j.etd)), d }); return; }
+      out.push({ k, f, tone: 'calm', text: 'NO CUTOFF', d: 50 });
+    };
+    one('SI', 'sido', j.sido, true);
+    one('ED', 'ed', j.ed, j.cat === 'EXPORT');
+    one('DGPC', 'dgpc', j.dgpc, j.cat === 'EXPORT' && j.dg === 'DG' && j.mode === 'sea', 'DG');
+    return out;
+  }
+  function siedD99(j, t0) { return siedParts99(j, t0).reduce((a, p) => Math.min(a, p.d), 99); }
+
+  // ---------- TODAY'S WATCH within a day: the office that matters now, closing soonest first ----------
+  function officeScore99(j, now, t0) {
+    const p = clockPort(j, t0), z = (p && portZone(p)) || HOME_ZONE, o = officeState(z, now);
+    return !o ? 5000 : o.open ? o.toClose : 1000 + o.toOpen;
+  }
+
+  // ---------- tap a task → its choice card, right there ----------
+  // From TODAY'S WATCH (the tile: a card beside it; the side panel: inside the panel, with a way back) and the SI / ED
+  // panel's chips. Saving works as on the job page; "Open job" is at the bottom.
+  function quickStop99(j, field) {
+    const all = j.journey.all.filter((s) => s.def && s.def.field === field && (s.kind === 'field' || s.kind === 'date'));
+    return all.find((s) => s.state !== 'done' && s.state !== 'skip') || all[0] || null;
+  }
+  const docsCard99 = (no) => () => {   // original docs have no stop of their own
+    const j = findJob(no); if (!j) return '';
+    const cur = j.docs || '';
+    return '<div class="pop-title">Original docs</div><div class="pop-state is-' + (cur === 'RECEIVED' ? 'done' : 'todo') + '"><span>' + esc(cur === NA ? 'NOT NEEDED' : cur || 'PENDING') + '</span></div>' +
+      '<div class="choice-row">' + OPTS.docs.map((v) => '<button type="button" class="choice' + (v === cur ? ' is-on' : '') + (v === 'RECEIVED' ? ' is-good' : '') + '" data-set="docs" data-val="' + esc(v) + '" aria-pressed="' + (v === cur) + '">' + esc(v === NA ? 'Not needed' : v) + '</button>').join('') + '</div>' +
+      (cur !== 'RECEIVED' ? '<button type="button" class="btn-brutal pop-main" data-primary data-set="docs" data-val="RECEIVED">MARK DONE · RECEIVED</button>' : '') + SAVE_NOTE;
+  };
+  function quickRender99(no, field) {
+    const j = findJob(no); if (!j) return null;
+    let inner = null;
+    if (field === 'invoice') inner = invPop98(no);
+    else if (field === 'docs') inner = docsCard99(no);
+    else { const s = quickStop99(j, field); if (s) inner = stopEditor(no, s.id); }
+    if (!inner) return null;
+    return () => {
+      const k = findJob(no); if (!k) return '';
+      const P = state.quick99 || {};
+      return (P.panel ? '<button type="button" class="q99-back" data-q99-back>' + icon('back', 14) + esc(P.title || 'Back') + '</button>' : '') +
+        '<div class="q99-job"><b>' + esc(k.jobNo) + '</b>' + esc(k.customer ? ' · ' + nice(k.customer) : '') + '</div>' + inner() +
+        '<button type="button" class="btn-ghost pop-wide q99-open" data-q99-open="' + esc(k.jobNo) + '">Open job ' + icon('chevron', 14) + '</button>';
+    };
+  }
+  function quickOpen99(el) {
+    const no = el.dataset.q99, field = el.dataset.q99F, j = findJob(no);
+    if (!j) return;
+    if (!canEditJob(j) || !field) { openJob(j.jobNo); return; }
+    const inPanel = !!el.closest('#drawerBody') && !$('#drawer').hidden && state.overlay === 'drawer';
+    const panel = inPanel ? { kind: state.list99, title: ($('#drawerTitle') || {}).textContent || 'Back', kicker: $('#drawerKicker').textContent } : null;
+    state.quick99 = { no: j.jobNo, field, panel: !!panel, kind: panel && panel.kind, title: panel && panel.title, kicker: panel && panel.kicker };
+    const render = quickRender99(j.jobNo, field);
+    if (!render) { state.quick99 = null; openJob(j.jobNo); return; }
+    if (panel) {
+      popRender = render;
+      $('#drawerKicker').textContent = field === 'invoice' ? 'INVOICE' : 'UPDATE STOP';
+      $('#drawerBody').innerHTML = render();
+      $('#drawerBody').scrollTop = 0;
+      state.overlay = 'sheet';
+      focusFirst($('#drawerBody'));
+      return;
+    }
+    const keep = state.quick99;
+    openPop(el, field === 'invoice' ? 'INVOICE' : 'UPDATE STOP', render);   // openPop closes what was open (and the quick state)
+    state.quick99 = keep;
+  }
+  function listRender99(kind) {
+    return () => {
+      const m = lastMetrics; if (!m) return '';
+      const entry = listEntry99(kind, m); if (!entry) return '';
+      return '<h2 class="peek-job list-title" id="drawerTitle">' + esc(entry[0]) + '</h2>' + drawerList91(kind, Array.from(new Set(entry[1])), m);
+    };
+  }
+  function quickDone99() {   // after a save from a quick card: the panel goes back to its list (fresh), a card closes
+    const P = state.quick99; state.quick99 = null;
+    if (!P || !P.panel || $('#drawer').hidden) { closeOverlays(); return; }
+    popRender = listRender99(P.kind);
+    $('#drawerKicker').textContent = P.kicker || '';
+    $('#drawerBody').innerHTML = popRender();
+    state.overlay = 'drawer';
+  }
+
+  // ---------- Follow-ups: both ports' local times on the route ----------
+  // POL and POD each with their time under the name; the white one is the port that matters now (it sets the order).
+  function rrRoute99(j, t0) {
+    const plain = '<span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span>';
+    if (j.mode === 'misc' || !j.pol || !j.pod) return plain;
+    const lead = clockPort(j, t0);
+    const tm = (port) => {
+      const z = portZone(port), c = z && clockBits(z);
+      if (!c) return '<span class="rt99 is-none"></span>';
+      return '<span class="rt99 is-' + c.tone + (port === lead ? ' is-lead' : '') + '" data-clock="' + esc(port) + '" data-mini="1" title="' + esc(clockTitle(port, z, c)) + '"><i></i><b>' + c.time + '</b></span>';
+    };
+    const a = tm(j.pol), b = tm(j.pod);
+    if (/is-none/.test(a) && /is-none/.test(b)) return plain;
+    return '<span class="rr-route r99"><span class="rp-n">' + esc(j.pol) + '</span><span class="rp-ar">→</span><span class="rp-n">' + esc(j.pod) + '</span>' + a + '<span></span>' + b + '</span>';
+  }
+
+  // ---------- Follow-ups: the remark button and the remark card ----------
+  function rmkBtn99(j, f) {
+    if (!canEdit() || !j.active) return '';
+    const n = remarksToday(f, today0()).length;
+    return '<button type="button" class="rr-note' + (n ? ' has-note' : '') + '" data-rmk-open="' + esc(j.jobNo) + '" aria-label="' + esc('Remarks for ' + j.jobNo + (n ? ' — ' + n + ' today' : '')) + '" title="Remarks">' + icon('remark', 17) + (n ? '<b>' + n + '</b>' : '') + '</button>';
+  }
+  const rmkDay99 = (t, t0) => { const d = days(dayOf(t), t0); return d === 0 ? 'TODAY' : d === 1 ? 'YESTERDAY' : (DOW[dayOf(t).getDay()] + ' ' + fmt(dayOf(t))).toUpperCase(); };
+  function rmkAll99(j) {   // every remark known here, newest first (the last 35 days, and older ones once loaded)
+    const K = keyOf(j), seen = new Set(), out = [];
+    checksFor(j).concat(state.followHist[K] || []).forEach((c) => { const k = c[0] + '|' + c[1]; if (!c[2] || seen.has(k)) return; seen.add(k); out.push(c); });
+    return out.sort((a, b) => b[0] - a[0]);
+  }
+  const rmkCard99 = (no) => () => {
+    const j = findJob(no); if (!j) return '';
+    const t0 = today0(), f = followState(j, t0), R = state.rmk99 && state.rmk99.no === j.jobNo ? state.rmk99 : {};
+    const can = canEditJob(j) && j.active;
+    const all = rmkAll99(j), list = all.slice(0, R.more ? 30 : 8);
+    let day = '', html = '';
+    list.forEach((c) => {
+      const dl = rmkDay99(c[0], t0), mine = c[1] === state.user && canEditJob(j);
+      if (dl !== day) { day = dl; html += '<div class="rk-day">' + dl + '</div>'; }
+      const ed = R.edit === c[0] && mine;
+      html += '<div class="rk-item' + (ed ? ' is-edit' : '') + '"><div class="rk-top"><span class="rk-when"><b>' + hm(c[0]) + '</b> · ' + esc(c[1] === state.user ? 'You' : nice(c[1])) + '</span>' +
+        (mine && !ed ? '<button type="button" class="rk-edit" data-rmk-edit="' + c[0] + '">' + icon('edit', 13) + 'Edit</button>' : '') + '</div>' +
+        (ed ? '<form class="rk-form" data-rmk-save="' + c[0] + '" data-no="' + esc(j.jobNo) + '"><textarea id="rmkEdit99" maxlength="200" rows="3" aria-label="Edit the remark">' + esc(c[2]) + '</textarea>' +
+          '<div class="rk-acts"><button type="button" class="btn-ghost" data-rmk-cancel>Cancel</button><button type="submit" class="btn-brutal" data-primary>SAVE</button></div>' +
+          '<div class="pop-hint">Clear the text and save to remove this remark.</div></form>' : '<p class="rk-text">' + esc(c[2]) + '</p>') + '</div>';
+    });
+    const add = !can ? '' : R.add ? '<form class="pop-form rk-addf" data-remark="' + esc(j.jobNo) + '"><label class="pop-label" for="remarkInput">' + (f.mineToday ? 'Add a remark' : 'Remark (marks the job checked today)') + '</label><input type="text" id="remarkInput" maxlength="200" value="" placeholder="Type a remark" autocomplete="off">' +
+        '<button type="submit" class="btn-brutal pop-main" data-primary>' + (f.mineToday ? 'ADD REMARK' : 'CHECK WITH REMARK') + '</button></form>'
+      : '<button type="button" class="btn-ghost pop-wide rk-add" data-rmk-add="' + esc(j.jobNo) + '">' + icon('remark', 16) + 'Add remark</button>';
+    const mineToday = remarksToday(f, t0).some((c) => c[1] === state.user);
+    return '<div class="pop-title">' + (f.mineToday ? 'Checked today ' + hm(f.mineToday[0]) : 'Remarks') + '</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p>' +
+      (html ? '<div class="rk-list">' + html + '</div>' : '<p class="pop-text rk-none">No remarks yet.</p>') +
+      (all.length > list.length ? '<button type="button" class="link-btn quiet rk-more" data-rmk-more>Show older remarks</button>' : '') + add +
+      (can && f.mineToday ? '<button type="button" class="link-btn quiet rk-undo" data-undo-check="' + esc(j.jobNo) + '">' + (mineToday ? 'Undo today’s check and your remarks' : 'Undo today’s check') + '</button>' : '');
+  };
+  const undoCard99 = (no) => () => {   // tapping a checked circle: the check, and Undo (remarks have their own button)
+    const j = findJob(no); if (!j) return '';
+    const f = followState(j, today0()), mine = f.mineToday;
+    if (!mine) return '<p class="pop-text">Not checked today.</p>';
+    const rt = remarksToday(f, today0()).some((c) => c[1] === state.user);
+    return '<div class="pop-title">Checked today ' + hm(mine[0]) + '</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p>' +
+      '<button type="button" class="btn-ghost pop-wide" data-undo-check="' + esc(j.jobNo) + '">' + (rt ? 'Undo today’s check and your remarks' : 'Undo today’s check') + '</button>' +
+      '<button type="button" class="btn-ghost pop-wide rk-add" data-rmk-open="' + esc(j.jobNo) + '">' + icon('remark', 16) + 'Remarks</button>';
+  };
+  function rmkOpen99(anchor, no, how) {
+    const j = findJob(no); if (!j) return;
+    const st = { no: j.jobNo, edit: null, add: !!how.add, more: false, peek: !!(how.peek && usePop()) };
+    if (st.peek) {   // a look on hover: no focus taken, closes when the mouse leaves
+      closeOverlays(true);
+      state.rmk99 = st; st.anchor = anchor;
+      popRender = rmkCard99(j.jobNo);
+      const pop = $('#pop');
+      pop.innerHTML = '<div class="pop-head"><div class="kicker">FOLLOW-UP REMARKS</div><button type="button" class="icon-btn" data-act="pop-close" aria-label="Close">' + icon('close', 14) + '</button></div><div class="pop-body">' + popRender() + '</div>';
+      pop.hidden = false; pop.classList.add('is-peek99');
+      popAnchor = anchor; popKey = null;
+      placePop();
+      state.overlay = 'pop';
+      return;
+    }
+    openPop(anchor, 'FOLLOW-UP REMARKS', rmkCard99(j.jobNo));   // closes what was open (and the card's state) first
+    state.rmk99 = st;
+    refreshOverlay();
+    if (st.add) setTimeout(() => { const i = $('#remarkInput'); if (i) i.focus(); }, 40);
+  }
+  function rmkPin99() { if (state.rmk99 && state.rmk99.peek) { state.rmk99.peek = false; $('#pop').classList.remove('is-peek99'); } }
+  function rmkRedraw99(focus) { refreshOverlay(); if (focus) setTimeout(() => { const i = document.getElementById(focus); if (i) { i.focus(); if (i.value !== undefined && i.setSelectionRange) i.setSelectionRange(i.value.length, i.value.length); } }, 30); }
+
+  // edit (or clear) one of your own remarks — any day
+  async function rmkSave99(no, t, text) {
+    const j = findJob(no); if (!j || !canEdit()) return;
+    const K = keyOf(j); t = +t; text = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const lists = [state.follow.checks[K], state.followHist[K]].filter(Array.isArray);
+    const before = lists.map((L) => L.map((c) => c.slice()));
+    const hit = lists.map((L) => L.find((c) => c[0] === t && c[1] === state.user)).find(Boolean);
+    if (!hit) { toast('That remark is not there any more. Refresh and try again.', { error: true }); return; }
+    if ((hit[2] || '') === text) { state.rmk99.edit = null; rmkRedraw99(); return; }
+    const sameDay = (c) => c !== hit && c[1] === state.user && +dayOf(c[0]) === +dayOf(t);
+    const others = lists.some((L) => L.some(sameDay));
+    lists.forEach((L) => { const i = L.findIndex((c) => c[0] === t && c[1] === state.user); if (i < 0) return; if (!text && others) L.splice(i, 1); else L[i][2] = text; });
+    if (state.rmk99) state.rmk99.edit = null;
+    rerender(); refreshOverlay(); updateNav();
+    setSaving(1);
+    try {
+      const res = await api.call('ethixFollowRemark', [j.jobNo, t, text]);
+      if (!res || !res.ok) throw new Error((res && res.error) || 'Not saved.');
+      toast(text ? 'Remark updated' : 'Remark removed');
+    } catch (e) {
+      lists.forEach((L, i) => { L.length = 0; before[i].forEach((c) => L.push(c)); });
+      rerender(); refreshOverlay();
+      if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'Editing remarks needs the v2.9.9 Code.gs update.' : e.message, { error: true });
+    } finally { setSaving(-1); }
+  }
+
+  // ---------- Follow-ups: the order — overdue / today first, then cutoff tomorrow, then the rest; inside each, office hours ----------
+  function dueTier99(j) { const r = j.next ? j.next.rank : 9; return r === 0 ? 0 : r === 1 ? 1 : 2; }
+
+  // ---------- Follow-ups on a laptop: the keyboard ----------
+  // ↑ ↓ (or J K) move · Space checks (and moves on) · R opens the remark card · Enter opens the job · Esc lets go
+  const kbdHint99 = () => '<span class="rp-kbd"><kbd>↑</kbd><kbd>↓</kbd> move · <kbd>Space</kbd> check · <kbd>R</kbd> remark · <kbd>Enter</kbd> open</span>';
+  function kbRows99() { return $$('#view .round-list .rr').filter((li) => li.offsetParent !== null); }
+  function kbMark99(scroll) {
+    $$('#view .rr.is-kb').forEach((x) => x.classList.remove('is-kb'));
+    if (!state.kb99) return null;
+    const li = kbRows99().find((x) => { const b = x.querySelector('.rr-main[data-job]'); return b && b.dataset.job.toUpperCase() === state.kb99; });
+    if (!li) return null;
+    li.classList.add('is-kb');
+    if (scroll) li.scrollIntoView({ block: 'nearest' });
+    return li;
+  }
+  function kbMove99(step) {
+    const rows = kbRows99(); if (!rows.length) return;
+    const keys = rows.map((li) => li.querySelector('.rr-main[data-job]').dataset.job.toUpperCase());
+    let i = state.kb99 ? keys.indexOf(state.kb99) : -1;
+    const from = !state.kb99 && state.kbFrom99 ? keys.indexOf(state.kbFrom99) : -1;   // back from a job: carry on from it
+    state.kbFrom99 = null;
+    i = from > -1 ? from : i < 0 ? (step > 0 ? 0 : rows.length - 1) : Math.max(0, Math.min(rows.length - 1, i + step));
+    state.kb99 = keys[i];
+    kbMark99(true);
+  }
+  function kbKey99(e) {
+    if (!state.route || state.route.name !== 'round' || !usePop() || e.ctrlKey || e.metaKey || e.altKey) return;
+    const tag = (document.activeElement && document.activeElement.tagName) || '';
+    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
+    if (state.overlay && !(state.rmk99 && state.rmk99.peek)) { return; }
+    const k = e.key;
+    if (k === 'ArrowDown' || k === 'j' || k === 'J') { e.preventDefault(); closeOverlays(true); kbMove99(1); return; }
+    if (k === 'ArrowUp' || k === 'k' || k === 'K') { e.preventDefault(); closeOverlays(true); kbMove99(-1); return; }
+    if (!state.kb99) return;
+    const li = kbMark99(false); if (!li) return;
+    const no = li.querySelector('.rr-main[data-job]').dataset.job;
+    if (k === ' ' || k === 'Spacebar') {
+      e.preventDefault();
+      const j = findJob(no); if (!j) return;
+      const f = followState(j, today0());
+      if (!f.mineToday && canEdit()) followCheck(j.jobNo);
+      kbMove99(1);
+      return;
+    }
+    if (k === 'r' || k === 'R') { e.preventDefault(); const a = li.querySelector('[data-rmk-open]') || li; rmkOpen99(a, no, { add: true }); return; }
+    if (k === 'Enter') { e.preventDefault(); openJob(no); return; }
+    if (k === 'Escape') { state.kb99 = null; kbMark99(false); }
+  }
+
+  // ---------- Back to a list keeps your place ----------
+  // Leaving Follow-ups, Jobs, Costing, Notifications or Home for a job: where you were is kept. Coming straight back:
+  // the same place, and the job you opened glows for a moment (Follow-ups keep their order — nothing regroups).
+  const LIST99 = ['round', 'jobs', 'costing', 'notif', 'home'];
+  function back99Save(prev, r, changed) {
+    const view = $('#view');
+    if (changed && prev && LIST99.includes(prev.name) && (r.name === 'job' || r.name === 'costjob'))
+      state.back99 = { name: prev.name, y: view.scrollTop, inner: $$('#view .tile-body, #view .jobs-scroll').map((e) => e.scrollTop), no: r.jobNo };
+    const b = state.back99;
+    const isBack = !!(changed && prev && (prev.name === 'job' || prev.name === 'costjob') && b && b.name === r.name);
+    if (changed && !isBack && !(r.name === 'job' || r.name === 'costjob')) state.back99 = null;
+    return isBack ? b : null;
+  }
+  function back99Restore(b, view) {
+    if (!b) return false;
+    state.back99 = null;
+    view.scrollTop = b.y;
+    $$('#view .tile-body, #view .jobs-scroll').forEach((e, i) => { if (b.inner[i] !== undefined) e.scrollTop = b.inner[i]; });
+    const K = String(b.no || '').toUpperCase();
+    const hit = $$('#view [data-job], #view [data-cost], #view [data-check], #view [data-q99]').find((x) => String(x.dataset.job || x.dataset.cost || x.dataset.check || x.dataset.q99 || '').toUpperCase() === K && x.offsetParent !== null);
+    if (hit) {
+      const box = hit.closest('.rr, .jr, .wt, .li, .cl-row, .nt, .dr-row, li') || hit;
+      const r = box.getBoundingClientRect(), vr = view.getBoundingClientRect();
+      if (r.top < vr.top || r.bottom > Math.min(vr.bottom, window.innerHeight)) box.scrollIntoView({ block: 'center' });
+      box.classList.remove('is-back99'); void box.offsetWidth; box.classList.add('is-back99');
+      setTimeout(() => box.classList.remove('is-back99'), 1800);
+      if (b.name === 'round') state.kbFrom99 = K;
+    }
+    return true;
+  }
+
+  // ------------------------------------------------------------------ wiring
+  function initV299() {
+    // the capsule holds while the mouse is on it
+    const pill = $('#savePill');
+    if (pill) {
+      pill.addEventListener('mouseenter', () => { state.pillHover99 = true; if (pill.classList.contains('is-done')) clearTimeout(state.pillT98); });
+      pill.addEventListener('mouseleave', () => { state.pillHover99 = false; if (pill.classList.contains('is-done') && !pill.hidden) pillTimer99(1600); });
+    }
+    // tap a task (TODAY'S WATCH, the SI / ED panel's chips) → its choice card; before the row's own "open the job"
+    document.addEventListener('click', (e) => {
+      const q = e.target.closest('[data-q99]');
+      if (q) { e.preventDefault(); e.stopPropagation(); quickOpen99(q); return; }
+      const qb = e.target.closest('[data-q99-back]');
+      if (qb) { e.preventDefault(); e.stopPropagation(); const P = state.quick99; state.quick99 = null; if (P && P.panel) { popRender = listRender99(P.kind); $('#drawerKicker').textContent = P.kicker || ''; $('#drawerBody').innerHTML = popRender(); state.overlay = 'drawer'; } return; }
+      const qo = e.target.closest('[data-q99-open]');
+      if (qo) { e.preventDefault(); e.stopPropagation(); openJob(qo.dataset.q99Open); return; }
+    }, true);
+    document.addEventListener('keydown', (e) => {
+      const q = e.target.closest && e.target.closest('[data-q99]');
+      if (q && q.tagName !== 'BUTTON' && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); e.stopPropagation(); quickOpen99(q); }
+    }, true);
+    // Follow-ups: the remark button, the remark on the row (tap it, or hover on a laptop), the card's own buttons
+    const view = $('#view');
+    view.addEventListener('click', (e) => {
+      const ro = e.target.closest('[data-rmk-open]');
+      if (ro && canEdit()) { e.stopPropagation(); rmkOpen99(ro, ro.dataset.rmkOpen, { add: false }); return; }
+      const cell = e.target.closest('[data-rmk-cell]');
+      if (cell && e.target.closest('.rr-remark')) {
+        e.stopPropagation();
+        if (state.overlay === 'pop' && state.rmk99 && state.rmk99.peek && state.rmk99.no === findJob(cell.dataset.rmkCell).jobNo) { rmkPin99(); return; }
+        rmkOpen99(cell, cell.dataset.rmkCell, { add: false });
+      }
+    });
+    view.addEventListener('mouseover', (e) => {
+      if (!usePop() || !state.route || state.route.name !== 'round') return;
+      const cell = e.target.closest('[data-rmk-cell]');
+      clearTimeout(state.rmkLeaveT99);
+      if (!cell || !cell.querySelector('.rr-remark')) return;
+      if (state.overlay && !(state.rmk99 && state.rmk99.peek)) return;
+      if (state.rmk99 && state.rmk99.peek && state.rmk99.anchor === cell && state.overlay === 'pop') return;
+      clearTimeout(state.rmkHoverT99);
+      state.rmkHoverT99 = setTimeout(() => { if (cell.isConnected && cell.matches(':hover')) rmkOpen99(cell, cell.dataset.rmkCell, { peek: true }); }, 280);
+    });
+    const leave = () => {
+      clearTimeout(state.rmkHoverT99);
+      if (!(state.rmk99 && state.rmk99.peek && state.overlay === 'pop')) return;
+      clearTimeout(state.rmkLeaveT99);
+      state.rmkLeaveT99 = setTimeout(() => {
+        const pop = $('#pop'), a = state.rmk99 && state.rmk99.anchor;
+        if (!(state.rmk99 && state.rmk99.peek) || pop.matches(':hover') || (a && a.isConnected && a.matches(':hover'))) return;
+        pop.classList.remove('is-peek99'); closeOverlays(true);
+      }, 240);
+    };
+    view.addEventListener('mouseout', (e) => { if (e.target.closest('[data-rmk-cell]')) leave(); });
+    $('#pop').addEventListener('mouseleave', leave);
+    $('#pop').addEventListener('mouseenter', () => clearTimeout(state.rmkLeaveT99));
+    const onCard = (e) => {
+      const ro = e.target.closest('[data-rmk-open]'); if (ro && canEdit()) { const a = findAnchor() || ro; rmkOpen99(a, ro.dataset.rmkOpen, { add: false }); return; }
+      if (!state.rmk99) return;
+      const no = state.rmk99.no;
+      if (e.target.closest('#pop, #drawerBody') && e.target.closest('button, input, textarea, form')) rmkPin99();
+      const ed = e.target.closest('[data-rmk-edit]'); if (ed) { state.rmk99.edit = +ed.dataset.rmkEdit; state.rmk99.add = false; rmkRedraw99('rmkEdit99'); return; }
+      if (e.target.closest('[data-rmk-cancel]')) { state.rmk99.edit = null; rmkRedraw99(); return; }
+      const ad = e.target.closest('[data-rmk-add]'); if (ad) { state.rmk99.add = true; state.rmk99.edit = null; rmkRedraw99('remarkInput'); return; }
+      if (e.target.closest('[data-rmk-more]')) { state.rmk99.more = true; const j = findJob(no); if (j) loadFollowHistory(j); rmkRedraw99(); }
+    };
+    $('#pop').addEventListener('click', onCard);
+    $('#drawerBody').addEventListener('click', (e) => { if (state.overlay === 'sheet') onCard(e); });
+    const onSave = (e) => {
+      const f = e.target.closest('[data-rmk-save]'); if (!f) return;
+      e.preventDefault(); e.stopPropagation();
+      rmkSave99(f.dataset.no, f.dataset.rmkSave, ($('#rmkEdit99', f) || {}).value || '');
+    };
+    $('#pop').addEventListener('submit', onSave, true);
+    $('#drawerBody').addEventListener('submit', onSave, true);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && e.target && e.target.id === 'rmkEdit99') { e.preventDefault(); const f = e.target.closest('form'); if (f) f.requestSubmit ? f.requestSubmit() : f.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true })); }
+    });
+    // the keyboard on Follow-ups (laptop)
+    document.addEventListener('keydown', kbKey99);
+  }
+  // the side panels' lists (Home counters) — one place for openList and the way back from a choice card
+  function listEntry99(kind, m) {
+    const map = {
+      active: ['ACTIVE JOBS', m.active], costing: ['COSTING DUE', m.costing], sied: ['SI / ED DUE', m.sied],
+      free: ['FREE TIME ENDING ≤ 2 DAYS', m.freeJobs], atsea: ['AT SEA NOW', m.atSea], arriving: ['ARRIVING THIS WEEK', m.arriving],
+      departing: ['DEPARTING THIS WEEK', m.departing], hold: ['ON HOLD', m.hold], watch: ['TODAY’S WATCH', m.watch.map((w) => w.j)], week: weekPanel92(m),
+      behind: ['NOT FOLLOWED UP YET', isSales() ? behindList() : []]
+    };
+    return map[kind] || null;
+  }
+  // a TODAY'S WATCH task: its choice card when there is one to make (and you can), else the job
+  function wtAttr99(w) { return w.field && canEditJob(w.j) ? 'data-q99="' + esc(w.j.jobNo) + '" data-q99-f="' + w.field + '"' : 'data-job="' + esc(w.j.jobNo) + '"'; }
+
+
   // -------------------------------------------------------------------- start
   function start() {
     if (savedSession()) document.body.classList.add('is-resuming');
@@ -6264,6 +6717,7 @@
     initV25();
     initV26();
     initV298();
+    initV299();
     if (savedSession()) resumeSession();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
