@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders — v2.9.7)
+   enquiries, follow-ups, delays, close & archive, costing, reminders, cover — v2.9.8)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -103,13 +103,14 @@
     ['customer', (h) => h === 'CUSTOMER', 7], ['vendor', (h) => h.includes('VENDOR'), 8], ['pod', (h) => h === 'POD', 9],
     ['cs', (h) => h === 'CS', 10], ['opened', (h) => h.startsWith('JOB OPEN'), 11], ['etd', (h) => h.startsWith('ETD'), 12],
     ['siCut', (h) => h.startsWith('SI CUTOFF'), 13], ['remarks', (h) => h.startsWith('REMARK'), 14], ['loadlist', (h) => h.startsWith('LOADLIST'), 15],
-    ['sido', (h) => h.startsWith('SI /') || h.startsWith('SI/'), 16], ['ed', (h) => h === 'ED STATUS', 17], ['bl', (h) => h.startsWith('BL'), 18],
+    ['sido', (h) => h.startsWith('SI /') || h.startsWith('SI/'), 16], ['ed', (h) => h === 'ED STATUS', 17], ['bl', (h) => h.startsWith('BL') && !/\bNO\b|NUMBER/.test(h), 18],
     ['delivery', (h) => h.startsWith('DELIVERY'), 19], ['docs', (h) => h.startsWith('ORIGINAL DOC'), 20], ['costing', (h) => h.includes('COSTING'), 21],
     ['sales', (h) => h.startsWith('SALES'), 22], ['eta', (h) => h.startsWith('ETA'), 23], ['pol', (h) => h === 'POL', 24],
     ['edCut', (h) => h.startsWith('ED CUTOFF'), 25], ['dgCut', (h) => h.startsWith('DG CUTOFF'), 26], ['lineFree', (h) => h.startsWith('LINE FREE'), 27],
     ['portFree', (h) => h.startsWith('PORT FREE'), 28], ['against', (h) => h.startsWith('AGAINST'), 29], ['freight', (h) => h.startsWith('LINE FREIGHT'), 30],
     ['dgpc', (h) => h.startsWith('DGPC'), -1],   // v2.9.2: added at the end of the tracker on first use
-    ['switchBl', (h) => h.startsWith('SWITCH BL'), -1]   // v2.9.3: the same
+    ['switchBl', (h) => h.startsWith('SWITCH BL'), -1],   // v2.9.3: the same
+    ['blNo', (h) => /^BL \/ AWB NO\b/.test(h), -1], ['invoice', (h) => h.startsWith('INVOICE'), -1]   // v2.9.8: the same
   ];
   const EXPORT = ['SFEF', 'SFEL', 'AFE'], IMPORT = ['SFIF', 'SFIL', 'AFI', 'CND'], CROSS = ['SFC', 'AFC', 'CRR'], AIR = ['AFE', 'AFI', 'AFC'];
   const TYPE_NAMES = { SFEF: 'Sea export · FCL', SFEL: 'Sea export · LCL', AFE: 'Air export', SFIF: 'Sea import · FCL', SFIL: 'Sea import · LCL', AFI: 'Air import', CND: 'Clearance & delivery', SFC: 'Sea cross-trade', AFC: 'Air cross-trade', CRR: 'Courier', MIS: 'Miscellaneous' };
@@ -141,7 +142,7 @@
       cs: g('cs').toUpperCase(), sales: g('sales').toUpperCase(), dg: g('dg').toUpperCase(),
       c20: num(g('c20')), c40: num(g('c40')), remarks: g('remarks'), freight: g('freight'), against: g('against'),
       loadlist: g('loadlist').toUpperCase(), sido: g('sido').toUpperCase(), ed: g('ed').toUpperCase(), bl: g('bl').toUpperCase(), dgpc: g('dgpc').toUpperCase(), switchBl: g('switchBl').toUpperCase(),
-      docs: g('docs').toUpperCase(), costing: g('costing').toUpperCase(),
+      docs: g('docs').toUpperCase(), costing: g('costing').toUpperCase(), blNo: g('blNo').toUpperCase(), invoice: g('invoice').toUpperCase(),
       opened: parseDate(g('opened')), etd: parseDate(g('etd')), eta: parseDate(g('eta')),
       siCut: parseDate(g('siCut')), edCut: parseDate(g('edCut')), dgCut: parseDate(g('dgCut')), delivery: parseDate(g('delivery')),
       lineFreeRaw: g('lineFree'), portFreeRaw: g('portFree'), sl: g('sl'), raw: {}
@@ -176,7 +177,7 @@
     loadlist: ['NO', 'YES', NA],
     sido: ['PENDING', 'SUBMITTED', 'APPROVED', NA],
     ed: ['PENDING', 'PASSED/PAID', NA],
-    bl: ['BL PENDING', 'CONFIRMATION PENDING', 'CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED', NA],
+    bl: ['BL PENDING', 'CONFIRMATION PENDING', 'CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED', 'OBL SHARED TO CUSTOMER', 'SBL SHARED TO CUSTOMER', NA],   // v2.9.8: shared to customer
     docs: [NA, 'PENDING', 'RECEIVED'],
     dgpc: ['PENDING', 'SUBMITTED', 'APPROVED', NA],
     switchBl: ['NO', 'REQUESTED', 'CONFIRMATION PENDING', 'CONFIRMED', 'ISSUED'],
@@ -184,8 +185,8 @@
     dg: ['DG', 'NON DG'],
     type: ['SFEF', 'SFEL', 'AFE', 'SFIF', 'SFIL', 'AFI', 'CND', 'SFC', 'AFC', 'CRR', 'MIS']
   };
-  const BL_OK = ['CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED'];
-  const BL_ISSUED = ['OBL ISSUED', 'SBL ISSUED'];
+  const BL_OK = ['CONFIRMED OBL', 'CONFIRMED SBL', 'OBL ISSUED', 'SBL ISSUED', 'OBL SHARED TO CUSTOMER', 'SBL SHARED TO CUSTOMER'];
+  const BL_ISSUED = ['OBL ISSUED', 'SBL ISSUED', 'OBL SHARED TO CUSTOMER', 'SBL SHARED TO CUSTOMER'];   // v2.9.8: shared = issued and sent
   const STOP_DEFS = {
     opened:     { name: 'Job opened', kind: 'info' },
     linked:     { name: 'Linked to job no.', kind: 'link', field: 'against', next: 'Link to a job' },
@@ -750,12 +751,13 @@
 
   // ---------------------------------------------------------------- router
   function currentRoute() {
+    if (dayLink98(decodeURIComponent(location.hash || ''))) return currentRoute();   // v2.9.8: #/day/yyyy-mm-dd → Home on that day
     const h = decodeURIComponent(location.hash || '');
     const m = h.match(/^#\/job\/(.+)$/);
     const mc = h.match(/^#\/costing\/(.+)$/);
-    let r = m ? { name: 'job', jobNo: m[1].trim() } : mc ? { name: 'costjob', jobNo: mc[1].trim() } : h === '#/costing' ? { name: 'costing' } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : h === '#/notifications' ? { name: 'notif' } : { name: 'home' };
+    let r = m ? { name: 'job', jobNo: m[1].trim() } : mc ? { name: 'costjob', jobNo: mc[1].trim() } : h === '#/costing' ? { name: 'costing' } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : h === '#/notifications' ? { name: 'notif' } : h === '#/cover' ? { name: 'cover' } : { name: 'home' };
     if (isAdmin()) { if (r.name !== 'activity') r = { name: 'admin' }; }      // admin works with people, not jobs
-    else if (r.name === 'admin' || r.name === 'activity' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote()) || ((r.name === 'costing' || r.name === 'costjob') && !canNote())) r = { name: 'home' };
+    else if (r.name === 'admin' || r.name === 'activity' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote()) || ((r.name === 'costing' || r.name === 'costjob') && !canNote()) || (r.name === 'cover' && !canEdit())) r = { name: 'home' };
     const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity|round|follow-ups|enquiries|costing)$/.test(h) ? '#/home' : r.name === 'round' && h === '#/round' ? '#/follow-ups' : null;
     if (want && h !== want) history.replaceState(null, '', want);
     return r;
@@ -780,10 +782,12 @@
     else if (r.name === 'costing') renderCostList(changed || first);
     else if (r.name === 'costjob') renderCostJob(r.jobNo, changed || first);
     else if (r.name === 'notif') renderNotifPage(changed || first);
-    else if (r.name === 'job') { if (changed || first) seenOpen9(r.jobNo); renderVoyage(r.jobNo, changed || first); fitNames(); remarksFit93(); }
+    else if (r.name === 'cover') renderCover98(changed || first);
+    else if (r.name === 'job') { if (changed || first) { seenOpen9(r.jobNo); costAheadSoon98(r.jobNo); } renderVoyage(r.jobNo, changed || first); fitNames(); remarksFit93(); }
     else { renderHome(changed || first); fitNames(); fitPorts91(); moreBars93(); }
     if (changed) view.scrollTop = 0;
     updateNav();
+    covReq98();   // v2.9.8: a cover request waiting for you (Home)
   }
   // Re-draw the current page after data changed, without losing your place.
   function rerender() {
@@ -943,7 +947,7 @@
     if (u.status === 'ready' && !canEdit()) u.status = 'active';
     const q = u.q.trim().toUpperCase();
     let list = (u.status === 'unassigned' ? unassigned8() : scoped().filter((j) => inStatus(j, u.status))).filter((j) => inCat(j, u.cat));
-    if (q) list = list.filter((j) => (j.jobNo + ' ' + j.customer + ' ' + j.vendor + ' ' + j.pol + ' ' + j.pod + ' ' + j.cs + ' ' + j.sales + ' ' + j.type + ' ' + j.remarks + ' ' + j.against).toUpperCase().includes(q));
+    if (q) list = list.filter((j) => (j.jobNo + ' ' + j.customer + ' ' + j.vendor + ' ' + j.pol + ' ' + j.pod + ' ' + j.cs + ' ' + j.sales + ' ' + j.type + ' ' + j.remarks + ' ' + j.against + ' ' + j.blNo).toUpperCase().includes(q));
     const t = (d) => (d ? d.getTime() : 9e15);
     const sl = (j) => num(j.sl);
     if (u.sort === 'urgent') list.sort((a, b) => a.next.rank - b.next.rank || t(a.etd) - t(b.etd) || sl(b) - sl(a));
@@ -955,14 +959,14 @@
 
   function jobRow(j) {
     return '<li><button type="button" class="job-row' + (isChanged(j) ? ' is-changed' : '') + '" data-job="' + esc(j.jobNo) + '">' +
-      '<span class="jr-job">' + changedDot(j) + copyNo93(j.jobNo) + '</span>' +
+      '<span class="jr-job">' + changedDot(j) + copyNo93(j.jobNo) + ownTag98(j) + '</span>' +
       '<span class="jr-type"><span class="badge">' + esc(j.type || '—') + '</span><span class="jr-typename">' + esc(j.typeName) + '</span></span>' +
       '<span class="jr-cust"><span class="jr-name">' + esc(j.customer || '—') + '</span><span class="jr-route">' + esc(j.mode === 'misc' ? (j.against ? 'AGAINST ' + j.against : 'COSTING ONLY') : j.route) + '</span></span>' +
       '<span class="jr-track">' + miniTrack(j, 26) + '</span>' +
       '<span class="jr-next">' + toneChip(rowNext(j)) + cutChips(j) + '</span>' +
       '<span class="jr-etd"><span class="jr-k">ETD</span>' + esc(j.etd ? fmt(j.etd) : '—') + '</span>' +
       '<span class="jr-eta"><span class="jr-k">ETA</span>' + esc(j.eta ? fmt(j.eta) : '—') + delayTag(j) + '</span>' +
-      '<span class="jr-people"><span class="jr-cs">' + esc(j.cs || '—') + '</span><span class="jr-sales">' + esc(j.sales || '') + '</span></span>' +
+      '<span class="jr-people"><span class="jr-cs' + (covered98(j) ? ' is-cover' : '') + '">' + esc(j.cs || '—') + '</span><span class="jr-sales">' + esc(j.sales || '') + '</span></span>' +
       '<span class="jr-dates">' + esc(j.mode === 'misc' ? (j.cs || '') : (j.etd ? fmt(j.etd) : '—') + ' → ' + (j.eta ? fmt(j.eta) : '—')) + '</span>' +
       '</button></li>';
   }
@@ -978,7 +982,7 @@
     $('#view').innerHTML =
       '<div class="wrap jobs-page">' +
       '<header class="page-head jobs-head' + anim + '">' +
-        '<div class="head-main"><div class="meta-line"><span>' + active.length + ' ACTIVE · ' + active.filter((j) => j.hold).length + ' ON HOLD · ' + active.filter((j) => j.atSea).length + ' AT SEA' + (unassigned8().length ? ' · ' + unassigned8().length + ' UNASSIGNED' : '') + '</span></div><h1 class="greeting">' + (isSales() || canEdit() ? 'My jobs' : 'Jobs') + '</h1></div>' +
+        '<div class="head-main"><div class="meta-line"><span>' + active.length + ' ACTIVE · ' + active.filter((j) => j.hold).length + ' ON HOLD · ' + active.filter((j) => j.atSea).length + ' AT SEA' + (unassigned8().length ? ' · ' + unassigned8().length + ' UNASSIGNED' : '') + '</span>' + covChips98() + '</div><h1 class="greeting">' + (isSales() || canEdit() ? 'My jobs' : 'Jobs') + '</h1></div>' +
         '<div class="head-actions">' +
           '<label class="search">' + icon('search') + '<input id="jobsSearch" type="search" placeholder="Job no, customer, port…" aria-label="Search jobs" autocomplete="off" value="' + esc(keepQ) + '"></label>' +
           '<button type="button" class="btn-ghost jobs-word" data-act="jobs-word" title="Your active jobs by sales person, as a Word file">' + icon('download', 16) + '<span class="btn-label">Word</span></button>' +
@@ -1199,7 +1203,7 @@
     if (m) return 'booked enquiry ' + m[1] + ' as this job';
     if (a === 'UPDATED JOB DETAILS') return 'updated the job details';
     m = a.match(/^UPDATED (.+)$/);
-    if (m) return 'updated ' + m[1].toLowerCase();
+    if (m) return 'updated ' + m[1].toLowerCase().replace(/\b(si|do|ed|bl|awb|etd|eta|pol|pod|dgpc|dg|cs)\b/g, (x) => x.toUpperCase());   // v2.9.8
     return a.toLowerCase();
   }
   // Newest on top, always. The server sends an exact time (t) and order (seq) for
@@ -1239,7 +1243,7 @@
       ['JOB', [['Job no.', j.jobNo], ['Type', j.type + ' · ' + j.typeName], ['Status', j.status || '—'], ['SL.', j.sl || '—'], ['Customer', j.customer], ['Line / vendor', j.vendor], ['Customer Service', j.cs], ['Sales', j.sales], ['Job opened', fmt(j.opened, true)]]],
       ['ROUTE & DATES', [['POL', j.pol], ['POD', j.pod], ['ETD', fmt(j.etd, true)], ['ETA', fmt(j.eta, true)], ['SI cutoff', fmt(j.siCut, true)], ['ED cutoff', fmt(j.edCut, true)], ['DG cutoff', fmt(j.dgCut, true)], ['Delivery date', j.raw.delivery || '—'], ['Line free time', j.lineFreeRaw || '—'], ['Port free time', j.portFreeRaw || '—']]],
       ['CARGO', [['20′', j.c20 || '—'], ['40′', j.c40 || '—'], ['DG / non-DG', j.dg || '—'], ['Line freight USD', j.freight || '—'], ['Against job no.', j.against || '—']]],
-      ['DOCUMENTS', [[j.cat === 'IMPORT' ? 'DO status' : 'SI status', j.sido || '—'], [j.cat === 'IMPORT' ? 'Customs (ED)' : 'ED status', j.ed || '—'], [j.mode === 'air' ? 'AWB status' : 'BL status', j.bl || '—'], [j.cat === 'IMPORT' ? 'Discharge list' : 'Loadlist', j.loadlist || '—'], ['Original docs', j.docs || '—'], ['Costing', j.costing || '—']]]
+      ['DOCUMENTS', [[j.cat === 'IMPORT' ? 'DO status' : 'SI status', j.sido || '—'], [j.cat === 'IMPORT' ? 'Customs (ED)' : 'ED status', j.ed || '—'], [j.mode === 'air' ? 'AWB status' : 'BL status', j.bl || '—'], [blWord98(j) + ' numbers', blList98(j.blNo).join(', ') || '—'], [j.cat === 'IMPORT' ? 'Discharge list' : 'Loadlist', j.loadlist || '—'], ['Original docs', j.docs || '—'], ['Costing', j.costing || '—'], ['Invoice', invOf98(j).na ? '—' : invOf98(j).label]]]
     ];
     return '<div class="details-grid">' + groups.map((g) => '<section class="tile"><div class="tile-head"><h2 class="tile-title">' + g[0] + '</h2></div>' +
       g[1].map((r) => '<div class="kv"><span class="kv-k">' + esc(r[0]) + '</span><span class="kv-v">' + esc(r[1] || '—') + '</span></div>').join('') + '</section>').join('') +
@@ -1273,8 +1277,8 @@
       '<div class="crumbs' + anim + '"><button type="button" class="back-btn" data-act="back" aria-label="Back">' + icon('back', 18) + '</button><button type="button" class="link-btn" data-href="#/jobs">JOBS</button><span>/ ' + esc(j.jobNo) + '</span>' + changedChip9(j) +
         (canEditJob(j) ? '<button type="button" class="status-pill tone-' + tone + '" data-act="status" aria-label="Job status: ' + sw + '. Change">' + esc(sw) + icon('chevron', 14) + '</button>' : '<span class="status-pill tone-' + tone + '">' + esc(sw) + '</span>') + '</div>' +
       '<header class="vhead' + anim + '" style="--d:30ms">' +
-        '<div class="vh-titles"><div class="vh-idrow"><h1 class="vh-job">' + copyNo93(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + delayChip(j) + readyChip(j) + '</div>' +
-        '<div class="vh-cust">' + esc(j.customer || '—') + '</div>' + (j.closed && j.closed.reason ? '<div class="vh-why">' + esc(j.closed.reason) + '</div>' : '') + remarksLine93(j) + '</div>' +
+        '<div class="vh-titles"><div class="vh-idrow"><h1 class="vh-job">' + copyNo93(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + delayChip(j) + readyChip(j) + ownChip98(j) + '</div>' +
+        '<div class="vh-cust">' + esc(j.customer || '—') + '</div>' + (j.closed && j.closed.reason ? '<div class="vh-why">' + esc(j.closed.reason) + '</div>' : '') + remarksLine93(j) + blLine98(j) + '</div>' +
         (j.closed ? closedActions(j) : canEdit() ? '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="delay" title="Delay or prepone" aria-label="Delay or prepone">' + icon('clock', 16) + '<span class="bl-full">Delay / prepone</span><span class="bl-short">Delay</span></button>' + (DN_TYPES93.includes(j.type) ? '<button type="button" class="btn-ghost" data-act="dnote" title="Delivery note (Word)" aria-label="Delivery note">' + icon('truck', 16) + '<span class="bl-full">Delivery note</span><span class="bl-short">Delivery note</span></button>' : '') + '<button type="button" class="btn-ghost" data-act="duplicate" title="Duplicate job" aria-label="Duplicate job">' + icon('copy', 16) + '<span>Duplicate</span></button><button type="button" class="btn-ghost" data-act="edit" title="Edit details" aria-label="Edit details">' + icon('edit', 16) + '<span class="bl-full">Edit details</span><span class="bl-short">Edit</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>'
           : '<div class="vh-actions is-ro"><span class="ro-chip">' + icon('lock', 14) + '<span>UPDATED BY ' + esc(j.cs || 'CUSTOMER SERVICE') + '</span></span>' + (canNote() ? '<button type="button" class="btn-brutal btn-icon" data-act="focus-note">' + icon('note', 16) + '<span>ADD A NOTE</span></button>' : '') + '</div>') +
       '</header>' +
@@ -1302,8 +1306,9 @@
     return raw;
   }
   function setSaving(delta) {
+    const was = state.savingCount;
     state.savingCount = Math.max(0, state.savingCount + delta);
-    const pill = $('#savePill'); if (pill) pill.hidden = state.savingCount === 0;
+    savePill98(was);   // v2.9.8: the glass pill — "Saving…", then "Saved"
   }
   function clearPending(k, changes) {
     const p = state.pending.get(k); if (!p) return;
@@ -1317,7 +1322,7 @@
     if (!opts.datesOk) { const g8 = saveDateGate8(before, changes); if (g8) return g8.then((ok) => (ok === true ? saveJob(no, changes, Object.assign({}, opts, { datesOk: true })) : false)); }   // v2.8
     const prev = {};
     Object.keys(changes).forEach((f) => { prev[f] = asInput(f, before.raw[f]); });
-    { let n = state.header.length; ['dgpc', 'switchBl'].forEach((k) => { if (k in changes && !(state.ix[k] > -1)) state.ix[k] = n++; }); }   // v2.9.2 / v2.9.3: new columns land after the last one
+    { let n = state.header.length; ['dgpc', 'switchBl', 'blNo', 'invoice'].forEach((k) => { if (k in changes && !(state.ix[k] > -1)) state.ix[k] = n++; }); }   // v2.9.8: + BL numbers, invoice   // v2.9.2 / v2.9.3: new columns land after the last one
     state.pending.set(k, Object.assign({}, state.pending.get(k) || {}, changes));
     rebuildJob(k); rerender(); refreshOverlay();
     setSaving(1);
@@ -1325,12 +1330,15 @@
       const server = state.rowMap.get(k) || [];
       const base = {};
       Object.keys(changes).forEach((f) => { const c = state.ix[f]; base[f] = c > -1 && server[c] != null ? String(server[c]) : ''; });
-      return api.call('ethixUpdateJob', [before.jobNo, changes, base, '']).then((res) => {
+      const withStory = state.stories.has(k);   // v2.9.8: the notes and history come back with the save (one trip)
+      return api.call('ethixUpdateJob', [before.jobNo, changes, base, '', withStory]).then((res) => {
         if (res && res.ok) {
           if (Array.isArray(res.row)) state.rowMap.set(k, res.row);
           if (Array.isArray(res.header) && res.header.length) { state.header = res.header; state.ix = mapHeaders(res.header); clearPending(k, changes); rebuildJobs(); }   // v2.9.2
           clearPending(k, changes); rebuildJob(k); rerender(); refreshOverlay();
-          if (state.stories.has(k)) loadStory(no, true);
+          if (res.story) state.stories.set(k, { data: res.story, at: Date.now(), loading: false });
+          else if (state.stories.has(k)) loadStory(no, true);
+          if (res.story && state.route && state.route.name === 'job' && state.route.jobNo.toUpperCase() === k) rerender();
           if (opts.toast) toast(opts.toast, opts.undo === false ? {} : { action: { label: 'Undo', fn: () => saveJob(no, prev, { toast: 'Change undone', undo: false }) } });
           state.syncedAt = Date.now();
           return true;
@@ -1433,7 +1441,7 @@
       const d = s.def;
       const head = '<div class="pop-title">' + esc(s.name) + '</div><div class="pop-state is-' + s.state + '">' + stopDot(s) + '<span>' + esc(s.sub) + '</span></div>';
       if (s.kind === 'field') {
-        const choices = d.choices || OPTS[d.field];
+        const choices = d.field === 'bl' ? blChoices98(j, d.choices || OPTS.bl) : (d.choices || OPTS[d.field]);   // v2.9.8: shared after the final BL
         const cur = j[d.field] || '';
         const lbl = fieldLabel(j, d.field);
         const chips = (lbl.toLowerCase() === s.name.toLowerCase() ? '' : '<div class="pop-label">' + esc(lbl) + '</div>') + '<div class="choice-row">' + choices.map((v) => '<button type="button" class="choice' + (v === cur ? ' is-on' : '') + (d.done.includes(v) ? ' is-good' : '') + '" data-set="' + esc(d.field) + '" data-val="' + esc(v) + '" aria-pressed="' + (v === cur) + '">' + esc(v === NA ? 'Not needed' : v) + '</button>').join('') + '</div>';
@@ -1661,7 +1669,9 @@
       docs: { label: 'Original docs', kind: 'select', opts: OPTS.docs, blank: true },
       dgpc: { label: 'DGPC status', kind: 'select', opts: OPTS.dgpc, blank: true, dgOnly: true },
       switchBl: { label: 'Switch BL', kind: 'select', opts: OPTS.switchBl, blank: true },
-      costing: { label: 'Costing', kind: 'select', opts: OPTS.costing, blank: true }
+      costing: { label: 'Costing', kind: 'select', opts: OPTS.costing, blank: true },
+      blNo: { label: air ? 'AWB numbers' : crr ? 'Tracking numbers' : 'BL numbers', kind: 'blnos', word: air ? 'AWB' : crr ? 'Tracking' : 'BL' },   // v2.9.8
+      invoice: { label: 'Invoice status', kind: 'select', opts: INV98 }
     };
     return M[key];
   }
@@ -1680,6 +1690,8 @@
       const opts = m.kind === 'cs' ? csOptions(val) : m.opts.slice();
       if (val && !opts.includes(val)) opts.unshift(val);
       ctl = '<select id="' + id + '" name="' + key + '"' + req + '>' + (m.blank || m.kind === 'cs' ? '<option value=""' + (!val ? ' selected' : '') + '>—</option>' : '') + opts.map((o) => '<option value="' + esc(o) + '"' + (o === val ? ' selected' : '') + '>' + esc(o) + '</option>').join('') + '</select>';
+    } else if (m.kind === 'blnos') {
+      ctl = blCtl98(id, blList98(val), m.word);   // v2.9.8
     } else if (m.kind === 'area') {
       ctl = '<textarea id="' + id + '" name="' + key + '" rows="3" maxlength="500">' + esc(val) + '</textarea>';
     } else if (m.kind === 'date') {
@@ -1692,7 +1704,7 @@
     } else {
       ctl = '<input type="text" id="' + id + '" name="' + key + '" value="' + esc(val) + '"' + req + (m.list ? ' list="' + m.list + '"' : '') + (m.ph ? ' placeholder="' + esc(m.ph) + '"' : '') + (m.inputmode ? ' inputmode="' + m.inputmode + '"' : '') + (m.upper ? ' autocapitalize="characters" class="is-upper"' : '') + ' autocomplete="off" spellcheck="false">';
     }
-    return '<div class="field' + (m.kind === 'area' ? ' is-wide' : '') + (m.dgOnly ? ' dg-only' : '') + (extra.cls ? ' ' + extra.cls : '') + '" data-field="' + key + '"><label for="' + id + '">' + esc(m.label) + (m.req ? ' <b aria-hidden="true">*</b>' : '') + '</label>' + ctl + '<div class="field-err" id="' + id + '_err"></div></div>';
+    return '<div class="field' + (m.kind === 'area' || m.kind === 'blnos' ? ' is-wide' : '') + (m.dgOnly ? ' dg-only' : '') + (extra.cls ? ' ' + extra.cls : '') + '" data-field="' + key + '"><label for="' + id + '">' + esc(m.label) + (m.req ? ' <b aria-hidden="true">*</b>' : '') + '</label>' + ctl + '<div class="field-err" id="' + id + '_err"></div></div>';
   }
   function formLists() {
     const L = state.lists || { customers: [], vendors: [] };
@@ -1796,8 +1808,8 @@
     const t = j.type;
     const keys = ['customer', 'vendor', 'sales', 'opened'];   // v2.8: Customer Service moves by Transfer (People card)
     const route = TYPE_FIELDS[t] || [];
-    const docs = FORM_STATUS[t] || ['sido', 'ed', 'bl'];
-    const val = (k) => asInput(k, j.raw[k]);
+    const docs = (FORM_STATUS[t] || ['sido', 'ed', 'bl']).concat(t === 'MIS' ? [] : ['blNo'], invOf98(j).open ? ['invoice'] : []);   // v2.9.8
+    const val = (k) => (k === 'invoice' ? invOf98(j).value : k === 'blNo' ? blList98(j.raw.blNo).join(', ') : asInput(k, j.raw[k]));
     state.editing = { no: j.jobNo, initial: {} };
     const norm = (k, v) => (fieldMeta(k, t) && fieldMeta(k, t).upper ? String(v).toUpperCase().replace(/\s+/g, ' ') : v);
     ['type', 'status'].concat(keys, route, docs, ['remarks', 'dgCut']).forEach((k) => { state.editing.initial[k] = norm(k, val(k)); });
@@ -1807,18 +1819,20 @@
       '<form class="job-form" id="editForm" novalidate>' +
         '<fieldset><legend>JOB</legend><div class="fgrid">' + input('type', t, val('type')) + input('status', t, val('status')) + keys.map((k) => input(k, t, val(k))).join('') + '</div><div class="type-warn" id="typeWarn" hidden>Changing the type changes the voyage stops for this job.</div></fieldset>' +
         (route.length ? '<fieldset><legend>' + (t === 'MIS' ? 'LINK' : 'CARGO & ROUTE') + '</legend><div class="fgrid">' + route.map((k) => input(k, t, val(k))).join('') + '</div></fieldset>' : '') +
-        (docs.length ? '<fieldset><legend>DOCUMENTS</legend><div class="fgrid">' + docs.map((k) => input(k, t, val(k))).join('') + '</div></fieldset>' : '') +
+        (docs.length || invStatic98(j) ? '<fieldset><legend>DOCUMENTS</legend><div class="fgrid">' + docs.map((k) => input(k, t, val(k))).join('') + invStatic98(j) + '</div></fieldset>' : '') +
         '<fieldset><legend>REMARKS</legend><div class="fgrid">' + input('remarks', t, val('remarks')) + '</div></fieldset>' +
         '<div class="form-error" id="formError" role="alert"></div>' +
         '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit">SAVE CHANGES</button></div>' +
       '</form>' + formLists();
     const f = $('#editForm'); const dg = f.querySelector('[name="dg"]'); f.querySelectorAll('.dg-only').forEach((g) => { g.hidden = !(dg && dg.value === 'DG'); });
+    blForm98(f, j);   // v2.9.8: "shared to customer" only after the final BL
     swForm93(f);   // v2.9.3: switch BL → the main BL list is OBL only
     showDrawer(document.activeElement);
     state.overlay = 'form';
   }
   function submitEdit(form) {
     const ed = state.editing; if (!ed) return;
+    if (!blFlush98(form)) return;   // v2.9.8: a number still being typed becomes a chip (or says what is wrong)
     const v = readForm(form);
     $$('.field-err', form).forEach((e) => { e.textContent = ''; });
     if (!v.customer) { fieldError('customer', 'Customer is required.'); return; }
@@ -1883,6 +1897,7 @@
     if (x.kind === 'delay') return '<strong>' + esc(x.from) + '</strong> marked a delay on';
     if (x.kind === 'costing') return '<strong>' + esc(x.from) + '</strong> on the costing of';
     if (x.kind === 'transfer') return '<strong>' + esc(x.from) + '</strong> transferred';
+    if (x.kind === 'cover') return '<strong>' + esc(x.from) + '</strong> · cover';   // v2.9.8
     return '<strong>' + esc(x.from) + '</strong> updated';
   }
   function openNotifications() {               // v2.7: notifications are a page of their own
@@ -1893,7 +1908,7 @@
   // ---------- my account ----------
   function accountPanel() {
     const go2 = (href, ic, label, n) => '<button type="button" class="acct-go" data-href="' + href + '">' + icon(ic, 18) + '<span>' + label + '</span>' + (n ? '<b>' + n + '</b>' : '') + '</button>';
-    const shortcuts = canEdit() ? go2('#/follow-ups', 'check', 'Follow-ups', roundRows(today0()).due.length + remDueCount()) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length) + go2('#/costing', 'costing', 'Costing', costRows().open)
+    const shortcuts = canEdit() ? go2('#/follow-ups', 'check', 'Follow-ups', roundRows(today0()).due.length + remDueCount()) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length) + go2('#/costing', 'costing', 'Costing', costRows().open) + go2('#/cover', 'swap', 'Cover', covIncoming98().length)
       : isSales() ? go2('#/enquiries', 'enq', 'My enquiries', enqOpen().length) + go2('#/costing', 'costing', 'Costing', costRows().open) : '';
     return (shortcuts ? '<div class="acct-shortcuts">' + shortcuts + '</div>' : '') + '<div class="acct"><span class="avatar">' + esc(initials(state.user)) + '</span><div><div class="acct-name" id="drawerTitle">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(ROLE_NAMES[state.role] || state.role) + '</div></div></div>' +
       '<form class="tile pw-form" id="pwForm" novalidate><h3 class="tile-title">CHANGE PASSWORD</h3>' +
@@ -1959,7 +1974,7 @@
         '<ul class="users-list">' + A.users.map((u) => {
           const rc = ROLE_CHIP[u.role] || ROLE_CHIP.CS;
           return '<li class="user-row">' +
-            '<span class="ur-name"><span class="avatar' + (u.role === 'SALES' ? ' is-other' : '') + '">' + esc(initials(u.name)) + '</span><span><b>' + esc(u.name) + '</b>' + (u.name === state.user ? ' <span class="you">YOU</span>' : '') + '</span></span>' +
+            '<span class="ur-name"><span class="avatar' + (u.role === 'SALES' ? ' is-other' : '') + '">' + esc(initials(u.name)) + '</span><span class="ur-who"><span><b>' + esc(u.name) + '</b>' + (u.name === state.user ? ' <span class="you">YOU</span>' : '') + '</span>' + (u.email ? '<small class="ur-mail">' + icon('mail', 12) + esc(u.email) + '</small>' : u.role === 'CS' ? '<small class="ur-mail is-none">No work email</small>' : '') + '</span></span>' +
             '<span class="ur-role"><span class="chip ' + rc[1] + '">' + rc[0] + '</span></span>' +
             '<span class="ur-status">' + (u.locked ? '<span class="chip chip-urgent">' + icon('alert', 13) + 'Locked · ' + u.locked + ' min</span>' : u.online ? '<span class="online"><i class="dot is-on"></i>Online' + (u.sessions > 1 ? ' · ' + u.sessions + ' devices' : '') + '</span>' : '<span class="online"><i class="dot"></i>' + (u.sessions ? 'Signed in · idle' : 'Offline') + '</span>') + '</span>' +
             '<span class="ur-pw">' + esc(PW_TEXT[u.password] || u.password) + '</span>' +
@@ -2006,6 +2021,7 @@
       const u = adminData().users.find((x) => x.name === name); if (!u) return '';
       return '<div class="pop-title">' + esc(name) + '</div><div class="pop-label">Role</div><div class="choice-row is-stack">' +
         [['CS', 'Customer Service'], ['SALES', 'Sales'], ['ADMIN', 'Admin']].map(([v, l]) => '<button type="button" class="choice' + (u.role === v ? ' is-on' : '') + '" data-adm="role" data-role="' + v + '" data-user="' + esc(name) + '" aria-pressed="' + (u.role === v) + '">' + l + '</button>').join('') + '</div>' +
+        admMail98(name) +
         '<button type="button" class="btn-ghost pop-wide" data-adm="reset" data-user="' + esc(name) + '">' + icon('refresh', 16) + 'Reset password</button>' +
         '<button type="button" class="btn-ghost pop-wide" data-adm="signout" data-user="' + esc(name) + '"' + (u.sessions ? '' : ' disabled') + '>' + icon('logout', 16) + 'Sign out ' + (u.sessions ? '(' + u.sessions + (u.sessions === 1 ? ' device' : ' devices') + ')' : '— not signed in') + '</button>' +
         (name !== 'MASTER' ? '<button type="button" class="btn-ghost pop-wide is-danger" data-adm="remove" data-user="' + esc(name) + '">Remove ' + esc(name) + '</button>' : '');
@@ -2028,6 +2044,7 @@
         '<div class="field is-wide"><label for="auName">Name (this is their username)</label><input id="auName" class="is-upper" list="dlSugg" autocomplete="off" spellcheck="false" value="' + esc(name || '') + '" placeholder="Enter username"><div class="field-err" id="auName_err"></div></div>' +
         '<div class="field is-wide"><label>Role</label><div class="choice-row" role="radiogroup" aria-label="Role">' + [['CS', 'Customer Service'], ['SALES', 'Sales'], ['ADMIN', 'Admin']].map(([v, l]) => '<button type="button" class="choice' + ((role || 'CS') === v ? ' is-on' : '') + '" role="radio" data-pick-role="' + v + '" aria-checked="' + ((role || 'CS') === v) + '">' + l + '</button>').join('') + '</div><p class="pop-hint" id="auRoleHint"></p></div>' +
         '<div class="field is-wide"><label for="auPw">Temporary password</label><div class="date-row"><input id="auPw" value="' + esc(tempPassword()) + '" autocomplete="off" spellcheck="false"><button type="button" class="choice" data-adm="gen">New</button></div><div class="field-err" id="auPw_err"></div></div>' +
+        '<div class="field is-wide"><label for="auMail">Work email (optional — the morning email goes here)</label><input id="auMail" type="email" autocomplete="off" spellcheck="false" placeholder="Type their work email"><div class="field-err" id="auMail_err"></div></div>' +
       '</div>' + datalist('dlSugg', A.suggestions.map((s) => s.name)) +
       '<div class="form-error" id="formError" role="alert"></div>' +
       '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit">CREATE ACCOUNT</button></div></form>';
@@ -2111,8 +2128,11 @@
         $('#auName_err').textContent = ''; $('#auPw_err').textContent = ''; $('#formError').textContent = '';
         if (!/^[A-Z][A-Z .'-]{1,29}$/.test(name)) { $('#auName_err').textContent = 'Letters only, 2–30 characters.'; return; }
         const p = pwProblem(pw, name); if (p) { $('#auPw_err').textContent = p; return; }
+        const mail = ($('#auMail', f) || {}).value ? $('#auMail', f).value.trim() : '';   // v2.9.8
+        if (mail && !mailOk98(mail)) { $('#auMail_err').textContent = 'That does not look like an email address.'; return; }
         btn.disabled = true; btn.textContent = 'CREATING…';
         const res = await adminCall('ethixAdminCreate', [name, state.addRole, pw], null);
+        if (res && mail) await adminCall('ethixAdminEmail', [name, mail], null);
         if (res) { $('#drawerBody').innerHTML = credentialsCard(name, pw, true); return; }
         btn.disabled = false; btn.textContent = 'CREATE ACCOUNT';
       }
@@ -2285,7 +2305,7 @@
   function roundRow(x, t0) {
     const j = x.j, f = x.f;
     return '<li class="rr' + (f.today ? ' is-done' : '') + (f.mineToday ? ' is-mine' : '') + (f.due ? ' is-due' : '') + (rmk95(j) ? ' has-rmk' : '') + '">' +
-      '<button type="button" class="rr-main" data-job="' + esc(j.jobNo) + '"><span class="rr-job">' + changedDot(j) + copyNo93(j.jobNo) + '<span class="badge">' + esc(j.type) + '</span></span>' +
+      '<button type="button" class="rr-main" data-job="' + esc(j.jobNo) + '"><span class="rr-job">' + changedDot(j) + copyNo93(j.jobNo) + '<span class="badge">' + esc(j.type) + '</span>' + ownTag98(j) + '</span>' +
         '<span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span></button>' +
       '<span class="rr-next">' + toneChip(rrNext95(j)) + cutChips(j) + rowClock(j, t0) + '</span>' +
       '<span class="rr-last"><span>' + esc(lastCheckText(f, t0)) + '</span>' + ((lr) => (lr ? '<span class="rr-remark">“' + esc(lr.text) + '”' + (lr.n > 1 ? ' <b>+' + (lr.n - 1) + '</b>' : '') + '</span>' : ''))(lastRemark(f)) + '</span>' +
@@ -2390,20 +2410,23 @@
     const reasonOk = F.reason && (F.reason !== 'Other' || F.other.trim());
     const newEtd = early && j.etd && F.move.etd ? addDays(j.etd, -F.days) : null;   // v2.9.3: cutoffs after the new ETD move with it
     const cuts = newEtd ? [['siCut', 'SI cutoff'], ['edCut', 'ED cutoff'], ['dgCut', 'DG cutoff']].filter(([k]) => j[k] && j[k] > newEtd) : [];
+    // v2.9.8: each date row = the switch (move it or not) + the new date; tap the new date to pick it on a calendar (the days follow)
+    const row = (k, label) => '<div class="dl-move-row' + (F.move[k] ? ' is-on' : '') + '"><button type="button" class="toggle dl-move" data-dl-move="' + k + '" aria-pressed="' + F.move[k] + '"><span class="toggle-track"><span class="toggle-thumb"></span></span>' + label + ' ' + fmt(j[k]) + ' →</button>' +
+      '<label class="dl-pick" title="Pick the new ' + label + ' on the calendar"><b>' + shift(j[k]) + '</b>' + icon('calendar', 15) + '<input type="date" class="dl-date" data-dl-date="' + k + '" value="' + iso(addDays(j[k], sg * F.days)) + '" aria-label="New ' + label + '"></label></div>';
     return '<h2 class="peek-job form-title" id="drawerTitle">' + esc(j.jobNo) + ' <span class="small">' + esc(j.customer || '') + '</span></h2>' +
       '<form class="job-form delay-form" id="delayForm" novalidate>' +
         '<div class="seg dl-dir" role="group" aria-label="Delayed or preponed"><button type="button" data-dl-dir="late" aria-pressed="' + !early + '">Delayed</button><button type="button" data-dl-dir="early" aria-pressed="' + early + '">Preponed</button></div>' +
         '<fieldset><legend>' + (early ? 'HOW MANY DAYS EARLIER?' : 'HOW MANY DAYS?') + '</legend><div class="dl-stepper"><button type="button" class="icon-btn" data-dl-step="-1" aria-label="One day less">−</button><output id="dlDays" aria-live="polite">' + F.days + '<small>' + (F.days === 1 ? 'day' : 'days') + '</small></output><button type="button" class="icon-btn" data-dl-step="1" aria-label="One day more">+</button></div>' +
           '<div class="choice-row">' + [1, 2, 3, 5, 7, 10, 14].map((n) => '<button type="button" class="choice' + (F.days === n ? ' is-on' : '') + '" data-dl-days="' + n + '">' + (early ? '−' : '') + n + 'D</button>').join('') + '</div></fieldset>' +
+        '<fieldset><legend>MOVE THE DATES TOO?</legend>' +
+          (j.etd ? row('etd', j.mode === 'courier' ? 'Pick-up' : 'ETD') : '') +
+          (j.eta ? row('eta', j.mode === 'courier' ? 'Delivery' : 'ETA') : '') +
+          (cuts.length ? '<p class="dl-cuts">' + cuts.map(([k, l]) => l + ' ' + fmt(j[k]) + ' → <b>' + fmt(addDays(j[k], -F.days)) + '</b>').join(' · ') + ' — cutoffs move with the ETD.</p>' : '') +
+          (!j.etd && !j.eta ? '<p class="pop-hint">This job has no ETD / ETA yet.</p>' : '<p class="pop-hint">Editing ETD or ETA by hand never counts as ' + (early ? 'preponed' : 'a delay') + ' — only this does.</p>') + '</fieldset>' +
         '<fieldset><legend>WHERE?</legend><div class="choice-row">' + where.map((w) => '<button type="button" class="choice' + (F.where === w ? ' is-on' : '') + '" data-dl-where="' + w + '" aria-pressed="' + (F.where === w) + '">' + esc(nice(w)) + '</button>').join('') + '</div></fieldset>' +
         '<fieldset><legend>WHY?</legend><div class="choice-row">' + reasons.concat(['Other']).map((r) => '<button type="button" class="choice' + (F.reason === r ? ' is-on' : '') + '" data-dl-reason="' + esc(r) + '" aria-pressed="' + (F.reason === r) + '">' + esc(r) + '</button>').join('') + '</div>' +
           (F.reason === 'Other' ? '<div class="field is-wide"><label for="dlOther">Reason</label><input id="dlOther" maxlength="60" value="' + esc(F.other) + '" autocomplete="off"></div>' : '') +
           '<div class="field is-wide"><label for="dlNote">Note (optional — the sales person sees it)</label><input id="dlNote" maxlength="300" value="' + esc(F.note) + '" placeholder="Type a note for the sales person" autocomplete="off"></div></fieldset>' +
-        '<fieldset><legend>MOVE THE DATES TOO?</legend>' +
-          (j.etd ? '<button type="button" class="toggle dl-move" data-dl-move="etd" aria-pressed="' + F.move.etd + '"><span class="toggle-track"><span class="toggle-thumb"></span></span>' + (j.mode === 'courier' ? 'Pick-up' : 'ETD') + ' ' + fmt(j.etd) + ' → <b>' + shift(j.etd) + '</b></button>' : '') +
-          (j.eta ? '<button type="button" class="toggle dl-move" data-dl-move="eta" aria-pressed="' + F.move.eta + '"><span class="toggle-track"><span class="toggle-thumb"></span></span>' + (j.mode === 'courier' ? 'Delivery' : 'ETA') + ' ' + fmt(j.eta) + ' → <b>' + shift(j.eta) + '</b></button>' : '') +
-          (cuts.length ? '<p class="dl-cuts">' + cuts.map(([k, l]) => l + ' ' + fmt(j[k]) + ' → <b>' + fmt(addDays(j[k], -F.days)) + '</b>').join(' · ') + ' — cutoffs move with the ETD.</p>' : '') +
-          (!j.etd && !j.eta ? '<p class="pop-hint">This job has no ETD / ETA yet.</p>' : '<p class="pop-hint">Editing ETD or ETA by hand never counts as ' + (early ? 'preponed' : 'a delay') + ' — only this does.</p>') + '</fieldset>' +
         '<div class="form-error" id="formError" role="alert"></div>' +
         '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit"' + (reasonOk ? '' : ' disabled') + '>' + (early ? 'MARK PREPONED −' : 'MARK DELAY +') + F.days + 'D</button></div>' +
       '</form>';
@@ -2632,7 +2655,7 @@
       const R = roundRows(t0);
       const total = R.due.length + R.done.length;
       const n = enqNew().length;
-      return '<button type="button" class="meta-chip' + (R.due.length ? '' : ' is-done') + '" data-href="#/follow-ups">' + icon('check', 12) + 'FOLLOW-UPS <b>' + R.done.length + '/' + total + '</b></button>' +
+      return covChips98(true) + '<button type="button" class="meta-chip' + (R.due.length ? '' : ' is-done') + '" data-href="#/follow-ups">' + icon('check', 12) + 'FOLLOW-UPS <b>' + R.done.length + '/' + total + '</b></button>' +
         (n ? '<button type="button" class="meta-chip is-teal" data-href="#/enquiries"><b>' + n + '</b> NEW ' + (n === 1 ? 'ENQUIRY' : 'ENQUIRIES') + '</button>' : '') +
         ((rc) => rc ? '<button type="button" class="meta-chip is-ready" data-act="ready-list"><b>' + rc + '</b> READY TO CLOSE</button>' : '')(scoped().filter(isReady).length);
     }
@@ -2707,9 +2730,9 @@
         if (t.dataset.dlDir && t.dataset.dlDir !== F.dir) { F.dir = t.dataset.dlDir; F.reason = ''; }
         if (t.dataset.dlStep) F.days = Math.max(1, Math.min(90, F.days + +t.dataset.dlStep));
         if (t.dataset.dlDays) F.days = +t.dataset.dlDays;
-        if (t.dataset.dlWhere) { F.where = t.dataset.dlWhere; F.move = movesDates(F.where); }
+        if (t.dataset.dlWhere) { F.where = t.dataset.dlWhere; if (!F.moveSet98) F.move = movesDates(F.where); }   // v2.9.8: dates set by hand stay as set
         if (t.dataset.dlReason) F.reason = t.dataset.dlReason;
-        if (t.dataset.dlMove) F.move[t.dataset.dlMove] = !F.move[t.dataset.dlMove];
+        if (t.dataset.dlMove) { F.move[t.dataset.dlMove] = !F.move[t.dataset.dlMove]; F.moveSet98 = true; }
         const y = body.scrollTop; body.innerHTML = delayForm(); body.scrollTop = y;
         if (t.dataset.dlReason === 'Other') { const o = $('#dlOther'); if (o) o.focus(); }
         return;
@@ -3160,7 +3183,7 @@
     if (C && (C.loading || (C.data && !force))) return C;
     if (!C) C = state.cost = { no: K, data: null, draft: null, dirty: false, loading: false, err: '', busy: '', showLog: false };
     C.loading = true;
-    api.call('ethixCosting', [no]).then((res) => {
+    costFetch98(K, no).then((res) => {   // v2.9.8: fetched ahead from the job page when it can be
       if (state.cost !== C) return;
       C.loading = false;
       if (res && res.ok) { if (!C.dirty) setCostData(C, res.costing); else C.data = Object.assign({}, res.costing); }
@@ -3208,7 +3231,7 @@
   function costBanner(j, D) {
     if (!D) return '';
     if (D.closed) return '<div class="cost-banner">' + icon('lock', 15) + '<span>This job is closed, so its costing is read-only. ' + (canEdit() ? 'Reopen the job to change it.' : '') + '</span></div>';
-    if (D.status === 'LOCKED') return '<div class="cost-banner is-locked">' + icon('lock', 15) + '<span><b>Costing done</b>' + (D.lockedBy ? ' · locked by ' + esc(nice(D.lockedBy)) : '') + (D.lockedAt ? ' · ' + esc(ago(D.lockedAt)) : '') + (D.legacy ? ' · marked done before costing sheets (no lines)' : '') + '. ' + (canEdit() ? 'Unlock it to make changes.' : 'Ask Customer Service if something needs to change.') + '</span></div>';
+    if (D.status === 'LOCKED') return '<div class="cost-banner is-locked">' + icon('lock', 15) + '<span><b>Costing done</b>' + (D.lockedBy ? ' · locked by ' + esc(nice(D.lockedBy)) : '') + (D.lockedAt ? ' · ' + esc(ago(D.lockedAt)) : '') + (D.legacy ? ' · marked done before costing sheets (no lines)' : '') + '. ' + (canEdit() ? 'Unlock it to make changes.' : 'Ask Customer Service if something needs to change.') + '</span>' + invSeg98(j) + '</div>';
     if (!costCanEdit(j, D)) return '<div class="cost-banner">' + icon('lock', 15) + '<span>Read-only.</span></div>';
     return '';
   }
@@ -3590,8 +3613,8 @@
     const nums = s && x.st === 'pending' ? '<span class="cl-sub">Started · no amounts yet</span>' : s ? '<span class="cl-figs">' + fig('SELLING', s[1]) + fig('BUYING', s[2]) + fig('PROFIT', s[3], 'is-profit' + (s[3] < 0 ? ' is-loss' : '')) + '</span><span class="cl-sub">AED · ' + (s[1] ? pctTxt(s[3] / s[1]) + ' margin' : 'no selling yet') + '</span>'
       : x.st === 'done' ? '<span class="cl-sub">Marked done (no sheet)</span>' : '<span class="cl-sub">Not started</span>';
     return '<li class="cr-row"><button type="button" class="cr-open" data-cost="' + esc(j.jobNo) + '" aria-label="Open costing of ' + esc(j.jobNo) + '">' +
-      '<span class="rr-main"><span class="rr-job">' + esc(j.jobNo) + ' <span class="badge">' + esc(j.type) + '</span></span><span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span></span>' +
-      '<span class="cr-when">' + when + (who ? '<span class="cl-sub">' + esc(who) + '</span>' : '') + '</span>' +
+      '<span class="rr-main"><span class="rr-job">' + esc(j.jobNo) + ' <span class="badge">' + esc(j.type) + '</span>' + ownTag98(j) + '</span><span class="rr-cust">' + esc(j.customer || '—') + '</span><span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span></span>' +
+      '<span class="cr-when">' + when + (x.st === 'done' && !invOf98(j).na ? invChip98(invOf98(j)) : '') + (who ? '<span class="cl-sub">' + esc(who) + '</span>' : '') + '</span>' +
       '<span class="cr-people"><span>CS · ' + esc(j.cs || '—') + '</span>' + (j.sales ? '<span>SALES · ' + esc(j.sales) + '</span>' : '') + '</span>' +
       '<span class="cr-nums">' + nums + '</span><span class="cr-go">' + icon('chevron', 16) + '</span></button></li>';
   }
@@ -3599,7 +3622,7 @@
     const t0 = today0(), anim = first ? ' reveal' : '';
     const U = state.costUi, R = costRows();
     const q = (U.q || '').trim().toUpperCase();
-    const match = (x) => !q || (x.j.jobNo + ' ' + x.j.customer + ' ' + x.j.route + ' ' + x.j.cs + ' ' + x.j.sales + ' ' + x.j.type).toUpperCase().includes(q);
+    const match = (x) => !q || (x.j.jobNo + ' ' + x.j.customer + ' ' + x.j.route + ' ' + x.j.cs + ' ' + x.j.sales + ' ' + x.j.type + ' ' + x.j.blNo + ' ' + invOf98(x.j).label).toUpperCase().includes(q);
     const tab = ['pending', 'draft', 'done'].includes(U.tab) ? U.tab : 'pending';
     const rows = R[tab].filter(match);
     const keepQ = $('#costSearch') ? $('#costSearch').value : U.q || '';
@@ -3613,7 +3636,7 @@
       '<section class="cost-sum tile tile-ink' + anim + '" style="--d:40ms" aria-label="Costing at a glance">' +
         big('pending', 'PENDING', R.pending.length, R.dueN ? R.dueN + ' sailed or arrived' : 'nothing overdue') +
         big('draft', 'DRAFT', R.draft.length, R.draft.length ? 'being worked on' : 'none open') +
-        big('done', 'DONE', R.done.length, R.done.length ? 'locked' : 'none yet') +
+        big('done', 'DONE', R.done.length, R.done.length ? invTodo98(R.done) : 'none yet') +
       '</section>' +
       '<section class="round-sec cost-sec' + anim + '" style="--d:80ms" aria-labelledby="cs-title"><div class="tile-head"><h2 class="tile-title" id="cs-title">' + { pending: 'COSTING PENDING', draft: 'DRAFTS', done: 'COSTING DONE' }[tab] + ' <span class="tile-count">' + rows.length + '</span></h2><span class="small">' + { pending: 'Sailed or arrived first', draft: 'Last changed first', done: 'Last changed first' }[tab] + '</span></div>' +
         (rows.length ? '<ul class="round-list cost-rows">' + rows.slice(0, 300).map((x) => costListRow(x, t0)).join('') + '</ul>' : '<div class="tile-empty">' + icon('check', 22) + '<span>' + (q ? 'Nothing matches “' + esc(U.q) + '”.' : { pending: 'Every active job has a costing.', draft: 'No drafts open.', done: 'No costing marked done yet.' }[tab]) + '</span></div>') +
@@ -3634,7 +3657,7 @@
         '<div class="kv cm-profit' + (sv[3] < 0 ? ' is-loss' : '') + '"><span class="kv-k">Profit</span><span class="kv-v">AED ' + money(sv[3]) + (sv[1] ? ' · ' + pctTxt(sv[3] / sv[1]) : '') + '</span></div>' +
         (boxesOf(j) ? '<div class="kv"><span class="kv-k">Profit / box</span><span class="kv-v">AED ' + money(sv[3] / boxesOf(j)) + '</span></div>' : '')
         : '<p class="pop-text">' + (st === 'done' ? 'Marked done before costing sheets.' : s ? 'Started — no amounts yet.' : 'No costing yet.') + '</p>') +
-      '<button type="button" class="btn-ghost pop-wide" data-cost="' + esc(j.jobNo) + '">' + icon('costing', 16) + '<span>' + (s ? 'Open costing' : editable ? 'Start costing' : 'Open costing') + '</span></button></section>';
+      invRow98(j) + '<button type="button" class="btn-ghost pop-wide" data-cost="' + esc(j.jobNo) + '">' + icon('costing', 16) + '<span>' + (s ? 'Open costing' : editable ? 'Start costing' : 'Open costing') + '</span></button></section>';
   }
 
   // ================================================================ EXCEL (made here, no download needed)
@@ -3980,7 +4003,7 @@
 
   // ================================================================ v2.7 — whose jobs
   // Follow-ups and Costing are always your own jobs; Home and Jobs start on "My jobs" at every sign-in.
-  function mineJobs() { return canEdit() ? state.jobs.filter((j) => j.cs === state.user) : state.jobs; }
+  function mineJobs() { if (!canEdit()) return state.jobs; const o = covOwners98(); return state.jobs.filter((j) => j.cs === state.user || o.has(j.cs)); }   // v2.9.8: + a colleague you cover today
 
   // ================================================================ v2.7 — cutoffs, every open one, coloured
   // red: passed, today or tomorrow (inside 24 h) · amber: in 2–3 days · calm: later
@@ -4036,7 +4059,7 @@
     api.call('ethixNotifSeen').catch(() => {});
   }
   function notifRow(x, seen) {
-    return '<li><button type="button" class="notif' + (x.t > seen ? ' is-new' : '') + (x.kind === 'delay' ? ' is-delay' : '') + '" ' + (/^EQ-/.test(x.job) ? 'data-enq' : x.kind === 'costing' ? 'data-cost' : 'data-job') + '="' + esc(x.job) + '">' +
+    return '<li><button type="button" class="notif' + (x.t > seen ? ' is-new' : '') + (x.kind === 'delay' ? ' is-delay' : '') + '" ' + (x.kind === 'cover' ? 'data-href="#/cover"' : (/^EQ-/.test(x.job) ? 'data-enq' : x.kind === 'costing' ? 'data-cost' : 'data-job') + '="' + esc(x.job) + '"') + '>' +
       '<span class="avatar' + (x.kind === 'note' ? ' is-other' : '') + '">' + esc(initials(x.from)) + '</span>' +
       '<span class="nt-body"><span class="nt-head">' + notifText(x) + ' <span class="nt-job">' + esc(x.job) + '</span></span><span class="nt-text">' + esc(x.text) + '</span></span>' +
       '<span class="nt-time">' + esc(hm(x.t)) + '</span></button></li>';
@@ -4632,7 +4655,7 @@
   }
 
   // ================================================================ v2.8 — your jobs only · job transfer
-  function scopedJobs8() { return canEdit() ? state.jobs.filter((j) => j.cs === state.user) : state.jobs; }
+  function scopedJobs8() { if (!canEdit()) return state.jobs; const o = covOwners98(); return state.jobs.filter((j) => j.cs === state.user || o.has(j.cs)); }   // v2.9.8: + a colleague you cover today
   const unassigned8 = () => (canEdit() ? state.jobs.filter((j) => j.active && !j.cs) : []);
   function transferBtn(j) { return canEditJob(j) && j.active ? '<button type="button" class="tile-link" data-transfer="' + esc(j.jobNo) + '">' + (j.cs ? 'Transfer' : 'Assign') + '</button>' : ''; }
   const transferMenu = (no) => () => {
@@ -4694,6 +4717,7 @@
     if (Array.isArray(boot.reminders)) state.reminders = boot.reminders;
     if (boot.seen && typeof boot.seen === 'object') state.seen = boot.seen;
     if (boot.touch && typeof boot.touch === 'object') state.touch = boot.touch;
+    if (Array.isArray(boot.covers)) state.covers = boot.covers;   // v2.9.8
   }
   function changeOf(j) {
     const k = keyOf(j), t = state.touch && state.touch[k];
@@ -4920,7 +4944,7 @@
   function watchTile91(m, anim) {
     const chip = (w) => (w.level === 'urgent' ? 'chip chip-urgent' : 'chip chip-amber-dark');
     const item = (w, more) => '<button type="button" class="wt li' + (more ? ' is-more' : '') + '" data-job="' + esc(w.j.jobNo) + '">' +
-      '<span class="wt-top"><span class="wt-job">' + changedDot(w.j) + esc(w.j.jobNo) + '</span><span class="' + chip(w) + '">' + (w.level === 'urgent' ? icon('alert', 12) : '') + esc(w.when) + '</span></span>' +
+      '<span class="wt-top"><span class="wt-job">' + changedDot(w.j) + esc(w.j.jobNo) + ownTag98(w.j) + '</span><span class="' + chip(w) + '">' + (w.level === 'urgent' ? icon('alert', 12) : '') + esc(w.when) + '</span></span>' +
       '<span class="wt-what">' + esc(w.what) + '</span><span class="wt-cust">' + esc(w.j.customer || '—') + ' · ' + esc(nice(w.j.route)) + '</span></button>';
     const G = [['over', 'OVERDUE', (w) => w.d < 0], ['today', 'TODAY', (w) => w.d === 0], ['soon', 'NEXT 3 DAYS', (w) => w.d > 0]];
     let n = 0;
@@ -4969,7 +4993,7 @@
     ev.slice(0, LIST_MAX).forEach((e, i) => {
       const n = days(t0, e.d);
       if (n !== last) { last = n; list += '<div class="wk-gh' + (i >= 6 ? ' is-more' : '') + '">' + (n === 0 ? 'TODAY' : n === 1 ? 'TOMORROW' : n === -1 ? 'YESTERDAY' : DOW_UP[e.d.getDay()]) + ' · ' + e.d.getDate() + ' ' + MON91[e.d.getMonth()].toUpperCase() + '</div>'; }
-      list += '<button type="button" class="wk-row li' + (i >= 6 ? ' is-more' : '') + '" data-job="' + esc(e.j.jobNo) + '"><span class="wk-tag is-' + e.k + (e.d < t0 ? ' is-past' : '') + '">' + wkTag93(e, t0) + '</span><span class="li-main"><span class="li-job">' + changedDot(e.j) + esc(e.j.jobNo) + '</span><span class="li-sub">' + esc(nice(e.j.route)) + (e.j.cargo ? ' · ' + esc(e.j.cargo) : '') + '</span></span></button>';
+      list += '<button type="button" class="wk-row li' + (i >= 6 ? ' is-more' : '') + '" data-job="' + esc(e.j.jobNo) + '"><span class="wk-tag is-' + e.k + (e.d < t0 ? ' is-past' : '') + '">' + wkTag93(e, t0) + '</span><span class="li-main"><span class="li-job">' + changedDot(e.j) + esc(e.j.jobNo) + ownTag98(e.j) + '</span><span class="li-sub">' + esc(nice(e.j.route)) + (e.j.cargo ? ' · ' + esc(e.j.cargo) : '') + '</span></span></button>';
     });
     const gone = end < t0;
     const none = pick ? 'Nothing ' + (pick < t0 ? 'sailed or arrived' : 'sails or arrives') + ' on ' + DOW[pick.getDay()] + ' ' + dm93(pick) + '.'
@@ -5244,14 +5268,14 @@
   // ================================================================ v2.9.3 — from Amal's use of v2.9.2
   // ---------- switch BL (sea jobs): one column SWITCH BL — NO, or where the switch BL stands. The main BL is then an OBL.
   const SW_TYPES93 = ['SFEF', 'SFEL', 'SFIF', 'SFIL', 'SFC'];
-  const SBL93 = ['CONFIRMED SBL', 'SBL ISSUED'];
+  const SBL93 = ['CONFIRMED SBL', 'SBL ISSUED', 'SBL SHARED TO CUSTOMER'];
   const swOn93 = (j) => !!j && SW_TYPES93.includes(j.type) && !!j.switchBl && j.switchBl !== 'NO';
-  const toObl93 = (v) => (v === 'CONFIRMED SBL' ? 'CONFIRMED OBL' : v === 'SBL ISSUED' ? 'OBL ISSUED' : v);
+  const toObl93 = (v) => (v === 'CONFIRMED SBL' ? 'CONFIRMED OBL' : v === 'SBL ISSUED' ? 'OBL ISSUED' : v === 'SBL SHARED TO CUSTOMER' ? 'OBL SHARED TO CUSTOMER' : v);
   function swBl93(j, all) {
     if (!swOn93(j)) return;
     all.forEach((st) => { if (st.field === 'bl' && st.def) st.def = Object.assign({}, st.def, { choices: (st.def.choices || OPTS.bl).filter((v) => !SBL93.includes(v)), primary: toObl93(st.def.primary) }); });
   }
-  const optsFor93 = (j, f) => (f === 'bl' && swOn93(j) ? OPTS.bl.filter((v) => !SBL93.includes(v)) : OPTS[f]);
+  const optsFor93 = (j, f) => (f === 'bl' ? blChoices98(j, swOn93(j) ? OPTS.bl.filter((v) => !SBL93.includes(v)) : OPTS.bl) : OPTS[f]);   // v2.9.8: shared after the final BL
   // turning switch BL on while the main BL is an SBL: the main BL moves to the OBL in the same save
   function swFix93(j, field, val) { return field === 'switchBl' && val && val !== 'NO' && SBL93.includes(j.bl) ? { bl: toObl93(j.bl) } : {}; }
   // Edit details: the BL list follows switch BL
@@ -5632,12 +5656,13 @@
     const box = $('#searchResults'); if (!box) return;
     q = q.trim().toUpperCase();
     if (!q) { box.hidden = true; return; }
-    const hits = state.jobs.filter((j) => (j.jobNo + ' ' + j.customer + ' ' + j.pol + ' ' + j.pod + ' ' + j.cs + ' ' + j.sales + ' ' + j.type).toUpperCase().includes(q))
+    const blHit = (j) => blList98(j.blNo).find((x) => x.includes(q)) || '';   // v2.9.8: BL / AWB numbers are searched too
+    const hits = state.jobs.filter((j) => (j.jobNo + ' ' + j.customer + ' ' + j.pol + ' ' + j.pod + ' ' + j.cs + ' ' + j.sales + ' ' + j.type + ' ' + j.blNo).toUpperCase().includes(q))
       .sort((a, b) => (b.active - a.active) || (canEdit() ? (b.cs === state.user) - (a.cs === state.user) : 0) || ((b.jobNo.toUpperCase().startsWith(q) ? 1 : 0) - (a.jobNo.toUpperCase().startsWith(q) ? 1 : 0)))
       .slice(0, 8);
     searchIndex = -1;
     box.innerHTML = hits.length ? hits.map((j) =>
-      '<button type="button" class="result" data-job="' + esc(j.jobNo) + '"><span class="result-job">' + esc(j.jobNo) + '</span><span class="result-cust">' + esc(j.customer || '—') + '</span><span class="result-route">' + esc(j.route) + ' · ' + esc(j.type) + (j.active ? '' : ' · ' + esc(j.status)) + (canEdit() && j.cs !== state.user ? ' · ' + (j.cs ? 'WITH ' + esc(j.cs) : 'UNASSIGNED') : '') + '</span></button>'
+      '<button type="button" class="result" data-job="' + esc(j.jobNo) + '"><span class="result-job">' + esc(j.jobNo) + '</span><span class="result-cust">' + esc(j.customer || '—') + '</span><span class="result-route">' + (blHit(j) && !(j.jobNo + ' ' + j.customer).toUpperCase().includes(q) ? esc(blWord98(j) + ' ' + blHit(j)) + ' · ' : '') + esc(j.route) + ' · ' + esc(j.type) + (j.active ? '' : ' · ' + esc(j.status)) + (canEdit() && j.cs !== state.user ? ' · ' + (j.cs ? 'WITH ' + esc(j.cs) : 'UNASSIGNED') : '') + '</span></button>'
     ).join('') : '<div class="result-empty">No jobs match “' + esc(q) + '”.</div>';
     box.hidden = false;
   }
@@ -5657,7 +5682,7 @@
       updateNav();
       const fresh = state.notif ? state.notif.items.filter((x) => x.t > newest && x.t > (state.notif.seen || 0)) : [];
       state.nudged = fresh.length && notifUnread() > before && state.overlay !== 'drawer' && !(state.route && state.route.name === 'notif');
-      if (state.nudged) toast(fresh.length === 1 ? nice(fresh[0].from) + ' · ' + fresh[0].job + ': ' + fresh[0].text : fresh.length + ' new notifications', { action: { label: 'View', fn: () => openNotifications() } });
+      if (state.nudged) toast(fresh.length === 1 ? nice(fresh[0].from) + ' · ' + (fresh[0].job ? fresh[0].job + ': ' : '') + fresh[0].text : fresh.length + ' new notifications', { action: { label: 'View', fn: () => openNotifications() } });
       if (state.route && state.route.name === 'job') loadStory(state.route.jobNo, true);
       if (manual && !state.nudged) toast('Up to date');
     } catch (e) {
@@ -5704,6 +5729,7 @@
     if (typeof opts === 'boolean') opts = { error: opts };
     const t = document.createElement('div');
     t.className = 'toast' + (opts.error ? ' is-error' : '');
+    if (opts.error && state.savingCount) state.saveFail98 = true;   // v2.9.8: no "Saved" after a refusal
     const span = document.createElement('span'); span.textContent = text; t.appendChild(span);
     if (opts.action) {
       const b = document.createElement('button'); b.type = 'button'; b.className = 'toast-btn'; b.textContent = opts.action.label;
@@ -5776,6 +5802,455 @@
     window.addEventListener('hashchange', () => { if (!state.signedIn) return; if (leaveGuard()) return; state.navDepth++; closeOverlays(true); render(false); });
   }
 
+  // ================================================================ v2.9.8 — from Amal's list of 2 Nov 2026
+  I.swap = '<path d="M4 8h13l-3.5-3.5M20 16H7l3.5 3.5"/>';
+  I.mail = '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 6.5 12 13l8.5-6.5"/>';
+
+  // ---------- faster: the app's link travels with the first load (for the morning email); a new column learnt from costing done
+  const APP_URL98 = location.origin + location.pathname;
+  (function () {
+    const call = api.call.bind(api);
+    api.call = function (fn, args, opts) {
+      let a = Array.isArray(args) ? args.slice() : [];
+      if (fn === 'ethixSignIn' && a.length === 3) a.push(APP_URL98);
+      if (fn === 'ethixBootstrap' && !a.length && !state.urlSent98) a = [APP_URL98];
+      const p = call(fn, a, opts);
+      if (fn === 'ethixBootstrap') p.then(() => { state.urlSent98 = true; }, () => {});
+      if (fn === 'ethixCostingLock') p.then((res) => { if (res && Array.isArray(res.header) && res.header.length) { state.header = res.header; state.ix = mapHeaders(res.header); rebuildJobs(); } }, () => {});
+      return p;
+    };
+  })();
+
+  // ---------- the costing of the job you are looking at is fetched ahead, so it opens at once
+  function costAhead98(no) {
+    const K = String(no || '').toUpperCase(); if (!K || !api.token) return;
+    const j = findJob(K); if (!j || !canCostSee(j)) return;
+    if (state.cost && state.cost.no === K && (state.cost.data || state.cost.loading)) return;
+    const P = state.costPre98;
+    if (P && P.no === K && Date.now() - P.at < 60000) return;
+    const p = api.call('ethixCosting', [j.jobNo]);
+    state.costPre98 = { no: K, at: Date.now(), p };
+    p.catch(() => { if (state.costPre98 && state.costPre98.p === p) state.costPre98 = null; });
+  }
+  function costFetch98(K, no) {
+    const P = state.costPre98;
+    if (P && P.no === K && Date.now() - P.at < 90000) { state.costPre98 = null; return P.p; }
+    return api.call('ethixCosting', [no]);
+  }
+  function costAheadSoon98(no) { clearTimeout(state.costPreT98); state.costPreT98 = setTimeout(() => { if (state.route && state.route.name === 'job' && String(state.route.jobNo).toUpperCase() === String(no).toUpperCase()) costAhead98(no); }, 700); }
+
+  // ---------- the saving pill: frosted glass — "Saving…", then a tick and "Saved" that fades
+  function savePill98(was) {
+    const pill = $('#savePill'); if (!pill) return;
+    const txt = $('#savePillText') || pill;
+    const n = state.savingCount;
+    clearTimeout(state.pillT98);
+    if (n > 0) {
+      if (was === 0) state.saveFail98 = false;
+      pill.classList.remove('is-done', 'is-out'); pill.hidden = false;
+      txt.textContent = n > 1 ? 'Saving ' + n + ' changes…' : 'Saving…';
+      return;
+    }
+    if (pill.hidden) return;
+    if (state.saveFail98) { pill.hidden = true; pill.classList.remove('is-done', 'is-out'); return; }
+    pill.classList.add('is-done'); txt.textContent = 'Saved';
+    state.pillT98 = setTimeout(() => {
+      pill.classList.add('is-out');
+      state.pillT98 = setTimeout(() => { pill.hidden = true; pill.classList.remove('is-done', 'is-out'); }, 360);
+    }, 1100);
+  }
+
+  // ---------- Home on a day from the morning email: #/day/yyyy-mm-dd
+  function dayLink98(h) {
+    const m = String(h || '').match(/^#\/day\/(\d{4}-\d{2}-\d{2})$/); if (!m) return false;
+    const d = parseDate(m[1]);
+    history.replaceState(null, '', '#/home');
+    if (d) { state.wkOff93 = Math.round(days(monday93(today0()), monday93(d)) / 7); state.wkDay92 = m[1]; }
+    return true;
+  }
+
+  // ---------- BL shared to customer: offered once the final BL is issued
+  const SHARED98 = ['OBL SHARED TO CUSTOMER', 'SBL SHARED TO CUSTOMER'];
+  function blChoices98(j, list) {
+    const cur = (j && j.bl) || '', out = [];
+    list.filter((v) => !SHARED98.includes(v)).forEach((v) => {
+      out.push(v);
+      if (v === 'OBL ISSUED' && (cur === 'OBL ISSUED' || cur === 'OBL SHARED TO CUSTOMER')) out.push('OBL SHARED TO CUSTOMER');
+      if (v === 'SBL ISSUED' && (cur === 'SBL ISSUED' || cur === 'SBL SHARED TO CUSTOMER')) out.push('SBL SHARED TO CUSTOMER');
+    });
+    if (SHARED98.includes(cur) && !out.includes(cur)) out.push(cur);
+    return out;
+  }
+  function blForm98(form, j) {   // Edit details: the shared choices only after the final BL
+    const bl = form && form.querySelector('[name="bl"]'); if (!bl) return;
+    const ok = blChoices98(j, OPTS.bl);
+    [...bl.options].forEach((o) => { if (SHARED98.includes(o.value) && !ok.includes(o.value)) o.remove(); });
+  }
+
+  // ---------- BL / AWB / tracking numbers: several per job, tap one to copy it
+  const blWord98 = (j) => (j.mode === 'air' ? 'AWB' : j.type === 'CRR' ? 'Tracking' : 'BL');
+  const blList98 = (v) => String(v || '').split(/[,;\n\r]+/).map((x) => x.replace(/\s+/g, ' ').trim().toUpperCase()).filter((x, i, a) => x && a.indexOf(x) === i);
+  const blBad98 = (x) => (x.length > 40 ? 'A number can be up to 40 characters.' : !/^[A-Z0-9][A-Z0-9 \-\/.#_]*$/.test(x) ? '“' + x + '” — use letters, digits, - / . only.' : '');
+  function blCtl98(id, list, word) {
+    return '<div class="bln" data-bln data-word="' + esc(word) + '"><input type="hidden" name="blNo" value="' + esc(list.join(', ')) + '">' +
+      list.map((x) => '<span class="bln-chip">' + esc(x) + '<button type="button" class="bln-x" data-bln-x="' + esc(x) + '" aria-label="Remove ' + esc(x) + '">' + icon('close', 11) + '</button></span>').join('') +
+      '<input type="text" class="bln-in" id="' + id + '" placeholder="' + (list.length ? 'Add another' : 'Type the ' + word + ' number, then press Enter') + '" autocomplete="off" spellcheck="false" autocapitalize="characters" enterkeyhint="done"></div>';
+  }
+  function blRead98(box) { return blList98((box.querySelector('input[name="blNo"]') || {}).value); }
+  function blDraw98(box, list, keep) {
+    if (!box || !box.isConnected) return;
+    const inp = box.querySelector('.bln-in'), id = inp ? inp.id : 'blIn98';
+    const word = box.dataset.word || 'BL';
+    state.blDrawing98 = true;   // the box is redrawn: its input losing focus must not redraw it again
+    try { box.outerHTML = blCtl98(id, list, word); } finally { state.blDrawing98 = false; }
+    const n = document.getElementById(id); if (n) { if (keep) n.value = keep; if (keep !== undefined || document.activeElement === document.body) n.focus({ preventScroll: true }); }
+  }
+  // the text being typed becomes chips (Enter, comma, paste, leaving the box). Returns an error, or ''.
+  function blTake98(box) {
+    const inp = box.querySelector('.bln-in'); if (!inp) return '';
+    const add = blList98(inp.value); if (!add.length) return '';
+    const bad = add.map(blBad98).find(Boolean); if (bad) return bad;
+    const list = blRead98(box); add.forEach((x) => { if (!list.includes(x)) list.push(x); });
+    if (list.length > 20) return 'Up to 20 numbers per job.';
+    blDraw98(box, list, '');
+    return '';
+  }
+  function blErr98(box, msg) {
+    const f = box.closest('.field'); const e = f && f.querySelector('.field-err'); if (e) e.textContent = msg || '';
+    if (f) f.classList.toggle('has-error', !!msg);
+  }
+  function blFlush98(form) { const box = form && form.querySelector('[data-bln]'); if (!box) return true; const err = blTake98(box); blErr98(box, err); return !err; }
+  function blLine98(j) {
+    if (j.mode === 'misc') return '';
+    const L = blList98(j.blNo), can = canEditJob(j) && !j.closed, w = blWord98(j);
+    if (!L.length) return can ? '<button type="button" class="vh-rm-add vh-bl-add" data-act="bl98">' + icon('plus', 14) + 'Add ' + w + ' no.</button>' : '';
+    return '<div class="vh-bl"><span class="vh-rm-k">' + w.toUpperCase() + ' NO.</span><span class="vh-bl-list">' +
+      L.map((x) => '<span class="bl-chip" data-copy="' + esc(x) + '" role="button" tabindex="0" title="Copy ' + esc(x) + '"><span>' + esc(x) + '</span>' + icon('copy', 12) + '</span>').join('') + '</span>' +
+      (can ? '<button type="button" class="icon-btn vh-rm-edit" data-act="bl98" aria-label="Edit the ' + w + ' numbers" title="Edit">' + icon('edit', 15) + '</button>' : '') + '</div>';
+  }
+  const blPop98 = (no) => () => {
+    const j = findJob(no); if (!j) return '';
+    const w = blWord98(j), D = state.blDraft98 && state.blDraft98.no === j.jobNo ? state.blDraft98.list : blList98(j.blNo);
+    return '<div class="pop-title">' + w + ' numbers</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p>' +
+      '<form class="pop-form" data-bl-form="' + esc(j.jobNo) + '"><div class="field is-wide">' + blCtl98('blIn98', D, w) + '<div class="field-err"></div></div>' +
+      '<button type="submit" class="btn-brutal pop-main" data-primary>SAVE</button></form>' + SAVE_NOTE;
+  };
+
+  // ---------- invoice status (for the customer): opens once costing is done; kept and frozen if costing is unlocked
+  const INV98 = ['INVOICE NOT ISSUED', 'INVOICE ISSUED', 'SHARED TO CUSTOMER'];
+  const INV_LABEL98 = { 'INVOICE NOT ISSUED': 'Invoice not issued', 'INVOICE ISSUED': 'Invoice issued', 'SHARED TO CUSTOMER': 'Shared to customer' };
+  const INV_TONE98 = { 'INVOICE NOT ISSUED': 'amber', 'INVOICE ISSUED': 'teal', 'SHARED TO CUSTOMER': 'done' };
+  function invOf98(j) {
+    if (!j || j.costing === 'CANCELLED') return { na: true, label: 'Not needed', tone: 'calm' };
+    const done = ['COSTING DONE', 'COMPLETED'].includes(j.costing), v = INV98.includes(j.invoice) ? j.invoice : '';
+    if (done) { const x = v || 'INVOICE NOT ISSUED'; return { open: true, value: x, label: INV_LABEL98[x], tone: INV_TONE98[x] }; }
+    if (v) return { frozen: true, value: v, label: INV_LABEL98[v], tone: 'calm' };
+    return { label: 'Invoice pending', tone: 'calm' };
+  }
+  const invChip98 = (s) => '<span class="inv-chip is-' + s.tone + '">' + (s.open ? '' : icon('lock', 12)) + '<span>' + esc(s.label) + '</span></span>';
+  function invRow98(j) {
+    const s = invOf98(j); if (s.na) return '';
+    const can = canEdit() && !j.closed;
+    return '<div class="kv inv-row"><span class="kv-k">Invoice</span>' + (can ? '<button type="button" class="inv-btn" data-inv="' + esc(j.jobNo) + '" aria-label="Invoice: ' + esc(s.label) + (s.open ? '. Change' : '') + '">' + invChip98(s) + (s.open ? icon('chevron', 13) : '') + '</button>' : invChip98(s)) + '</div>';
+  }
+  const invPop98 = (no) => () => {
+    const j = findJob(no); if (!j) return '';
+    const s = invOf98(j);
+    const head = '<div class="pop-title">Invoice</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p>';
+    if (!s.open) return head + '<div class="inv-ro">' + invChip98(s) + '</div><p class="pop-text">' + (s.frozen ? 'Costing was unlocked, so this stays as it is until costing is done again.' : 'Opens once costing is done.') + '</p>';
+    return head + '<div class="inv-pick" role="group" aria-label="Invoice status">' + INV98.map((v) => '<button type="button" class="inv-opt is-' + INV_TONE98[v] + (v === s.value ? ' is-on' : '') + '" data-inv-set="' + v + '" data-no="' + esc(j.jobNo) + '" aria-pressed="' + (v === s.value) + '"><i></i><span>' + INV_LABEL98[v] + '</span>' + (v === s.value ? icon('check', 16) : '') + '</button>').join('') + '</div>' + SAVE_NOTE;
+  };
+  function invSeg98(j) {   // the costing page, once costing is done
+    const s = invOf98(j); if (!s.open) return '';
+    if (!canEdit() || j.closed) return '<span class="inv-on-cost"><span class="inv-k">INVOICE</span>' + invChip98(s) + '</span>';
+    return '<span class="inv-on-cost"><span class="inv-k">INVOICE</span><span class="inv-seg" role="group" aria-label="Invoice status">' + INV98.map((v) => '<button type="button" class="' + (v === s.value ? 'is-on is-' + INV_TONE98[v] : '') + '" data-inv-set="' + v + '" data-no="' + esc(j.jobNo) + '" aria-pressed="' + (v === s.value) + '">' + INV_LABEL98[v].replace('Invoice ', '').replace(/^n/, 'N').replace(/^i/, 'I') + '</button>').join('') + '</span></span>';
+  }
+  function invSave98(no, v) {
+    const j = findJob(no); if (!j || !canEdit()) return;
+    const s = invOf98(j); if (!s.open) { toast(s.frozen ? 'Costing was unlocked — the invoice status opens again once costing is done.' : 'The invoice status opens once costing is done.', { error: true }); return; }
+    closeOverlays();
+    if ((j.invoice || '') === v) return;
+    saveJob(j.jobNo, { invoice: v }, { toast: 'Invoice → ' + INV_LABEL98[v].toLowerCase().replace(/^./, (c) => c.toUpperCase()) });
+  }
+  function invTodo98(done) {
+    const n = done.filter((x) => { const s = invOf98(x.j); return s.open && s.value === 'INVOICE NOT ISSUED'; }).length;
+    return n ? n + (n === 1 ? ' invoice' : ' invoices') + ' not issued' : 'all invoiced';
+  }
+  function invStatic98(j) {
+    const s = invOf98(j); if (s.open || s.na) return '';
+    return '<div class="field" data-field="invoice"><label>Invoice status</label><div class="ro-field">' + invChip98(s) + '<span>' + (s.frozen ? 'Kept until costing is done again' : 'Opens once costing is done') + '</span></div></div>';
+  }
+
+  // ---------- cover for a colleague (ask or offer — the other side accepts, like a friend request)
+  const covToday98 = () => isoOf(today0());
+  const covOn98 = (c, t) => c.status === 'ACCEPTED' && c.start <= t && t <= c.end;
+  function covOwners98() { const o = new Set(); if (!canEdit()) return o; const t = covToday98(); (state.covers || []).forEach((c) => { if (c.cover === state.user && covOn98(c, t)) o.add(c.owner); }); return o; }
+  const covered98 = (j) => !!j && canEdit() && !!j.cs && j.cs !== state.user && covOwners98().has(j.cs);
+  const ownTag98 = (j) => (covered98(j) ? '<span class="own-tag" title="' + esc('Covering ' + nice(j.cs)) + '">' + esc(j.cs) + '</span>' : '');
+  const ownChip98 = (j) => (covered98(j) ? '<span class="own-chip">' + icon('swap', 13) + 'COVERING · ' + esc(j.cs) + '</span>' : '');
+  const covIncoming98 = () => (state.covers || []).filter((c) => c.status === 'ASKED' && c.from !== state.user && c.end >= covToday98());
+  const covOther98 = (c) => (c.owner === state.user ? c.cover : c.owner);
+  const covDays98 = (c) => { const a = parseDate(c.start), b = parseDate(c.end); return a && b ? days(a, b) + 1 : 0; };
+  const covDay98 = (iso) => { const d = parseDate(iso); return d ? DOW[d.getDay()] + ' ' + d.getDate() + ' ' + MON91[d.getMonth()] : '—'; };
+  const covRange98 = (c) => (c.start === c.end ? covDay98(c.start) : covDay98(c.start) + ' – ' + covDay98(c.end));
+  const covJobs98 = (owner) => state.jobs.filter((j) => j.active && j.cs === owner).length;
+  function covChips98(home) {   // on Home the request itself is the glass card; its chip shows once the card is put away
+    if (!canEdit()) return '';
+    const t = covToday98(), L = (state.covers || []).filter((c) => covOn98(c, t));
+    const inc = covIncoming98().filter((c) => !home || (state.covLater98 || []).includes(c.id));
+    const short = (iso) => { const d = parseDate(iso); return d ? d.getDate() + ' ' + MON_UP[d.getMonth()] : ''; };
+    return (inc.length ? '<button type="button" class="meta-chip is-cover-ask" data-href="#/cover">' + icon('swap', 12) + '<b>' + inc.length + '</b> COVER ' + (inc.length === 1 ? 'REQUEST' : 'REQUESTS') + '</button>' : '') +
+      L.map((c) => '<button type="button" class="meta-chip is-cover" data-href="#/cover">' + icon('swap', 12) + (c.cover === state.user ? 'COVERING <b>' + esc(c.owner) + '</b>' : '<b>' + esc(c.cover) + '</b> COVERS YOU') + ' · TILL ' + short(c.end) + '</button>').join('');
+  }
+  function covWho98(c) {   // how a cover reads from where I stand
+    const o = nice(covOther98(c)), mine = c.cover === state.user;
+    if (c.status === 'ASKED') return c.from === state.user ? (mine ? 'You offered to cover ' + o : 'You asked ' + o + ' to cover you') : (mine ? o + ' asks you to cover their jobs' : o + ' offers to cover your jobs');
+    return mine ? 'You cover ' + o : o + ' covers you';
+  }
+  function covCard98(c, kind) {
+    const other = covOther98(c), n = covDays98(c), mine = c.cover === state.user, t = covToday98();
+    const live = covOn98(c, t), jobs = covJobs98(c.owner);
+    const btns = kind === 'incoming' ? '<button type="button" class="btn-ghost" data-cov-no="' + esc(c.id) + '">Decline</button><button type="button" class="btn-brutal" data-cov-yes="' + esc(c.id) + '">ACCEPT</button>'
+      : kind === 'sent' ? '<button type="button" class="btn-ghost" data-cov-end="' + esc(c.id) + '">Withdraw</button>'
+      : kind === 'live' || kind === 'soon' ? (live && mine ? '<button type="button" class="btn-ghost" data-href="#/jobs">' + icon('jobs', 15) + '<span>See the jobs</span></button>' : '') + '<button type="button" class="btn-ghost" data-cov-end="' + esc(c.id) + '">' + (live ? 'End cover' : 'Call off') + '</button>' : '';
+    const state98 = kind === 'incoming' ? '<span class="cv-state is-ask">WAITING FOR YOU</span>' : kind === 'sent' ? '<span class="cv-state">WAITING FOR ' + esc(other) + '</span>'
+      : kind === 'live' ? '<span class="cv-state is-live"><i></i>ON NOW</span>' : kind === 'soon' ? '<span class="cv-state is-soon">FROM ' + esc(covDay98(c.start).toUpperCase()) + '</span>' : '';
+    return '<article class="cv-card' + (kind === 'incoming' ? ' is-incoming' : kind === 'live' ? ' is-live' : '') + '">' +
+      '<div class="cv-top"><span class="avatar' + (mine ? '' : ' is-other') + '">' + esc(initials(other)) + '</span><div class="cv-title"><b>' + esc(covWho98(c)) + '</b>' + state98 + '</div></div>' +
+      '<div class="cv-when"><span class="cv-range">' + esc(covRange98(c)) + '</span><span>' + n + (n === 1 ? ' day' : ' days') + '</span><span>' + jobs + ' active ' + (jobs === 1 ? 'job' : 'jobs') + (c.owner === state.user ? ' of yours' : ' of ' + esc(nice(c.owner))) + '</span></div>' +
+      (c.note ? '<p class="cv-note">“' + esc(c.note) + '”</p>' : '') +
+      (btns ? '<div class="cv-act">' + btns + '</div>' : '') + '</article>';
+  }
+  function renderCover98(first) {
+    const t0 = today0(), t = covToday98(), anim = first ? ' reveal' : '';
+    const C = state.covers || [];
+    const inc = covIncoming98(), sent = C.filter((c) => c.status === 'ASKED' && c.from === state.user && c.end >= t);
+    const live = C.filter((c) => covOn98(c, t)), soon = C.filter((c) => c.status === 'ACCEPTED' && c.start > t);
+    const past = C.filter((c) => !inc.includes(c) && !sent.includes(c) && !live.includes(c) && !soon.includes(c)).slice(0, 8);
+    const sec = (title, list, kind, d) => list.length ? '<section class="cv-sec' + anim + '" style="--d:' + d + 'ms"><div class="tile-head"><h2 class="tile-title">' + title + ' <span class="tile-count">' + list.length + '</span></h2></div><div class="cv-grid">' + list.map((c) => covCard98(c, kind)).join('') + '</div></section>' : '';
+    const pastWho = (c) => { const o = nice(covOther98(c)), mine = c.cover === state.user;
+      if (c.status === 'ACCEPTED' || c.status === 'ENDED') return mine ? 'You covered ' + o : o + ' covered you';
+      return c.from === state.user ? (mine ? 'You offered to cover ' + o : 'You asked ' + o + ' to cover you') : (mine ? o + ' asked you to cover their jobs' : o + ' offered to cover your jobs'); };
+    const pastWord = (c) => c.status === 'DECLINED' ? 'declined' : c.status === 'WITHDRAWN' ? 'withdrawn' : c.status === 'ENDED' ? 'ended early' : c.status === 'ASKED' ? 'not answered' : 'done';
+    $('#view').innerHTML = '<div class="wrap cover-page no-seg">' +
+      '<header class="page-head' + anim + '"><div class="head-main"><div class="meta-line"><span>COVER · ' + esc(fmtLong(t0)) + '</span></div><h1 class="greeting">Cover</h1></div>' +
+        '<div class="head-actions"><button type="button" class="btn-ghost" data-cov-new="offer">' + icon('users', 16) + '<span class="btn-label">Offer to cover</span></button><button type="button" class="btn-brutal btn-icon" data-cov-new="ask">' + icon('plus', 16) + '<span>ASK FOR COVER</span></button></div></header>' +
+      sec('WAITING FOR YOU', inc, 'incoming', 40) + sec('ON NOW', live, 'live', 80) + sec('COMING UP', soon, 'soon', 110) + sec('SENT', sent, 'sent', 140) +
+      (!inc.length && !live.length && !soon.length && !sent.length ? '<section class="tile cv-empty' + anim + '" style="--d:40ms">' + empty('swap', 'No cover running or asked for.') + '</section>' : '') +
+      (past.length ? '<section class="cv-sec' + anim + '" style="--d:170ms"><div class="tile-head"><h2 class="tile-title">EARLIER</h2></div><ul class="cv-past">' + past.map((c) => '<li><span class="avatar is-other">' + esc(initials(covOther98(c))) + '</span><span class="cv-p-who">' + esc(pastWho(c)) + '</span><span class="cv-p-when">' + esc(covRange98(c)) + '</span><span class="cv-p-st is-' + c.status.toLowerCase() + '">' + pastWord(c) + '</span></li>').join('') + '</ul></section>' : '') +
+      '</div>';
+  }
+  // the request form (a side panel)
+  function covForm98() {
+    const F = state.covForm98, ask = F.kind === 'ask';
+    const names = csOptions('').filter((n) => n !== state.user);
+    const n = F.start && F.end ? days(parseDate(F.start), parseDate(F.end)) + 1 : 0;
+    return '<h2 class="peek-job form-title" id="drawerTitle">' + (ask ? 'Ask for cover' : 'Offer to cover') + '</h2>' +
+      '<form class="job-form cover-form" id="coverForm" novalidate>' +
+        '<fieldset><legend>' + (ask ? 'WHO COVERS YOU?' : 'WHOSE JOBS?') + '</legend>' + (names.length ? '<div class="choice-row cv-names">' + names.map((x) => '<button type="button" class="choice cv-name' + (F.who === x ? ' is-on' : '') + '" data-cov-who="' + esc(x) + '" aria-pressed="' + (F.who === x) + '"><span class="avatar">' + esc(initials(x)) + '</span>' + esc(nice(x)) + '</button>').join('') + '</div>' : '<p class="pop-text">There is no other Customer Service account yet.</p>') + '</fieldset>' +
+        '<fieldset><legend>WHEN?</legend><div class="fgrid cv-dates">' +
+          '<div class="field"><label for="cvStart">First day</label><input type="date" id="cvStart" min="' + covToday98() + '" value="' + esc(F.start) + '"></div>' +
+          '<div class="field"><label for="cvEnd">Last day</label><input type="date" id="cvEnd" min="' + esc(F.start || covToday98()) + '" value="' + esc(F.end) + '"></div></div>' +
+          '<div class="choice-row cv-len">' + [[1, '1 day'], [2, '2 days'], [5, '5 days'], [7, '1 week'], [14, '2 weeks']].map(([d, l]) => '<button type="button" class="choice' + (n === d ? ' is-on' : '') + '" data-cov-len="' + d + '">' + l + '</button>').join('') + '</div>' +
+          (n > 0 ? '<p class="cv-sum">' + esc(covDay98(F.start)) + (n > 1 ? ' – ' + esc(covDay98(F.end)) : '') + ' · <b>' + n + (n === 1 ? ' day' : ' days') + '</b></p>' : '') + '</fieldset>' +
+        '<fieldset><legend>NOTE</legend><div class="field is-wide"><label for="cvNote">For them (optional)</label><input id="cvNote" maxlength="200" value="' + esc(F.note) + '" placeholder="Type a line for them" autocomplete="off"></div></fieldset>' +
+        (F.who ? '<p class="pop-hint cv-hint">' + (ask ? esc(nice(F.who)) + ' sees your jobs and gets your alerts on those days. The jobs stay yours.' : 'You see ' + esc(nice(F.who)) + '’s jobs and get their alerts on those days. The jobs stay theirs.') + '</p>' : '') +
+        '<div class="form-error" id="formError" role="alert"></div>' +
+        '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit"' + (F.who && n > 0 ? '' : ' disabled') + '>' + (ask ? 'SEND REQUEST' : 'SEND OFFER') + '</button></div></form>';
+  }
+  function covOpen98(kind) {
+    if (!canEdit()) return;
+    closeOverlays(true);
+    const t = covToday98();
+    state.covForm98 = { kind, who: '', start: t, end: t, note: '' };
+    $('#drawer').classList.add('is-wide');
+    $('#drawerKicker').textContent = 'COVER';
+    popRender = covForm98;
+    $('#drawerBody').innerHTML = covForm98();
+    showDrawer(document.activeElement);
+    state.overlay = 'cover';
+  }
+  async function covCall98(fn, args, ok) {
+    setSaving(1);
+    try {
+      const res = await api.call(fn, args);
+      if (res && Array.isArray(res.covers)) state.covers = res.covers;
+      if (res && res.ok) { rerender(); updateNav(); covReq98(); if (ok) toast(typeof ok === 'function' ? ok(res) : ok); return res; }
+      rerender(); covReq98();
+      toast((res && res.error) || 'Not done.', { error: true });
+    } catch (e) { if (e.kind !== 'auth') toast(/not available|unknown/i.test(e.message) ? 'Cover needs the v2.9.8 Code.gs.' : e.message, { error: true }); }
+    finally { setSaving(-1); }
+    return null;
+  }
+  async function covSubmit98() {
+    const F = state.covForm98; if (!F) return;
+    F.note = ($('#cvNote') || {}).value || '';
+    if (!F.who || !F.start || !F.end) return;
+    const btn = $('#formSubmit'); if (btn) { btn.disabled = true; btn.textContent = 'SENDING…'; }
+    const res = await covCall98('ethixCoverAsk', [{ kind: F.kind, who: F.who, start: F.start, end: F.end, note: F.note.trim() }], null);
+    if (res) { closeOverlays(); toast(F.kind === 'ask' ? 'Request sent to ' + nice(F.who) : 'Offer sent to ' + nice(F.who)); go('#/cover'); return; }
+    if (btn) { btn.disabled = false; btn.textContent = F.kind === 'ask' ? 'SEND REQUEST' : 'SEND OFFER'; }
+  }
+  function covAnswer98(id, yes) {
+    const c = (state.covers || []).find((x) => x.id === id); if (!c) return;
+    covCall98('ethixCoverAnswer', [id, yes], () => (yes ? (c.cover === state.user ? 'You cover ' + nice(c.owner) + ' · ' + covRange98(c) : nice(c.cover) + ' covers you · ' + covRange98(c)) : 'Declined'));
+  }
+  function covEnd98(id) {
+    const c = (state.covers || []).find((x) => x.id === id); if (!c) return;
+    const other = nice(covOther98(c));
+    if (c.status === 'ASKED') { covCall98('ethixCoverEnd', [id], 'Request withdrawn'); return; }
+    const live = covOn98(c, covToday98());
+    confirmBox(live ? 'End the cover now?' : 'Call off this cover?', (c.cover === state.user ? other + '’s jobs leave your lists' : 'Your jobs leave ' + other + '’s lists') + (live ? ' now.' : '.') + ' ' + other + ' is told.', live ? 'End cover' : 'Call off', () => covCall98('ethixCoverEnd', [id], live ? 'Cover ended' : 'Cover called off'));
+  }
+  // a request waiting for you: a glass card on Home, like a friend request
+  function covReq98() {
+    let el = $('#covReq98');
+    const on = state.signedIn && canEdit() && state.route && state.route.name === 'home';
+    const c = on ? covIncoming98().find((x) => !(state.covLater98 || []).includes(x.id)) : null;
+    if (!c) { if (el) el.remove(); return; }
+    const html = '<div class="cq-top"><span class="avatar">' + esc(initials(c.from)) + '</span><div class="cq-head"><div class="cq-kick">COVER REQUEST</div><div class="cq-title"><b>' + esc(nice(c.from)) + '</b> ' + (c.cover === state.user ? 'asks you to cover their jobs' : 'offers to cover your jobs') + '</div></div>' +
+      '<button type="button" class="icon-btn cq-x" data-cov-later="' + esc(c.id) + '" aria-label="Later">' + icon('close', 14) + '</button></div>' +
+      '<div class="cq-when"><b>' + esc(covRange98(c)) + '</b><span>' + covDays98(c) + (covDays98(c) === 1 ? ' day' : ' days') + ' · ' + covJobs98(c.owner) + ' active ' + (covJobs98(c.owner) === 1 ? 'job' : 'jobs') + '</span></div>' +
+      (c.note ? '<p class="cq-note">“' + esc(c.note) + '”</p>' : '') +
+      '<div class="cq-act"><button type="button" class="btn-ghost" data-cov-no="' + esc(c.id) + '">Decline</button><button type="button" class="btn-brutal" data-cov-yes="' + esc(c.id) + '">ACCEPT</button></div>';
+    if (!el) { el = document.createElement('aside'); el.id = 'covReq98'; el.className = 'cov-req glass'; el.setAttribute('role', 'region'); el.setAttribute('aria-label', 'Cover request'); document.body.appendChild(el); }
+    if (el.dataset.id !== c.id || el.dataset.v !== html.length + '') { el.innerHTML = html; el.dataset.id = c.id; el.dataset.v = html.length + ''; }
+  }
+
+  // ---------- People: work emails (the morning email goes to them)
+  const mailOk98 = (v) => /^[^\s@<>"',;:()[\]]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/.test(v);
+  function admMail98(name) {
+    const u = adminData().users.find((x) => x.name === name); if (!u) return '';
+    return '<form class="pop-form adm-mail" novalidate data-adm-mail="' + esc(name) + '"><label class="pop-label" for="admMail98">Work email · morning email</label>' +
+      '<input type="email" id="admMail98" value="' + esc(u.email || '') + '" placeholder="Type their work email" autocomplete="off" spellcheck="false">' +
+      '<div class="field-err" id="admMail98_err"></div><button type="submit" class="btn-ghost pop-wide">' + icon('mail', 16) + (u.email ? 'Save email' : 'Add email') + '</button>' +
+      (u.email ? '<button type="button" class="link-btn quiet pop-clear" data-adm-mail-clear="' + esc(name) + '">Remove email</button>' : '') + '</form>';
+  }
+
+  function initV298() {
+    const body = $('#drawerBody');
+    // costing fetched ahead when the pointer rests on a costing button or row
+    document.addEventListener('pointerover', (e) => {
+      const c = e.target.closest && e.target.closest('[data-cost]'); if (!c || !state.signedIn) return;
+      clearTimeout(state.costHoverT98);
+      state.costHoverT98 = setTimeout(() => costAhead98(c.dataset.cost), 150);
+    }, { passive: true });
+    document.addEventListener('click', (e) => {
+      if (!state.signedIn) return;
+      // BL numbers: edit from the job page
+      const b = e.target.closest('[data-act="bl98"]');
+      if (b && state.route && state.route.name === 'job') { const j = findJob(state.route.jobNo); if (j && canEditJob(j)) { state.blDraft98 = null; openPop(b, blWord98(j).toUpperCase() + ' NUMBERS', blPop98(j.jobNo)); setTimeout(() => { const i = $('#blIn98'); if (i) i.focus(); }, 40); } return; }
+      const bx = e.target.closest('[data-bln-x]');
+      if (bx) { const box = bx.closest('[data-bln]'); const list = blRead98(box).filter((x) => x !== bx.dataset.blnX); if (state.blDraft98) state.blDraft98.list = list; blDraw98(box, list, (box.querySelector('.bln-in') || {}).value || ''); return; }
+      // invoice
+      const ib = e.target.closest('[data-inv]');
+      if (ib) { openPop(ib, 'INVOICE', invPop98(ib.dataset.inv)); return; }
+      const is = e.target.closest('[data-inv-set]');
+      if (is) { invSave98(is.dataset.no, is.dataset.invSet); return; }
+      // cover
+      const cn = e.target.closest('[data-cov-new]'); if (cn) { covOpen98(cn.dataset.covNew); return; }
+      const cy = e.target.closest('[data-cov-yes]'); if (cy) { covAnswer98(cy.dataset.covYes, true); return; }
+      const cd = e.target.closest('[data-cov-no]'); if (cd) { covAnswer98(cd.dataset.covNo, false); return; }
+      const ce = e.target.closest('[data-cov-end]'); if (ce) { covEnd98(ce.dataset.covEnd); return; }
+      const cl = e.target.closest('[data-cov-later]'); if (cl) { state.covLater98 = (state.covLater98 || []).concat(cl.dataset.covLater); covReq98(); rerender(); return; }
+      // the delay form: tap the new date → the calendar
+      const pk = e.target.closest('.dl-pick input[type="date"]');
+      if (pk && typeof pk.showPicker === 'function') { try { pk.showPicker(); } catch (er) { /* the browser opens it itself */ } }
+    });
+    body.addEventListener('click', (e) => {
+      if (state.overlay !== 'cover') return;
+      const F = state.covForm98; if (!F) return;
+      if (e.target.closest('[data-act="form-cancel"]')) { closeOverlays(); return; }
+      const w = e.target.closest('[data-cov-who]'), l = e.target.closest('[data-cov-len]');
+      if (!w && !l) return;
+      F.note = ($('#cvNote') || {}).value || F.note;
+      if (w) F.who = w.dataset.covWho;
+      if (l) { const a = parseDate(F.start) || today0(); F.end = isoOf(addDays(a, +l.dataset.covLen - 1)); }
+      const y = body.scrollTop; body.innerHTML = covForm98(); body.scrollTop = y;
+    });
+    body.addEventListener('change', (e) => {
+      if (state.overlay === 'cover' && state.covForm98 && (e.target.id === 'cvStart' || e.target.id === 'cvEnd')) {
+        const F = state.covForm98; F.note = ($('#cvNote') || {}).value || F.note;
+        if (e.target.id === 'cvStart') { const n = F.start && F.end ? days(parseDate(F.start), parseDate(F.end)) : 0; F.start = e.target.value || F.start; if (F.start) F.end = isoOf(addDays(parseDate(F.start), Math.max(0, n))); }
+        else F.end = e.target.value && e.target.value >= F.start ? e.target.value : F.start;
+        const y = body.scrollTop; body.innerHTML = covForm98(); body.scrollTop = y;
+        return;
+      }
+      if (state.overlay === 'delay' && e.target.matches('[data-dl-date]')) {   // a new ETD / ETA picked → the days, and delayed or preponed
+        const F = state.delayForm; const j = F && findJob(F.no); if (!j) return;
+        const k = e.target.dataset.dlDate, from = j[k], to = parseDate(e.target.value);
+        if (!from || !to) return;
+        const n = days(from, to);
+        if (n === 0) { toast('That is the same date as now — pick another day.', { error: true }); }
+        else {
+          const other = $('#dlOther'); if (other) F.other = other.value; const note = $('#dlNote'); if (note) F.note = note.value;
+          const dir = n < 0 ? 'early' : 'late';
+          if (dir !== F.dir) { F.dir = dir; F.reason = ''; }
+          F.days = Math.min(90, Math.abs(n)); F.move[k] = true; F.moveSet98 = true;
+          if (Math.abs(n) > 90) toast('Up to 90 days at a time — set to 90.', { error: true });
+        }
+        const y = body.scrollTop; body.innerHTML = delayForm(); body.scrollTop = y;
+      }
+    });
+    body.addEventListener('submit', (e) => {
+      if (state.overlay !== 'cover' || e.target.id !== 'coverForm') return;
+      e.preventDefault(); covSubmit98();
+    });
+    // the chips box for BL numbers (Edit details and the job page)
+    document.addEventListener('keydown', (e) => {
+      const inp = e.target.closest && e.target.closest('.bln-in'); if (!inp) return;
+      const box = inp.closest('[data-bln]');
+      if (e.key === 'Enter' || e.key === ',' || e.key === ';') {
+        if (!inp.value.trim()) { if (e.key !== 'Enter') e.preventDefault(); return; }
+        e.preventDefault(); const err = blTake98(box); const nb = document.querySelector('#' + inp.id); blErr98((nb && nb.closest('[data-bln]')) || box, err);
+        if (state.blDraft98 && nb) state.blDraft98.list = blRead98(nb.closest('[data-bln]'));
+      } else if (e.key === 'Backspace' && !inp.value) {
+        const list = blRead98(box); if (!list.length) return;
+        e.preventDefault(); list.pop(); if (state.blDraft98) state.blDraft98.list = list; blDraw98(box, list, '');
+      }
+    });
+    document.addEventListener('paste', (e) => {
+      const inp = e.target.closest && e.target.closest('.bln-in'); if (!inp) return;
+      const txt = (e.clipboardData && e.clipboardData.getData('text')) || '';
+      if (!/[,;\n\r]/.test(txt)) return;
+      e.preventDefault(); inp.value = (inp.value + ',' + txt); const box = inp.closest('[data-bln]'); const err = blTake98(box);
+      const nb = document.querySelector('#' + inp.id); blErr98((nb && nb.closest('[data-bln]')) || box, err);
+    });
+    document.addEventListener('focusout', (e) => {
+      const inp = e.target.closest && e.target.closest('.bln-in'); if (!inp || !inp.value.trim() || state.blDrawing98) return;
+      const to = e.relatedTarget;
+      if (to && to.closest && to.closest('[data-bln-x]')) return;
+      const box = inp.closest('[data-bln]'); if (!box) return;
+      const err = blTake98(box); const nb = document.querySelector('#' + inp.id); blErr98((nb && nb.closest('[data-bln]')) || box, err);
+      if (state.blDraft98 && nb) state.blDraft98.list = blRead98(nb.closest('[data-bln]'));
+    });
+    $('#pop').addEventListener('submit', (e) => {
+      const f = e.target.closest('[data-bl-form]');
+      if (f) {
+        e.preventDefault();
+        if (!blFlush98(f)) return;
+        const j = findJob(f.dataset.blForm); if (!j) return;
+        const v = blRead98(f.querySelector('[data-bln]')).join(', ');
+        state.blDraft98 = null; closeOverlays();
+        if (v === blList98(j.blNo).join(', ')) return;
+        saveJob(j.jobNo, { blNo: v }, { toast: v ? blWord98(j) + ' numbers saved' : blWord98(j) + ' numbers cleared' });
+        return;
+      }
+      const m = e.target.closest('[data-adm-mail]');
+      if (m && isAdmin()) {
+        e.preventDefault();
+        const v = ($('#admMail98') || {}).value.trim(), err = $('#admMail98_err');
+        if (v && !mailOk98(v)) { if (err) err.textContent = 'That does not look like an email address.'; return; }
+        closeOverlays(); adminCall('ethixAdminEmail', [m.dataset.admMail, v], v ? 'Work email saved for ' + m.dataset.admMail : 'Work email removed');
+      }
+    });
+    $('#pop').addEventListener('click', (e) => {
+      const c = e.target.closest('[data-adm-mail-clear]'); if (!c || !isAdmin()) return;
+      closeOverlays(); adminCall('ethixAdminEmail', [c.dataset.admMailClear, ''], 'Work email removed');
+    });
+    window.addEventListener('hashchange', () => setTimeout(covReq98, 0));
+  }
+
   // -------------------------------------------------------------------- start
   function start() {
     if (savedSession()) document.body.classList.add('is-resuming');
@@ -5788,6 +6263,7 @@
     initPhase4();
     initV25();
     initV26();
+    initV298();
     if (savedSession()) resumeSession();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
