@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders, cover — v2.9.9)
+   enquiries, follow-ups, delays, close & archive, costing, reminders, cover — v2.9.10)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -828,7 +828,8 @@
     else if (canEdit()) items.push(
       { id: 'round', label: 'Follow-ups', icon: 'check', href: '#/follow-ups', count: roundRows(today0()).due.length + remDueCount() },
       { id: 'enquiries', label: 'Enquiries', icon: 'enq', href: '#/enquiries', count: enqNew().length },
-      { id: 'costing', label: 'Costing', icon: 'costing', href: '#/costing', count: costRows().open });
+      { id: 'costing', label: 'Costing', icon: 'costing', href: '#/costing', count: costRows().open },
+      { id: 'cover', label: 'Cover', icon: 'swap', href: '#/cover', count: covIncoming98().length });   // v2.9.10: requests waiting for you
     if (isSales()) items.splice(items.length - 1, 0, { id: 'costing', label: 'Costing', icon: 'costing', href: '#/costing', count: costRows().open });
     return items;
   }
@@ -836,7 +837,7 @@
     $('#navList').innerHTML = navItems().map((n) =>
       '<button type="button" class="nav-item" data-nav="' + n.id + '"' + (n.soon ? ' disabled title="Coming soon"' : n.act ? ' data-act="' + n.act + '"' : ' data-href="' + n.href + '"') + ' aria-label="' + esc(n.label) + '">' +
       '<span class="nav-ic">' + icon(n.icon) + (n.act === 'notif' ? '<span class="badge-dot" hidden></span>' : '') + '</span><span class="nav-label">' + esc(n.label) + '</span>' +
-      (n.soon ? '<span class="soon">SOON</span>' : n.count !== undefined ? '<span class="count' + (['round', 'enquiries'].includes(n.id) ? ' is-pill' : '')   /* v2.9.9: Costing is a plain count */ + '"' + (n.count ? '' : ' hidden') + '>' + n.count + '</span>' : '') + '</button>'
+      (n.soon ? '<span class="soon">SOON</span>' : n.count !== undefined ? '<span class="count' + (['round', 'enquiries', 'cover'].includes(n.id) ? ' is-pill' : '')   /* v2.9.9: Costing is a plain count */ + '"' + (n.count ? '' : ' hidden') + '>' + n.count + '</span>' : '') + '</button>'
     ).join('');
     $('#sideAvatar').textContent = initials(state.user);
     $('#sideName').textContent = state.user === 'MASTER' ? 'ADMIN' : state.user;
@@ -859,7 +860,7 @@
     const c = $('#navList [data-nav="jobs"] .count'); if (c) c.textContent = scoped().filter((j) => j.active).length;   // v2.8: your own jobs
     const p = $('#navList [data-nav="admin"] .count'); if (p && state.admin) p.textContent = state.admin.users.length;
     const setCount = (id, n) => { const el = $('#navList [data-nav="' + id + '"] .count'); if (el) { el.textContent = n; el.hidden = !n; } };
-    if (canEdit()) { setCount('round', roundRows(today0()).due.length + remDueCount()); setCount('enquiries', enqNew().length); }
+    if (canEdit()) { setCount('round', roundRows(today0()).due.length + remDueCount()); setCount('enquiries', enqNew().length); setCount('cover', covIncoming98().length); }   // v2.9.10: + cover
     if (isSales()) setCount('enquiries', enqOpen().length);
     if (canNote()) setCount('costing', costRows().open);
     drawBadges();
@@ -1287,7 +1288,7 @@
         (canEditJob(j) ? '<button type="button" class="status-pill tone-' + tone + '" data-act="status" aria-label="Job status: ' + sw + '. Change">' + esc(sw) + icon('chevron', 14) + '</button>' : '<span class="status-pill tone-' + tone + '">' + esc(sw) + '</span>') + '</div>' +
       '<header class="vhead' + anim + '" style="--d:30ms">' +
         '<div class="vh-titles"><div class="vh-idrow"><h1 class="vh-job">' + copyNo93(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + delayChip(j) + readyChip(j) + ownChip98(j) + '</div>' +
-        '<div class="vh-cust">' + esc(j.customer || '—') + '</div>' + (j.closed && j.closed.reason ? '<div class="vh-why">' + esc(j.closed.reason) + '</div>' : '') + remarksLine93(j) + blLine98(j) + '</div>' +
+        custBtn910(j) + (j.closed && j.closed.reason ? '<div class="vh-why">' + esc(j.closed.reason) + '</div>' : '') + remarksLine93(j) + blLine98(j) + '</div>' +
         (j.closed ? closedActions(j) : canEdit() ? '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="delay" title="Delay or prepone" aria-label="Delay or prepone">' + icon('clock', 16) + '<span class="bl-full">Delay / prepone</span><span class="bl-short">Delay</span></button>' + (DN_TYPES93.includes(j.type) ? '<button type="button" class="btn-ghost" data-act="dnote" title="Delivery note (Word)" aria-label="Delivery note">' + icon('truck', 16) + '<span class="bl-full">Delivery note</span><span class="bl-short">Delivery note</span></button>' : '') + '<button type="button" class="btn-ghost" data-act="duplicate" title="Duplicate job" aria-label="Duplicate job">' + icon('copy', 16) + '<span>Duplicate</span></button><button type="button" class="btn-ghost" data-act="edit" title="Edit details" aria-label="Edit details">' + icon('edit', 16) + '<span class="bl-full">Edit details</span><span class="bl-short">Edit</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>'
           : '<div class="vh-actions is-ro"><span class="ro-chip">' + icon('lock', 14) + '<span>UPDATED BY ' + esc(j.cs || 'CUSTOMER SERVICE') + '</span></span>' + (canNote() ? '<button type="button" class="btn-brutal btn-icon" data-act="focus-note">' + icon('note', 16) + '<span>ADD A NOTE</span></button>' : '') + '</div>') +
       '</header>' +
@@ -2167,11 +2168,7 @@
 
   // ---------- follow-ups ----------
   function planFor(j) { const p = state.follow.plan[keyOf(j)]; return planOk93(p) ? p : j.hold ? 'WEEKLY' : 'DAILY'; }   // v2.9.3: weekdays and dates too
-  function checksFor(j) { return state.follow.checks[keyOf(j)] || []; }
-  function followState(j, t0) {
-    const every = planFor(j), checks = checksFor(j), last = checks[0] || null;
-    return followState93(j, t0, every, checks, last);   // v2.9.3
-  }
+  // checksFor, followState, remarksToday, lastRemark — v2.9.10 versions (remarks on their own) further down
   function roundRows(t0, list) {
     const rows = (list || mineJobs().filter((j) => j.active)).map((j) => ({ j, f: followState(j, t0) }));
     return {
@@ -2194,7 +2191,7 @@
     if (state.followBusy.has(K)) return;
     const prev = (state.follow.checks[K] || []).slice();
     const t0 = today0();
-    const mineAll = prev.filter((c) => days(dayOf(c[0]), t0) === 0 && c[1] === state.user);
+    const mineAll = prev.filter((c) => !isNote910(c) && days(dayOf(c[0]), t0) === 0 && c[1] === state.user);   // v2.9.10: checks only
     const had = mineAll[0] || null, text = String(remark || '').trim();
     if (had && !text) return;
     const blank = had && mineAll.find((c) => !c[2]);
@@ -2218,7 +2215,8 @@
   async function followUndo(no) {
     const j = findJob(no); if (!j) return;
     const K = keyOf(j), prev = (state.follow.checks[K] || []).slice(), t0 = today0();
-    state.follow.checks[K] = prev.filter((c) => !(days(dayOf(c[0]), t0) === 0 && c[1] === state.user));
+    const mine = (c) => !isNote910(c) && days(dayOf(c[0]), t0) === 0 && c[1] === state.user;   // v2.9.10: your remarks stay (as remarks on their own)
+    state.follow.checks[K] = prev.filter((c) => !(mine(c) && !c[2])).map((c) => (mine(c) ? [c[0], c[1], c[2], 'R'] : c));
     closeOverlays(); rerender(); updateNav();
     setSaving(1);
     try { const res = await api.call('ethixFollowUndo', [j.jobNo]); if (!res || !res.ok) throw new Error((res && res.error) || 'Not undone.'); toast('Check undone'); }
@@ -2254,7 +2252,7 @@
     const hist = state.followHist[K];
     const windowStart = addDays(t0, -(state.follow.days || 35));
     if (!hist && first < windowStart) loadFollowHistory(j);
-    const all = hist ? hist.filter((c) => dayOf(c[0]) < windowStart).concat(checksFor(j)) : checksFor(j);   // v2.8
+    const all = hist ? hist.filter((c) => !isNote910(c) && dayOf(c[0]) < windowStart).concat(checksFor(j)) : checksFor(j);   // v2.8 · v2.9.10: checks only
     const by = {};
     all.forEach((c) => { const d = dayOf(c[0]); const k = d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate(); (by[k] = by[k] || []).push(c); });
     const lead = (first.getDay() + 6) % 7;                         // Monday first
@@ -2720,8 +2718,9 @@
       const f = e.target.closest('[data-remark]'); if (!f) return;
       e.preventDefault();
       const no = f.dataset.remark, text = $('#remarkInput').value.trim();
+      if (!text) { $('#remarkInput').focus(); return; }   // v2.9.10: a remark on its own — it never checks the job (the circle does)
       closeOverlays();
-      followCheck(no, text);
+      followNote910(no, text);
     };
     $('#pop').addEventListener('click', onPop);
     $('#pop').addEventListener('submit', onPopSubmit);
@@ -3233,7 +3232,7 @@
     const xlsBtn = D && (D.lines.length || (C && C.draft && C.draft.lines.length)) ? '<button type="button" class="btn-ghost" data-act="cost-xlsx" title="Download Excel">' + icon('download', 16) + '<span>Excel</span></button>' : '';
     return '<header class="cost-head">' +
       '<div class="ch-main"><div class="vh-idrow"><h1 class="vh-job">' + copyNo93(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + '</div>' +
-        '<div class="vh-cust">' + esc(j.customer || '—') + '</div>' +
+        custBtn910(j) +
         '<div class="ch-meta"><span>' + esc(j.mode === 'misc' ? (j.against ? 'AGAINST ' + j.against : 'COSTING ONLY') : j.route) + '</span><span>CS · ' + esc(j.cs || '—') + '</span>' + (j.sales ? '<span>SALES · ' + esc(j.sales) + '</span>' : '') +
         '<button type="button" class="link-btn" data-job="' + esc(j.jobNo) + '">Open job →</button></div></div>' +
       '<div class="ch-actions">' + xlsBtn + unlockBtn + saveBtn + doneBtn + '</div>' +
@@ -4193,19 +4192,13 @@
   }
 
   // ================================================================ v2.7 — follow-up remarks (several a day)
-  function remarksToday(f, t0) { return f.checks.filter((c) => c[2] && days(dayOf(c[0]), t0) === 0); }
   function remarkList(list, max) {
     const show = max ? list.slice(0, max) : list;
     return '<ol class="fu-remarks">' + show.map((c) => '<li><span class="fr-when">' + esc(hm(c[0])) + (c[1] !== state.user ? ' · ' + esc(nice(c[1])) : '') + '</span><span class="fr-text">' + esc(c[2]) + '</span></li>').join('') + '</ol>' +
       (max && list.length > max ? '<span class="fr-more">+' + (list.length - max) + ' more today</span>' : '');
   }
   // The newest remark of the day the job was last checked (and how many that day).
-  function lastRemark(f) {
-    if (!f.last) return null;
-    const d0 = +dayOf(f.last[0]);
-    const list = f.checks.filter((c) => c[2] && +dayOf(c[0]) === d0).sort((a, b) => b[0] - a[0]);
-    return list.length ? { text: list[0][2], n: list.length } : null;
-  }
+  // lastRemark — v2.9.10 version further down
 
   // ================================================================ v2.7 — cutoffs worked out from ETD
   // Same job types as the old ERP (SFEF, SFEL, AFE): ED cutoff = ETD − 2 · SI cutoff = ETD − 4 (DG: ETD − 5)
@@ -4964,19 +4957,7 @@
   }
 
   // ================================================================ v2.9.1 — Home: four tall tiles, each made for its job
-  function watchTile91(m, anim) {
-    const chip = (w) => (w.level === 'urgent' ? 'chip chip-urgent' : 'chip chip-amber-dark');
-    const item = (w, more) => '<button type="button" class="wt li' + (more ? ' is-more' : '') + '" ' + wtAttr99(w) + '>' +   // v2.9.9: tap → its choice card
-      '<span class="wt-top"><span class="wt-job">' + changedDot(w.j) + esc(w.j.jobNo) + ownTag98(w.j) + '</span><span class="' + chip(w) + '">' + (w.level === 'urgent' ? icon('alert', 12) : '') + esc(w.when) + '</span></span>' +
-      '<span class="wt-what">' + esc(w.what) + '</span><span class="wt-cust">' + esc(w.j.customer || '—') + ' · ' + esc(nice(w.j.route)) + '</span></button>';
-    const F = fri99(today0()) ? 2 : 0;   // v2.9.9: Friday — the weekend is today's
-    const G = [['over', 'OVERDUE', (w) => w.d < 0 && w.d >= -21], ['today', F ? 'TODAY + WEEKEND' : 'TODAY', (w) => w.d >= 0 && w.d <= F], ['soon', 'NEXT 3 DAYS', (w) => w.d > F], ['long', 'OVERDUE 3+ WEEKS', (w) => w.d < -21]];
-    let n = 0;
-    const body = G.map(([id, label, f]) => { const L = m.watch.filter(f).slice(0, LIST_MAX); if (!L.length) return ''; const head = '<div class="wt-gh is-' + id + (n >= 6 ? ' is-more' : '') + '">' + label + '<b>' + L.length + '</b></div>'; return head + L.map((w) => item(w, n++ >= 6)).join(''); }).join('');
-    return '<section class="tile tile-ink t-watch' + anim + '" style="--d:250ms" aria-labelledby="watchTitle">' +
-      '<div class="tile-head"><h2 class="tile-title" id="watchTitle">TODAY’S WATCH</h2><span class="watch-sub">' + (m.watch.length ? m.watch.length + ' to do' : 'All clear') + '</span></div>' +
-      '<div class="tile-body">' + (body || empty('check', 'Nothing due in the next 3 days.')) + '</div>' + seeAll('watch', m.watch.length, true) + '</section>';
-  }
+  // watchTile91 — v2.9.10 version (one row per job) further down
   // the week as an agenda: a strip of seven days (how much sails and arrives each day), then day by day.
   // v2.9.3: calendar weeks Monday–Sunday with ‹ › (last week, next week …); days already gone say what sailed or arrived.
   const monday93 = (d) => addDays(d, -((d.getDay() + 6) % 7));
@@ -5167,9 +5148,7 @@
     } else if (kind === 'hold') {
       html = list.slice().sort((a, b) => tm(a.etd) - tm(b.etd)).map((j) => row(j, j.remarks ? '<span class="dr-note">“' + esc(j.remarks) + '”</span>' : '', when(j))).join('');
     } else if (kind === 'watch') {
-      const F = fri99(t0) ? 2 : 0, R = (w) => row(w.j, '<span class="dr-next"><span class="dr-what">' + esc(w.say) + '</span></span>', '<span class="dr-side is-' + (w.level === 'urgent' ? 'red' : 'amber') + '"><b>' + esc(w.when) + '</b></span>', wtAttr99(w));   // v2.9.9: tap → its choice card; grouped as on Home
-      html = group('OVERDUE', m.watch.filter((w) => w.d < 0 && w.d >= -21).map(R), 'red') + group(F ? 'TODAY + WEEKEND' : 'TODAY', m.watch.filter((w) => w.d >= 0 && w.d <= F).map(R), 'red') +
-        group('NEXT 3 DAYS', m.watch.filter((w) => w.d > F).map(R), 'amber') + group('OVERDUE 3+ WEEKS', m.watch.filter((w) => w.d < -21).map(R));
+      html = watchPanel910(m, t0, row, main);   // v2.9.10: one row per job, its tasks together; v2.9.9: tap a task → its choice card
     } else if (kind === 'week') {
       const pick = wkPick92();
       const ev = wkEvents93(m, wkStart93()).filter((e) => !pick || +dayOf(e.d) === +pick);   // v2.9.3: the week shown on Home
@@ -5438,7 +5417,7 @@
       const fit = $('#view').classList.contains('is-fit');
       if (!body || !fit) { if (bar) bar.remove(); return; }
       const B = body.getBoundingClientRect();
-      const rows = Array.from(body.querySelectorAll('[data-job], [data-q99], .rm')).filter((r) => r.offsetParent !== null);   // v2.9.9: + tasks with a choice card
+      const rows = Array.from(body.querySelectorAll('[data-job], [data-q99], .rm, .is-multi910')).filter((r) => r.offsetParent !== null && (r.classList.contains('is-multi910') || !r.closest('.is-multi910')));   // v2.9.9: + tasks with a choice card · v2.9.10: a job with several tasks is one row
       const n = rows.filter((r) => r.getBoundingClientRect().bottom > B.bottom + 2).length;   // not fully in sight
       if (!n) { if (bar) bar.remove(); return; }
       const list = t.classList.contains('t-watch') ? 'watch' : t.classList.contains('t-week') ? 'week' : '';
@@ -6440,45 +6419,9 @@
     return '<button type="button" class="rr-note' + (n ? ' has-note' : '') + '" data-rmk-open="' + esc(j.jobNo) + '" aria-label="' + esc('Remarks for ' + j.jobNo + (n ? ' — ' + n + ' today' : '')) + '" title="Remarks">' + icon('remark', 17) + (n ? '<b>' + n + '</b>' : '') + '</button>';
   }
   const rmkDay99 = (t, t0) => { const d = days(dayOf(t), t0); return d === 0 ? 'TODAY' : d === 1 ? 'YESTERDAY' : (DOW[dayOf(t).getDay()] + ' ' + fmt(dayOf(t))).toUpperCase(); };
-  function rmkAll99(j) {   // every remark known here, newest first (the last 35 days, and older ones once loaded)
-    const K = keyOf(j), seen = new Set(), out = [];
-    checksFor(j).concat(state.followHist[K] || []).forEach((c) => { const k = c[0] + '|' + c[1]; if (!c[2] || seen.has(k)) return; seen.add(k); out.push(c); });
-    return out.sort((a, b) => b[0] - a[0]);
-  }
-  const rmkCard99 = (no) => () => {
-    const j = findJob(no); if (!j) return '';
-    const t0 = today0(), f = followState(j, t0), R = state.rmk99 && state.rmk99.no === j.jobNo ? state.rmk99 : {};
-    const can = canEditJob(j) && j.active;
-    const all = rmkAll99(j), list = all.slice(0, R.more ? 30 : 8);
-    let day = '', html = '';
-    list.forEach((c) => {
-      const dl = rmkDay99(c[0], t0), mine = c[1] === state.user && canEditJob(j);
-      if (dl !== day) { day = dl; html += '<div class="rk-day">' + dl + '</div>'; }
-      const ed = R.edit === c[0] && mine;
-      html += '<div class="rk-item' + (ed ? ' is-edit' : '') + '"><div class="rk-top"><span class="rk-when"><b>' + hm(c[0]) + '</b> · ' + esc(c[1] === state.user ? 'You' : nice(c[1])) + '</span>' +
-        (mine && !ed ? '<button type="button" class="rk-edit" data-rmk-edit="' + c[0] + '">' + icon('edit', 13) + 'Edit</button>' : '') + '</div>' +
-        (ed ? '<form class="rk-form" data-rmk-save="' + c[0] + '" data-no="' + esc(j.jobNo) + '"><textarea id="rmkEdit99" maxlength="200" rows="3" aria-label="Edit the remark">' + esc(c[2]) + '</textarea>' +
-          '<div class="rk-acts"><button type="button" class="btn-ghost" data-rmk-cancel>Cancel</button><button type="submit" class="btn-brutal" data-primary>SAVE</button></div>' +
-          '<div class="pop-hint">Clear the text and save to remove this remark.</div></form>' : '<p class="rk-text">' + esc(c[2]) + '</p>') + '</div>';
-    });
-    const add = !can ? '' : R.add ? '<form class="pop-form rk-addf" data-remark="' + esc(j.jobNo) + '"><label class="pop-label" for="remarkInput">' + (f.mineToday ? 'Add a remark' : 'Remark (marks the job checked today)') + '</label><input type="text" id="remarkInput" maxlength="200" value="" placeholder="Type a remark" autocomplete="off">' +
-        '<button type="submit" class="btn-brutal pop-main" data-primary>' + (f.mineToday ? 'ADD REMARK' : 'CHECK WITH REMARK') + '</button></form>'
-      : '<button type="button" class="btn-ghost pop-wide rk-add" data-rmk-add="' + esc(j.jobNo) + '">' + icon('remark', 16) + 'Add remark</button>';
-    const mineToday = remarksToday(f, t0).some((c) => c[1] === state.user);
-    return '<div class="pop-title">' + (f.mineToday ? 'Checked today ' + hm(f.mineToday[0]) : 'Remarks') + '</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p>' +
-      (html ? '<div class="rk-list">' + html + '</div>' : '<p class="pop-text rk-none">No remarks yet.</p>') +
-      (all.length > list.length ? '<button type="button" class="link-btn quiet rk-more" data-rmk-more>Show older remarks</button>' : '') + add +
-      (can && f.mineToday ? '<button type="button" class="link-btn quiet rk-undo" data-undo-check="' + esc(j.jobNo) + '">' + (mineToday ? 'Undo today’s check and your remarks' : 'Undo today’s check') + '</button>' : '');
-  };
-  const undoCard99 = (no) => () => {   // tapping a checked circle: the check, and Undo (remarks have their own button)
-    const j = findJob(no); if (!j) return '';
-    const f = followState(j, today0()), mine = f.mineToday;
-    if (!mine) return '<p class="pop-text">Not checked today.</p>';
-    const rt = remarksToday(f, today0()).some((c) => c[1] === state.user);
-    return '<div class="pop-title">Checked today ' + hm(mine[0]) + '</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p>' +
-      '<button type="button" class="btn-ghost pop-wide" data-undo-check="' + esc(j.jobNo) + '">' + (rt ? 'Undo today’s check and your remarks' : 'Undo today’s check') + '</button>' +
-      '<button type="button" class="btn-ghost pop-wide rk-add" data-rmk-open="' + esc(j.jobNo) + '">' + icon('remark', 16) + 'Remarks</button>';
-  };
+  // rmkAll99, rmkCard99, undoCard99, rmkSave99 — v2.9.10 versions further down
+
+
   function rmkOpen99(anchor, no, how) {
     const j = findJob(no); if (!j) return;
     const st = { no: j.jobNo, edit: null, add: !!how.add, more: false, peek: !!(how.peek && usePop()) };
@@ -6503,30 +6446,7 @@
   function rmkRedraw99(focus) { refreshOverlay(); if (focus) setTimeout(() => { const i = document.getElementById(focus); if (i) { i.focus(); if (i.value !== undefined && i.setSelectionRange) i.setSelectionRange(i.value.length, i.value.length); } }, 30); }
 
   // edit (or clear) one of your own remarks — any day
-  async function rmkSave99(no, t, text) {
-    const j = findJob(no); if (!j || !canEdit()) return;
-    const K = keyOf(j); t = +t; text = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 200);
-    const lists = [state.follow.checks[K], state.followHist[K]].filter(Array.isArray);
-    const before = lists.map((L) => L.map((c) => c.slice()));
-    const hit = lists.map((L) => L.find((c) => c[0] === t && c[1] === state.user)).find(Boolean);
-    if (!hit) { toast('That remark is not there any more. Refresh and try again.', { error: true }); return; }
-    if ((hit[2] || '') === text) { state.rmk99.edit = null; rmkRedraw99(); return; }
-    const sameDay = (c) => c !== hit && c[1] === state.user && +dayOf(c[0]) === +dayOf(t);
-    const others = lists.some((L) => L.some(sameDay));
-    lists.forEach((L) => { const i = L.findIndex((c) => c[0] === t && c[1] === state.user); if (i < 0) return; if (!text && others) L.splice(i, 1); else L[i][2] = text; });
-    if (state.rmk99) state.rmk99.edit = null;
-    rerender(); refreshOverlay(); updateNav();
-    setSaving(1);
-    try {
-      const res = await api.call('ethixFollowRemark', [j.jobNo, t, text]);
-      if (!res || !res.ok) throw new Error((res && res.error) || 'Not saved.');
-      toast(text ? 'Remark updated' : 'Remark removed');
-    } catch (e) {
-      lists.forEach((L, i) => { L.length = 0; before[i].forEach((c) => L.push(c)); });
-      rerender(); refreshOverlay();
-      if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'Editing remarks needs the v2.9.9 Code.gs update.' : e.message, { error: true });
-    } finally { setSaving(-1); }
-  }
+
 
   // ---------- Follow-ups: the order — overdue / today first, then cutoff tomorrow, then the rest; inside each, office hours ----------
   function dueTier99(j) { const r = j.next ? j.next.rank : 9; return r === 0 ? 0 : r === 1 ? 1 : 2; }
@@ -6704,6 +6624,220 @@
   function wtAttr99(w) { return w.field && canEditJob(w.j) ? 'data-q99="' + esc(w.j.jobNo) + '" data-q99-f="' + w.field + '"' : 'data-job="' + esc(w.j.jobNo) + '"'; }
 
 
+  // ==================================================================== v2.9.10
+  // Amal's 3 Nov list: TODAY'S WATCH one row per job · a remark on its own (it never checks the job; the circle does) ·
+  // a customer's active jobs from the job page · Cover in the laptop menu.
+
+  // ---------- TODAY'S WATCH: one row per job, its tasks together ----------
+  // The watch is already in order (most urgent first), so a job's first task leads: the job sits in that task's group,
+  // its other tasks follow it in the same row. A job with one task looks as before.
+  function watchJobs910(watch) {
+    const by = new Map(), out = [];
+    watch.forEach((w) => { const k = keyOf(w.j); let g = by.get(k); if (!g) { g = { j: w.j, lead: w, tasks: [] }; by.set(k, g); out.push(g); } g.tasks.push(w); });
+    return out;
+  }
+  function watchGroups910(t0) {   // Friday: Saturday and Sunday are today's (v2.9.9)
+    const F = fri99(t0) ? 2 : 0;
+    return [['over', 'OVERDUE', (w) => w.d < 0 && w.d >= -21, 'red'], ['today', F ? 'TODAY + WEEKEND' : 'TODAY', (w) => w.d >= 0 && w.d <= F, 'red'],
+      ['soon', 'NEXT 3 DAYS', (w) => w.d > F, 'amber'], ['long', 'OVERDUE 3+ WEEKS', (w) => w.d < -21, '']];
+  }
+  const wtChip910 = (w) => '<span class="' + (w.level === 'urgent' ? 'chip chip-urgent' : 'chip chip-amber-dark') + '">' + (w.level === 'urgent' ? icon('alert', 12) : '') + esc(w.when) + '</span>';
+  function watchTile91(m, anim) {
+    const item = (w, more) => '<button type="button" class="wt li' + (more ? ' is-more' : '') + '" ' + wtAttr99(w) + '>' +   // one task: tap → its choice card (v2.9.9)
+      '<span class="wt-top"><span class="wt-job">' + changedDot(w.j) + esc(w.j.jobNo) + ownTag98(w.j) + '</span>' + wtChip910(w) + '</span>' +
+      '<span class="wt-what">' + esc(w.what) + '</span><span class="wt-cust">' + esc(w.j.customer || '—') + ' · ' + esc(nice(w.j.route)) + '</span></button>';
+    const many = (g, more) => '<div class="wt li is-multi910' + (more ? ' is-more' : '') + '">' +   // several: the job opens the job, each task its card
+      '<button type="button" class="wt-head910" data-job="' + esc(g.j.jobNo) + '"><span class="wt-top"><span class="wt-job">' + changedDot(g.j) + esc(g.j.jobNo) + ownTag98(g.j) + '</span><span class="wt-n910">' + g.tasks.length + ' TO DO</span></span>' +
+        '<span class="wt-cust">' + esc(g.j.customer || '—') + ' · ' + esc(nice(g.j.route)) + '</span></button>' +
+      '<span class="wt-tasks910">' + g.tasks.map((w) => '<button type="button" class="wt-t910" ' + wtAttr99(w) + '><span class="wt-what">' + esc(w.what) + '</span>' + wtChip910(w) + '</button>').join('') + '</span></div>';
+    const G = watchJobs910(m.watch);
+    let n = 0;
+    const body = watchGroups910(today0()).map(([id, label, f]) => {
+      const L = G.filter((g) => f(g.lead)).slice(0, LIST_MAX); if (!L.length) return '';
+      const head = '<div class="wt-gh is-' + id + (n >= 6 ? ' is-more' : '') + '">' + label + '<b>' + L.reduce((a, g) => a + g.tasks.length, 0) + '</b></div>';   // the group counts its tasks
+      return head + L.map((g) => (g.tasks.length > 1 ? many(g, n++ >= 6) : item(g.lead, n++ >= 6))).join('');
+    }).join('');
+    return '<section class="tile tile-ink t-watch' + anim + '" style="--d:250ms" aria-labelledby="watchTitle">' +
+      '<div class="tile-head"><h2 class="tile-title" id="watchTitle">TODAY’S WATCH</h2><span class="watch-sub">' + (m.watch.length ? m.watch.length + ' to do' : 'All clear') + '</span></div>' +
+      '<div class="tile-body">' + (body || empty('check', 'Nothing due in the next 3 days.')) + '</div>' + (G.length > 6 ? seeAll('watch', m.watch.length, true) : '') + '</section>';
+  }
+  // the side panel: the same rows (white), grouped as on Home
+  function watchPanel910(m, t0, row, main) {
+    const tone = (w) => (w.level === 'urgent' ? 'red' : 'amber');
+    const one = (w) => row(w.j, '<span class="dr-next"><span class="dr-what">' + esc(w.say) + '</span></span>', '<span class="dr-side is-' + tone(w) + '"><b>' + esc(w.when) + '</b></span>', wtAttr99(w));
+    const many = (g) => '<div class="dr-row is-multi910"><button type="button" class="dr-head910" data-job="' + esc(g.j.jobNo) + '">' + main(g.j, '') +
+        '<span class="dr-side is-' + tone(g.lead) + '"><span class="dr-k">TO DO</span><b>' + g.tasks.length + ' tasks</b></span></button>' +
+      '<div class="dr-tasks910">' + g.tasks.map((w) => '<button type="button" class="dr-t910" ' + wtAttr99(w) + '><span class="dr-what">' + esc(w.say) + '</span><span class="dr-when910 is-' + tone(w) + '">' + esc(w.when) + '</span></button>').join('') + '</div></div>';
+    const G = watchJobs910(m.watch);
+    return watchGroups910(t0).map(([id, label, f, tn]) => {
+      const L = G.filter((g) => f(g.lead)); if (!L.length) return '';
+      return '<div class="dr-gh' + (tn ? ' is-' + tn : '') + '"><span>' + label + '</span><b>' + L.reduce((a, g) => a + g.tasks.length, 0) + '</b></div>' + L.map((g) => (g.tasks.length > 1 ? many(g) : one(g.lead))).join('');
+    }).join('');
+  }
+
+  // ---------- Follow-ups: a remark on its own ----------
+  // A row of state.follow.checks is [time, user, remark] for a check, [time, user, remark, 'R'] for a remark on its own.
+  // Checks decide checked / due / the calendar; remarks of both kinds show on the row and in the remark card.
+  const isNote910 = (c) => !!c && c[3] === 'R';
+  function rowsFor910(j) { return state.follow.checks[keyOf(j)] || []; }
+  function checksFor(j) { return rowsFor910(j).filter((c) => !isNote910(c)); }
+  function followState(j, t0) {
+    const every = planFor(j), checks = checksFor(j), last = checks[0] || null;
+    const f = followState93(j, t0, every, checks, last);   // v2.9.3
+    f.all = rowsFor910(j);
+    return f;
+  }
+  function remarksToday(f, t0) { return (f.all || f.checks).filter((c) => c[2] && days(dayOf(c[0]), t0) === 0); }
+  // The remarks of the newest day there is one: the day of the last check, or a later day with a remark on its own.
+  function lastRemark(f) {
+    const all = f.all || f.checks;
+    let d0 = f.last ? +dayOf(f.last[0]) : null;
+    all.forEach((c) => { if (isNote910(c) && c[2]) { const d = +dayOf(c[0]); if (d0 === null || d > d0) d0 = d; } });
+    if (d0 === null) return null;
+    const list = all.filter((c) => c[2] && +dayOf(c[0]) === d0).sort((a, b) => b[0] - a[0]);
+    return list.length ? { text: list[0][2], n: list.length } : null;
+  }
+  async function followNote910(no, text) {
+    const j = findJob(no); if (!j || !canEdit()) return;
+    const K = keyOf(j);
+    text = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (!text) return;
+    const entry = [Date.now(), state.user, text, 'R'];
+    state.follow.checks[K] = [entry].concat(state.follow.checks[K] || []);
+    rerender(); refreshOverlay(); updateNav();
+    setSaving(1);
+    try {
+      const res = await api.call('ethixFollowNote', [j.jobNo, text]);
+      if (!res || !res.ok) throw new Error((res && res.error) || 'Not saved.');
+      if (res.t) entry[0] = res.t;
+      toast('Remark added', { action: { label: 'Undo', fn: () => rmkSave99(j.jobNo, entry[0], '') } });
+    } catch (e) {
+      state.follow.checks[K] = (state.follow.checks[K] || []).filter((c) => c !== entry);
+      rerender(); refreshOverlay(); updateNav();
+      if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'Remarks without a check need the v2.9.10 Code.gs update.' : 'Not saved: ' + e.message, { error: true });
+    } finally { setSaving(-1); }
+  }
+  function rmkAll99(j) {   // every remark known here, newest first (the last 35 days, and older ones once loaded) — checks' and on their own
+    const K = keyOf(j), seen = new Set(), out = [];
+    rowsFor910(j).concat(state.followHist[K] || []).forEach((c) => { const k = c[0] + '|' + c[1]; if (!c[2] || seen.has(k)) return; seen.add(k); out.push(c); });
+    return out.sort((a, b) => b[0] - a[0]);
+  }
+  const rmkCard99 = (no) => () => {   // v2.9.10: adding a remark never checks the job
+    const j = findJob(no); if (!j) return '';
+    const t0 = today0(), f = followState(j, t0), R = state.rmk99 && state.rmk99.no === j.jobNo ? state.rmk99 : {};
+    const can = canEditJob(j) && j.active;
+    const all = rmkAll99(j), list = all.slice(0, R.more ? 30 : 8);
+    let day = '', html = '';
+    list.forEach((c) => {
+      const dl = rmkDay99(c[0], t0), mine = c[1] === state.user && canEditJob(j);
+      if (dl !== day) { day = dl; html += '<div class="rk-day">' + dl + '</div>'; }
+      const ed = R.edit === c[0] && mine;
+      html += '<div class="rk-item' + (ed ? ' is-edit' : '') + '"><div class="rk-top"><span class="rk-when"><b>' + hm(c[0]) + '</b> · ' + esc(c[1] === state.user ? 'You' : nice(c[1])) + '</span>' +
+        (mine && !ed ? '<button type="button" class="rk-edit" data-rmk-edit="' + c[0] + '">' + icon('edit', 13) + 'Edit</button>' : '') + '</div>' +
+        (ed ? '<form class="rk-form" data-rmk-save="' + c[0] + '" data-no="' + esc(j.jobNo) + '"><textarea id="rmkEdit99" maxlength="200" rows="3" aria-label="Edit the remark">' + esc(c[2]) + '</textarea>' +
+          '<div class="rk-acts"><button type="button" class="btn-ghost" data-rmk-cancel>Cancel</button><button type="submit" class="btn-brutal" data-primary>SAVE</button></div>' +
+          '<div class="pop-hint">Clear the text and save to remove this remark.</div></form>' : '<p class="rk-text">' + esc(c[2]) + '</p>') + '</div>';
+    });
+    const add = !can ? '' : R.add ? '<form class="pop-form rk-addf" data-remark="' + esc(j.jobNo) + '"><label class="pop-label" for="remarkInput">Add a remark</label><input type="text" id="remarkInput" maxlength="200" value="" placeholder="Type a remark" autocomplete="off">' +
+        '<button type="submit" class="btn-brutal pop-main" data-primary>ADD REMARK</button></form>'
+      : '<button type="button" class="btn-ghost pop-wide rk-add" data-rmk-add="' + esc(j.jobNo) + '">' + icon('remark', 16) + 'Add remark</button>';
+    return '<div class="pop-title">' + (f.mineToday ? 'Checked today ' + hm(f.mineToday[0]) : 'Remarks') + '</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p>' +
+      (html ? '<div class="rk-list">' + html + '</div>' : '<p class="pop-text rk-none">No follow-up remarks yet.</p>') +
+      (all.length > list.length ? '<button type="button" class="link-btn quiet rk-more" data-rmk-more>Show older remarks</button>' : '') + add +
+      (can && f.mineToday ? '<button type="button" class="link-btn quiet rk-undo" data-undo-check="' + esc(j.jobNo) + '">Undo today’s check</button>' : '');
+  };
+  const undoCard99 = (no) => () => {   // tapping a checked circle: the check, and Undo (your remarks stay — v2.9.10)
+    const j = findJob(no); if (!j) return '';
+    const f = followState(j, today0()), mine = f.mineToday;
+    if (!mine) return '<p class="pop-text">Not checked today.</p>';
+    return '<div class="pop-title">Checked today ' + hm(mine[0]) + '</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p>' +
+      '<button type="button" class="btn-ghost pop-wide" data-undo-check="' + esc(j.jobNo) + '">Undo today’s check</button>' +
+      '<button type="button" class="btn-ghost pop-wide rk-add" data-rmk-open="' + esc(j.jobNo) + '">' + icon('remark', 16) + 'Remarks</button>';
+  };
+  // edit (or clear) one of your own remarks — any day. Cleared: a remark on its own goes; a check's remark goes and the check
+  // stays, unless you have another check that day on that job (then the line goes) — as the server does.
+  async function rmkSave99(no, t, text) {
+    const j = findJob(no); if (!j || !canEdit()) return;
+    const K = keyOf(j); t = +t; text = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const lists = [state.follow.checks[K], state.followHist[K]].filter(Array.isArray);
+    const before = lists.map((L) => L.map((c) => c.slice()));
+    const hit = lists.map((L) => L.find((c) => c[0] === t && c[1] === state.user)).find(Boolean);
+    if (!hit) { toast('That remark is not there any more. Refresh and try again.', { error: true }); return; }
+    if ((hit[2] || '') === text) { if (state.rmk99) state.rmk99.edit = null; rmkRedraw99(); return; }
+    const sameDay = (c) => c[0] !== t && !isNote910(c) && c[1] === state.user && +dayOf(c[0]) === +dayOf(t);
+    const drop = !text && (isNote910(hit) || lists.some((L) => L.some(sameDay)));
+    lists.forEach((L) => { const i = L.findIndex((c) => c[0] === t && c[1] === state.user); if (i < 0) return; if (drop) L.splice(i, 1); else L[i][2] = text; });
+    if (state.rmk99) state.rmk99.edit = null;
+    rerender(); refreshOverlay(); updateNav();
+    setSaving(1);
+    try {
+      const res = await api.call('ethixFollowRemark', [j.jobNo, t, text]);
+      if (!res || !res.ok) throw new Error((res && res.error) || 'Not saved.');
+      toast(text ? 'Remark updated' : 'Remark removed');
+    } catch (e) {
+      lists.forEach((L, i) => { L.length = 0; before[i].forEach((c) => L.push(c)); });
+      rerender(); refreshOverlay();
+      if (e.kind !== 'auth') toast(/not available/i.test(e.message) ? 'Editing remarks needs the v2.9.9 Code.gs update.' : e.message, { error: true });
+    } finally { setSaving(-1); }
+  }
+
+  // ---------- a customer's active jobs: tap the customer's name on the job page (and the costing page) ----------
+  const custKey910 = (s) => String(s || '').toUpperCase().replace(/\s+/g, ' ').trim();
+  function custJobs910(j) { const k = custKey910(j && j.customer); return k ? state.jobs.filter((x) => x.active && custKey910(x.customer) === k) : []; }
+  function custBtn910(j) {
+    if (!custKey910(j.customer)) return '<div class="vh-cust">—</div>';
+    const n = custJobs910(j).length, show = n > 1 || (n === 1 && !j.active);
+    return '<div class="vh-cust"><button type="button" class="cust910" data-cust910="' + esc(j.jobNo) + '" aria-haspopup="dialog" aria-label="' + esc('Active jobs for ' + j.customer) + '">' +
+      '<span class="cust-name910">' + esc(j.customer) + '</span>' + (show ? '<span class="cust-n910">' + n + (n === 1 ? ' ACTIVE JOB' : ' ACTIVE JOBS') + icon('chevron', 12) + '</span>' : '') + '</button></div>';
+  }
+  const custCard910 = (no) => () => {
+    const j = findJob(no); if (!j) return '';
+    const t0 = today0(), L = custJobs910(j);
+    const mine = (x) => !canEdit() || x.cs === state.user || covered98(x);
+    const stage = (x) => (x.mode === 'misc' ? 'nodate' : stageOf91(x, t0));
+    const rank = { before: 0, sea: 1, arrived: 2, nodate: 3 };
+    const tm = (x) => { const s = stage(x), d = s === 'before' ? x.etd : s === 'nodate' ? null : x.eta; return d ? (s === 'arrived' ? -d : +d) : 9e15; };
+    const sort = (a, b) => rank[stage(a)] - rank[stage(b)] || tm(a) - tm(b) || String(a.jobNo).localeCompare(String(b.jobNo));
+    const day = (d) => d.getDate() + ' ' + MON_UP[d.getMonth()];
+    const when = (x) => { const s = stage(x); return s === 'before' ? (x.etd ? (x.mode === 'courier' ? 'PICK-UP ' : 'ETD ') + day(x.etd) : 'ETD TO CONFIRM') : s === 'sea' ? 'ETA ' + day(x.eta) : s === 'arrived' ? 'ARRIVED ' + day(x.eta) : x.mode === 'misc' ? 'COSTING ONLY' : 'DATES TO CONFIRM'; };
+    const item = (x) => '<button type="button" class="cj910' + (x === j ? ' is-here' : '') + '" data-cust-open910="' + esc(x.jobNo) + '"' + (x === j ? ' aria-current="page"' : '') + '>' +
+      '<span class="cj-top910"><span class="cj-no910">' + changedDot(x) + esc(x.jobNo) + '<span class="badge">' + esc(x.type) + '</span>' + (x === j ? '<span class="cj-here910">THIS JOB</span>' : '') +
+        (canEdit() && x.cs && x.cs !== state.user ? '<span class="own-tag">' + esc(x.cs) + '</span>' : '') + '</span><span class="cj-when910">' + esc(when(x)) + '</span></span>' +
+      '<span class="cj-route910">' + esc(x.mode === 'misc' ? (x.against ? 'AGAINST ' + x.against : 'COSTING ONLY') : x.route) + '</span>' +
+      '<span class="cj-next910">' + toneChip(rowNext(x)) + '</span></button>';
+    const yours = L.filter(mine).sort(sort), others = L.filter((x) => !mine(x)).sort(sort);
+    const head = (label, n) => '<div class="cj-gh910">' + label + '<b>' + n + '</b></div>';
+    const sub = L.length ? L.length + (L.length === 1 ? ' active job' : ' active jobs') + (canEdit() && others.length ? ' · ' + yours.length + ' yours' : '') : 'No active jobs';
+    return '<div class="pop-title cj-title910">' + esc(j.customer) + '</div><p class="pop-text">' + esc(sub) + '</p>' +
+      (L.length ? '<div class="cj-list910">' + (canEdit() && others.length ? (yours.length ? head('YOURS', yours.length) + yours.map(item).join('') : '') + head('WITH COLLEAGUES', others.length) + others.map(item).join('')
+        : yours.concat(others).map(item).join('')) + '</div>' : '');
+  };
+
+  function initV2910() {
+    const custOpen = (c) => !!(c && state.overlay === 'pop' && state.cust910 && popRender === state.cust910.render && state.cust910.no === c.dataset.cust910);
+    // the card closes on any tap outside it (before the click) — remember it was open, so tapping the name again closes it
+    window.addEventListener('pointerdown', (e) => { state.custWas910 = custOpen(e.target.closest && e.target.closest('[data-cust910]')); }, true);
+    document.addEventListener('click', (e) => {
+      const c = e.target.closest('[data-cust910]');
+      if (c) {
+        e.preventDefault(); e.stopPropagation();
+        if (state.custWas910) { state.custWas910 = false; if (custOpen(c)) closeOverlays(); return; }   // tapped again: it closes
+        if (custOpen(c)) { closeOverlays(); return; }   // (the keyboard)
+        const render = custCard910(c.dataset.cust910);
+        openPop(c, 'CUSTOMER', render);
+        state.cust910 = { no: c.dataset.cust910, render };
+        return;
+      }
+      const o = e.target.closest('[data-cust-open910]');
+      if (o) {
+        e.preventDefault(); e.stopPropagation();
+        const no = o.dataset.custOpen910, here = state.route && state.route.name === 'job' && String(state.route.jobNo).toUpperCase() === no.toUpperCase();
+        closeOverlays(true);
+        if (!here) openJob(no);
+      }
+    }, true);
+  }
+
   // -------------------------------------------------------------------- start
   function start() {
     if (savedSession()) document.body.classList.add('is-resuming');
@@ -6718,6 +6852,7 @@
     initV26();
     initV298();
     initV299();
+    initV2910();
     if (savedSession()) resumeSession();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
