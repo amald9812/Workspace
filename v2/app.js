@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders, cover — v2.9.10)
+   enquiries, follow-ups, delays, close & archive, costing, reminders, cover — v2.9.11)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -243,7 +243,7 @@
     if (d < 0) return 'CUTOFF PASSED · ' + (-d) + (d === -1 ? ' DAY' : ' DAYS');
     if (d === 0) return 'CUTOFF TODAY';
     if (d === 1) return 'CUTOFF TOMORROW';
-    if (d === 2 && fri99()) return 'CUTOFF SUNDAY';   // v2.9.9
+    if (d >= 2 && d <= off911()) return 'CUTOFF ' + dayLong911(d).toUpperCase();   // v2.9.9: Friday → Sunday · v2.9.11: + UAE holidays
     return 'CUTOFF ' + fmt(addDays(today0(), d));
   }
   function soonText(d, date) {
@@ -327,7 +327,7 @@
     if (late) return { text: late.def.next + ' · cutoff passed', tone: 'urgent', rank: 0 };
     const cut = jr.all.filter((s) => s.cutDays !== undefined && s.state !== 'done' && s.state !== 'skip').sort((a, b) => a.cutDays - b.cutDays)[0];
     if (cut && cut.cutDays === 0) return { text: cut.def.next.replace(/ to .*/, '') + ' cutoff today', tone: 'urgent', rank: 0 };
-    if (cut && fri99(t0) && (cut.cutDays === 1 || cut.cutDays === 2)) return { text: cut.def.next.replace(/ to .*/, '') + ' cutoff ' + (cut.cutDays === 1 ? 'Saturday' : 'Sunday'), tone: 'urgent', rank: 0 };   // v2.9.9: Friday
+    if (cut && cut.cutDays >= 1 && cut.cutDays <= off911(t0)) return { text: cut.def.next.replace(/ to .*/, '') + ' cutoff ' + dayLong911(cut.cutDays, t0), tone: 'urgent', rank: 0 };   // v2.9.9: Friday · v2.9.11: + UAE holidays
     if (j.cat === 'IMPORT' && j.arrived && !j.delivery && j.lineFreeEnd) {
       const d = days(t0, j.lineFreeEnd);
       if (d < 0) return { text: 'Free time over · ' + (-d) + (d === -1 ? ' day' : ' days'), tone: 'urgent', rank: 0 };
@@ -707,6 +707,7 @@
     if (Array.isArray(boot.enquiries)) state.enquiries = boot.enquiries;
     state.costing = boot.costing || {};
     applyBoot9(boot);   // v2.9: reminders, what changed, what you opened
+    applyBoot911(boot);   // v2.9.11: holidays, briefings, waiting on, free time
     if (boot.rate) state.rate = boot.rate;
     state.followHist = {};
     state.syncedAt = Date.now();
@@ -764,8 +765,9 @@
     const m = h.match(/^#\/job\/(.+)$/);
     const mc = h.match(/^#\/costing\/(.+)$/);
     let r = m ? { name: 'job', jobNo: m[1].trim() } : mc ? { name: 'costjob', jobNo: mc[1].trim() } : h === '#/costing' ? { name: 'costing' } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : h === '#/notifications' ? { name: 'notif' } : h === '#/cover' ? { name: 'cover' } : { name: 'home' };
+    const mh911 = h.match(/^#\/handover(?:\/(.+))?$/); if (mh911) r = { name: 'handover', jobNo: (mh911[1] || '').trim().toUpperCase() };   // v2.9.11: the leave hand-over
     if (isAdmin()) { if (r.name !== 'activity') r = { name: 'admin' }; }      // admin works with people, not jobs
-    else if (r.name === 'admin' || r.name === 'activity' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote()) || ((r.name === 'costing' || r.name === 'costjob') && !canNote()) || (r.name === 'cover' && !canEdit())) r = { name: 'home' };
+    else if (r.name === 'admin' || r.name === 'activity' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote()) || ((r.name === 'costing' || r.name === 'costjob') && !canNote()) || ((r.name === 'cover' || r.name === 'handover') && !canEdit())) r = { name: 'home' };
     const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity|round|follow-ups|enquiries|costing)$/.test(h) ? '#/home' : r.name === 'round' && h === '#/round' ? '#/follow-ups' : null;
     if (want && h !== want) history.replaceState(null, '', want);
     return r;
@@ -792,6 +794,7 @@
     else if (r.name === 'costjob') renderCostJob(r.jobNo, changed || first);
     else if (r.name === 'notif') renderNotifPage(changed || first);
     else if (r.name === 'cover') renderCover98(changed || first);
+    else if (r.name === 'handover') renderHandover911(r.jobNo, changed || first);
     else if (r.name === 'job') { if (changed || first) { seenOpen9(r.jobNo); costAheadSoon98(r.jobNo); } renderVoyage(r.jobNo, changed || first); fitNames(); remarksFit93(); }
     else { renderHome(changed || first); fitNames(); fitPorts91(); moreBars93(); }
     if (changed && !back99Restore(back99, view)) view.scrollTop = 0;
@@ -855,7 +858,7 @@
   }
   function updateNav() {
     const r = state.route ? state.route.name : 'home';
-    const cur = r === 'job' ? 'jobs' : r === 'costjob' ? 'costing' : r;
+    const cur = r === 'job' ? 'jobs' : r === 'costjob' ? 'costing' : r === 'handover' ? 'cover' : r;
     $$('[data-nav]').forEach((b) => { if (b.dataset.nav === cur) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
     const c = $('#navList [data-nav="jobs"] .count'); if (c) c.textContent = scoped().filter((j) => j.active).length;   // v2.8: your own jobs
     const p = $('#navList [data-nav="admin"] .count'); if (p && state.admin) p.textContent = state.admin.users.length;
@@ -1289,7 +1292,7 @@
       '<header class="vhead' + anim + '" style="--d:30ms">' +
         '<div class="vh-titles"><div class="vh-idrow"><h1 class="vh-job">' + copyNo93(j.jobNo) + '</h1><span class="badge badge-lg">' + esc(j.type + ' · ' + j.typeName.toUpperCase()) + '</span>' + (j.cargo ? '<span class="vh-cargo">' + esc(j.cargo) + '</span>' : '') + delayChip(j) + readyChip(j) + ownChip98(j) + '</div>' +
         custBtn910(j) + (j.closed && j.closed.reason ? '<div class="vh-why">' + esc(j.closed.reason) + '</div>' : '') + remarksLine93(j) + blLine98(j) + '</div>' +
-        (j.closed ? closedActions(j) : canEdit() ? '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="delay" title="Delay or prepone" aria-label="Delay or prepone">' + icon('clock', 16) + '<span class="bl-full">Delay / prepone</span><span class="bl-short">Delay</span></button>' + (DN_TYPES93.includes(j.type) ? '<button type="button" class="btn-ghost" data-act="dnote" title="Delivery note (Word)" aria-label="Delivery note">' + icon('truck', 16) + '<span class="bl-full">Delivery note</span><span class="bl-short">Delivery note</span></button>' : '') + '<button type="button" class="btn-ghost" data-act="duplicate" title="Duplicate job" aria-label="Duplicate job">' + icon('copy', 16) + '<span>Duplicate</span></button><button type="button" class="btn-ghost" data-act="edit" title="Edit details" aria-label="Edit details">' + icon('edit', 16) + '<span class="bl-full">Edit details</span><span class="bl-short">Edit</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>'
+        (j.closed ? closedActions(j) : canEdit() && !mayEdit911(j) ? viewOnly911(j) : canEdit() ? '<div class="vh-actions"><button type="button" class="btn-ghost" data-act="delay" title="Delay or prepone" aria-label="Delay or prepone">' + icon('clock', 16) + '<span class="bl-full">Delay / prepone</span><span class="bl-short">Delay</span></button>' + (DN_TYPES93.includes(j.type) ? '<button type="button" class="btn-ghost" data-act="dnote" title="Delivery note (Word)" aria-label="Delivery note">' + icon('truck', 16) + '<span class="bl-full">Delivery note</span><span class="bl-short">Delivery note</span></button>' : '') + '<button type="button" class="btn-ghost" data-act="duplicate" title="Duplicate job" aria-label="Duplicate job">' + icon('copy', 16) + '<span>Duplicate</span></button><button type="button" class="btn-ghost" data-act="edit" title="Edit details" aria-label="Edit details">' + icon('edit', 16) + '<span class="bl-full">Edit details</span><span class="bl-short">Edit</span></button><button type="button" class="btn-brutal" data-act="quick">UPDATE</button></div>'
           : '<div class="vh-actions is-ro"><span class="ro-chip">' + icon('lock', 14) + '<span>UPDATED BY ' + esc(j.cs || 'CUSTOMER SERVICE') + '</span></span>' + (canNote() ? '<button type="button" class="btn-brutal btn-icon" data-act="focus-note">' + icon('note', 16) + '<span>ADD A NOTE</span></button>' : '') + '</div>') +
       '</header>' +
       '<div class="ft-top">' + freeCard(j, t0) + '</div>' +
@@ -1519,8 +1522,7 @@
   }
 
   function onSet(no, field, val) {
-    if (!canEdit()) return;
-    const j = findJob(no); if (!j) return;
+    const j = findJob(no); if (!j || !canEditJob(j)) return;   // v2.9.11: its owner, or their cover
     if ((j.raw[field] || '') === val && field !== 'status') { if (state.quick99) quickDone99(); else closeOverlays(); return; }
     const label = fieldLabel(j, field);
     const holdNote = $('#holdNote') ? $('#holdNote').value.trim() : '';
@@ -1812,8 +1814,7 @@
 
   // ---------- Edit details ----------
   function openEdit(no) {
-    if (!canEdit()) return;
-    const j = findJob(no); if (!j) return;
+    const j = findJob(no); if (!j || !canEditJob(j)) return;   // v2.9.11: its owner, or their cover
     loadLists();
     closeOverlays(true);
     const t = j.type;
@@ -2186,7 +2187,7 @@
   };
   // A tap = checked today (once). A remark fills today's check, or is added as one more line with its own time (v2.7).
   async function followCheck(no, remark) {
-    const j = findJob(no); if (!j || !canEdit()) return;
+    const j = findJob(no); if (!j || !canEditJob(j)) return;
     const K = keyOf(j);
     if (state.followBusy.has(K)) return;
     const prev = (state.follow.checks[K] || []).slice();
@@ -2224,7 +2225,7 @@
     finally { setSaving(-1); }
   }
   async function followPlan(no, every) {
-    const j = findJob(no); if (!j || !canEdit()) return;
+    const j = findJob(no); if (!j || !canEditJob(j)) return;
     const K = keyOf(j), prev = state.follow.plan[K];
     state.follow.plan[K] = every;
     closeOverlays(); rerender(); updateNav();
@@ -2315,7 +2316,7 @@
     return '<li class="rr' + (f.today ? ' is-done' : '') + (f.mineToday ? ' is-mine' : '') + (f.due ? ' is-due' : '') + (rmk95(j) ? ' has-rmk' : '') + '">' +
       '<button type="button" class="rr-main" data-job="' + esc(j.jobNo) + '"><span class="rr-job">' + changedDot(j) + copyNo93(j.jobNo) + '<span class="badge">' + esc(j.type) + '</span>' + ownTag98(j) + '</span>' +
         '<span class="rr-cust">' + esc(j.customer || '—') + '</span>' + rrRoute99(j, t0) + '</button>' +   // v2.9.9: both ports' times
-      '<span class="rr-next">' + toneChip(rrNext95(j)) + cutChips(j) + '</span>' +
+      '<span class="rr-next">' + toneChip(rrNext95(j)) + cutChips(j) + waitTag911(j) + '</span>' +   // v2.9.11: + waiting on
       '<span class="rr-last" data-rmk-cell="' + esc(j.jobNo) + '"><span>' + esc(lastCheckText(f, t0)) + '</span>' + ((lr) => (lr ? '<span class="rr-remark">“' + esc(lr.text) + '”' + (lr.n > 1 ? ' <b>+' + (lr.n - 1) + '</b>' : '') + '</span>' : ''))(lastRemark(f)) + '</span>' +
       '<span class="rr-rmk">' + rowRemarks95(j) + '</span>' +
       '<span class="rr-every"><button type="button" class="every-pill" data-every="' + esc(j.jobNo) + '">' + esc(f.label) + icon('chevron', 13) + '</button></span>' +
@@ -2327,7 +2328,7 @@
     const anim = first && first !== 'back99' ? ' reveal' : '';   // v2.9.9: coming back from a job: no regrouping, no reveal
     const q = (state.roundQ || '').trim().toUpperCase();
     const R = roundRows(t0);
-    const match = (x) => !q || (x.j.jobNo + ' ' + x.j.customer + ' ' + x.j.route + ' ' + x.j.cs + ' ' + x.j.sales).toUpperCase().includes(q);
+    const match = (x) => wMatch911(x) && (!q || (x.j.jobNo + ' ' + x.j.customer + ' ' + x.j.route + ' ' + x.j.cs + ' ' + x.j.sales).toUpperCase().includes(q));   // v2.9.11: + the waiting-on filter
     const total = R.due.length + R.done.length;
     const pct = total ? Math.round((R.done.length / total) * 100) : 100;
     // Jobs you check stay in place while you work down the list (nothing jumps under the mouse).
@@ -2348,9 +2349,9 @@
         '<div class="rp-num"><b>' + R.done.length + '</b><span>/ ' + total + '</span></div>' +
         '<div class="rp-main"><div class="rp-label">' + (total && R.due.length === 0 ? 'All followed up — every job due today is checked.' : 'checked today · ' + R.due.length + ' still due') + '</div>' +
           '<div class="rp-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '"><i style="width:' + pct + '%"></i></div>' +
-          '<div class="rp-chips"><span>' + R.later.length + ' not due today</span><span>' + R.paused.length + ' paused</span><span>Tap the circle once you’ve followed a job up · set how often per job</span>' + kbdHint99() + '</div></div>' +
+          '<div class="rp-chips"><span>' + R.later.length + ' not due today</span><span>' + R.paused.length + ' paused</span><span>Tap the circle once you’ve followed a job up · set how often per job</span>' + kbdHint99() + '</div></div>' + waitBar911(R.all) +
       '</section>' +
-      remSection(anim) +
+      (state.wf911 ? '' : remSection(anim)) +
       section('due', 'DUE NOW', dueRows.filter(match), '', dueRows.filter((x) => x.f.due && match(x)).length) +
       section('done', 'CHECKED TODAY', doneRows.filter(match)) +
       section('later', 'NOT DUE TODAY', R.later.filter(match), 'By their own pace') +
@@ -2399,7 +2400,7 @@
         '<span class="dl-meta">' + esc(x.by) + ' · ' + esc(ago(x.t)) + '</span></span>' + (canEditJob(j) ? '<button type="button" class="icon-btn dl-rm" data-delay-rm="' + esc(x.id) + '" aria-label="' + (x.days < 0 ? 'Remove this prepone' : 'Remove this delay') + '">' + icon('close', 13) + '</button>' : '') + '</li>').join('') + '</ol></section>';
   }
   function openDelay(no) {
-    const j = findJob(no); if (!j || !canEdit()) return;
+    const j = findJob(no); if (!j || !canEditJob(j)) return;
     closeOverlays(true);
     const where = (DELAY_WHERE[j.mode] || DELAY_WHERE.sea);
     const start = j.atSea || j.arrived ? (j.arrived ? where[where.length - 3] || where[0] : where[2] || where[0]) : where[0];
@@ -2823,12 +2824,12 @@
     return { ready: need.every((x) => x.ok), need };
   }
   const isReady = (j) => j.active && !j.closed && closeCheck(j).ready;
-  const readyChip = (j) => canEdit() && isReady(j) ? '<button type="button" class="ready-chip" data-act="close-job">' + icon('check', 13) + 'READY TO CLOSE</button>' : '';
-  const canEditJob = (j) => canEdit() && !(j && j.closed);
+  const readyChip = (j) => canEditJob(j) && isReady(j) ? '<button type="button" class="ready-chip" data-act="close-job">' + icon('check', 13) + 'READY TO CLOSE</button>' : '';
+  const canEditJob = (j) => canEdit() && !(j && j.closed) && (!j || mayEdit911(j));   // v2.9.11: its owner, or the colleague covering them
   function closedActions(j) {
     const c = j.closed || {};
     return '<div class="vh-actions is-ro is-closed"><span class="ro-chip closed-chip">' + icon('lock', 14) + '<span>CLOSED' + (c.at ? ' ' + esc(c.at) : '') + (c.by ? ' · ' + esc(c.by) : '') + '</span></span>' +
-      (canEdit() ? '<button type="button" class="btn-brutal" data-act="reopen">REOPEN JOB</button>' : '') + '</div>';
+      (canEdit() && mayEdit911(j) ? '<button type="button" class="btn-brutal" data-act="reopen">REOPEN JOB</button>' : '') + '</div>';
   }
   function buildClosed(ix, row, closed) {
     const j = buildJob(row, ix, today0());
@@ -2974,7 +2975,7 @@
     // before the voyage's own handlers: the "Completed" stop and its CLOSE JOB button open the close dialog
     view.addEventListener('click', (e) => {
       const r = state.route;
-      if (!r || r.name !== 'job' || !canEdit()) return;
+      if (!r || r.name !== 'job' || !canEditJob(findJob(r.jobNo))) return;
       const st = e.target.closest('[data-stop="completed"]');
       const j = findJob(r.jobNo);
       if (st && j && !j.closed && j.status !== 'COMPLETED' && j.status !== 'CANCELLED') { e.stopImmediatePropagation(); openClose(r.jobNo); }
@@ -2983,14 +2984,14 @@
       const r = state.route;
       if (e.target.closest('[data-act="ready-list"]')) { state.jobsUi.status = 'ready'; state.jobsUi.limit = 120; go('#/jobs'); return; }
       if (!r || r.name !== 'job') return;
-      if (e.target.closest('[data-act="close-job"]') && canEdit()) { openClose(r.jobNo); return; }
-      if (e.target.closest('[data-act="reopen"]') && canEdit()) { reopenJob(r.jobNo); }
+      if (e.target.closest('[data-act="close-job"]') && canEditJob(findJob(r.jobNo))) { openClose(r.jobNo); return; }
+      if (e.target.closest('[data-act="reopen"]') && canEdit() && mayEdit911(findJob(r.jobNo))) { reopenJob(r.jobNo); }
     });
     // choosing Completed / Cancelled anywhere (status card, quick update) goes through Close job
     const intercept = (e) => {
       const b = e.target.closest('[data-set="status"]');
       if (!b || !['COMPLETED', 'CANCELLED'].includes(b.dataset.val)) return;
-      const r = state.route; if (!r || r.name !== 'job' || !canEdit()) return;
+      const r = state.route; if (!r || r.name !== 'job' || !canEditJob(findJob(r.jobNo))) return;
       const j = findJob(r.jobNo); if (!j || j.closed) return;
       e.stopImmediatePropagation(); e.preventDefault();
       openClose(r.jobNo, { reason: b.dataset.val === 'CANCELLED' ? 'Cancelled' : '' });
@@ -3161,7 +3162,7 @@
 
   // ================================================================ DUPLICATE JOB
   function duplicateJob(no) {
-    const j = findJob(no); if (!j || !canEditJob(j)) return;
+    const j = findJob(no); if (!j || !canEdit() || j.closed) return;   // v2.9.11: anyone in Customer Service may copy any job
     const p = { customer: j.customer, vendor: j.vendor, pol: j.pol, pod: j.pod, sales: j.sales, dg: j.dg };
     if (j.c20) p.c20 = String(j.c20);
     if (j.c40) p.c40 = String(j.c40);
@@ -3207,8 +3208,8 @@
     });
     return C;
   }
-  const costCanEdit = (j, D) => !!D && !D.closed && D.status !== 'LOCKED' && (canEdit() || (isSales() && j.sales === state.user && D.sales === state.user));
-  const costCanUnlock = (D) => !!D && canEdit() && !D.closed && D.status === 'LOCKED';
+  const costCanEdit = (j, D) => !!D && !D.closed && D.status !== 'LOCKED' && ((canEdit() && mayEdit911(j)) || (isSales() && j.sales === state.user && D.sales === state.user));
+  const costCanUnlock = (D) => !!D && canEdit() && !D.closed && D.status === 'LOCKED' && mayEdit911({ cs: D.cs });
   function costQtyFor(j, basis, cur) {
     if (basis === 'SHIP') return '1';
     if (basis === 'BOX') return String(boxesOf(j) || 1);
@@ -4018,7 +4019,7 @@
   // ================================================================ v2.7 — cutoffs, every open one, coloured
   // red: passed, today or tomorrow (inside 24 h) · amber: in 2–3 days · calm: later
   const cutTone = (d) => (d <= due99() ? 'red' : d <= 3 ? 'amber' : 'calm');   // v2.9.9: Friday — the weekend is red too
-  const cutWhen = (d, date) => (d < 0 ? 'PASSED' : d === 0 ? 'TODAY' : d === 1 ? 'TOMORROW' : d === 2 && fri99() ? 'SUNDAY' : fmt(date));
+  const cutWhen = (d, date) => (d < 0 ? 'PASSED' : d === 0 ? 'TODAY' : d === 1 ? 'TOMORROW' : d >= 2 && d <= off911() ? dayLong911(d).toUpperCase() : fmt(date));
   function cutsFor(j, t0) {
     if (!j.active || j.hold || (j.etd && j.etd <= t0)) return [];
     const out = [], open = (v) => !v || v === 'PENDING';
@@ -4539,15 +4540,7 @@
     return dow < 0 ? null : { dow, h: (+p.hour) % 24, m: +p.minute };
   }
   // open now (and minutes to closing), or closed (and minutes to opening, and which day)
-  function officeState(z, now) {
-    const t = zoneNow(z.tz, now || new Date()); if (!t) return null;
-    const off = WEEKEND[z.cc] || [0, 6], work = (d) => !off.includes(d), mins = t.h * 60 + t.m, H = hoursOf(z);
-    if (work(t.dow) && mins >= H[0] && mins < H[1]) return { open: true, t, toClose: H[1] - mins };
-    let add, d = t.dow;
-    if (work(d) && mins < H[0]) add = H[0] - mins;
-    else { add = 1440 - mins; d = (d + 1) % 7; for (let k = 0; k < 7 && !work(d); k++) { add += 1440; d = (d + 1) % 7; } add += H[0]; }
-    return { open: false, t, toOpen: add, opensDow: d };
-  }
+  // officeState — v2.9.11 version further down (public holidays are days off)
   const hhmm = (t) => String(t.h).padStart(2, '0') + ':' + String(t.m).padStart(2, '0');
   const durTxt = (m) => (m < 60 ? m + ' MIN' : Math.floor(m / 60) + ' H' + (m % 60 && m < 300 ? ' ' + (m % 60) + ' MIN' : ''));
   function weekTxt(z) {   // v2.9.3: any working week (Brunei: Monday–Thursday, Saturday)
@@ -4564,7 +4557,7 @@
     const o = officeState(z, now); if (!o) return null;
     const [o9, o5] = hrsTxt(z).split('–'), h9 = hoursOf(z)[0] / 60;
     if (o.open) return { time: hhmm(o.t), tone: o.toClose <= 60 ? 'amber' : 'open', state: o.toClose <= 60 ? 'CLOSES IN ' + durTxt(o.toClose) : 'OPEN', more: 'open · closes ' + o5 + ' (in ' + durTxt(o.toClose).toLowerCase() + ')', o };
-    return { time: hhmm(o.t), tone: 'closed', state: 'CLOSED', more: 'closed · opens ' + (o.toOpen < 1440 && o.opensDow === (o.t.dow + (o.t.h >= h9 ? 1 : 0)) % 7 ? (o.t.h >= h9 ? 'tomorrow' : 'today') : DOW[o.opensDow]) + ' ' + o9 + ' (in ' + durTxt(o.toOpen).toLowerCase() + ')', o };
+    return { time: hhmm(o.t), tone: 'closed', state: o.hol ? 'HOLIDAY' : 'CLOSED', more: 'closed' + (o.hol ? ' today — ' + o.hol : '') + ' · opens ' + (o.toOpen < 1440 && o.opensDow === (o.t.dow + (o.t.h >= h9 ? 1 : 0)) % 7 ? (o.t.h >= h9 ? 'tomorrow' : 'today') : DOW[o.opensDow]) + ' ' + o9 + ' (in ' + durTxt(o.toOpen).toLowerCase() + ')', o };
   }
   const clockTitle = (port, z, c) => 'Local time at ' + upq(port) + ' — ' + c.more + '. Office hours ' + hrsTxt(z) + ', ' + weekTxt(z) + '.';
   // The live clock under a port name on the job page (ticks by itself).
@@ -4697,7 +4690,7 @@
     document.addEventListener('visibilitychange', () => { if (!document.hidden) tickClocks(); });
     document.addEventListener('click', (e) => {
       const tb = e.target.closest('[data-transfer]');
-      if (tb && canEdit()) { state.transfer8 = null; openPop(tb, 'CUSTOMER SERVICE', transferMenu(tb.dataset.transfer)); return; }
+      if (tb && canEditJob(findJob(tb.dataset.transfer))) { state.transfer8 = null; openPop(tb, 'CUSTOMER SERVICE', transferMenu(tb.dataset.transfer)); return; }
       const to = e.target.closest('[data-transfer-to]');
       if (to && state.transfer8) { const n = $('#transferNote'); if (n) state.transfer8.note = n.value; state.transfer8.to = to.dataset.transferTo; refreshOverlay(); const b = document.querySelector('[data-transfer-form] [data-primary]'); if (b) b.focus(); }
     });
@@ -5038,6 +5031,7 @@
   function portState91(o, now) {
     if (o.open) { const at = +now + o.toClose * 60000; return o.toClose <= 60 ? { tone: 'amber', txt: 'closes in ' + o.toClose + ' min' } : { tone: 'open', txt: 'closes ' + (days(dayOf(+now), dayOf(at)) === 1 ? 'tomorrow ' : '') + yourTime91(at) }; }
     const at = +now + o.toOpen * 60000, dd = days(dayOf(+now), dayOf(at));
+    if (o.hol) return { tone: 'closed', txt: 'closed · ' + o.hol };   // v2.9.11: a public holiday there today
     return { tone: 'closed', txt: 'opens ' + (dd === 0 ? '' : dd === 1 ? 'tomorrow ' : DOW[dxb(at).getDay()] + ' ') + yourTime91(at) };
   }
   function portChip91(e, now) {
@@ -5048,7 +5042,7 @@
   function portOffices(anim) {
     const t0 = today0(), now = new Date(), L = portList91(t0);
     return '<section class="ports glass' + (anim || '') + '" id="portOffices" aria-labelledby="poTitle" style="--d:20ms">' +
-      '<div class="po-head"><h2 class="po-k" id="poTitle">OVERSEAS OFFICE HOURS</h2><span class="po-now" title="Every time here is Dubai time. Ethix office hours 09:00–18:00, Monday–Friday.">DUBAI TIME <b>' + yourTime91(now) + '</b></span></div>' +
+      '<div class="po-head"><h2 class="po-k" id="poTitle">OVERSEAS OFFICE HOURS</h2>' + aeHolChip911() + '<span class="po-now" title="Every time here is Dubai time. Ethix office hours 09:00–18:00, Monday–Friday.">DUBAI TIME <b>' + yourTime91(now) + '</b></span></div>' +
       (L.length ? '<div class="po-chips" id="poChips" aria-live="polite">' + L.map((e) => portChip91(e, now)).join('') + '</div>' +
         '<div class="po-foot"><span class="po-dots" id="poDots"></span><button type="button" class="po-all" data-act="offices-all">All ' + L.length + (L.length === 1 ? ' office' : ' offices') + '</button></div>'
         : '<p class="po-none">The overseas ports of your jobs show here, with their office hours in Dubai time.</p>') + '</section>';
@@ -5126,7 +5120,7 @@
       const r = (j) => row(j, '', due(j) ? side(j.arrived ? 'ARRIVED' : j.mode === 'air' ? 'DEPARTED' : 'SAILED', j.arrived ? j.eta : j.etd, rel91(j.arrived ? j.eta : j.etd, t0), 'red', tag(j)) : (costByArrival91(j) && j.eta ? side('ETA', j.eta, rel91(j.eta, t0), '', tag(j)) : side('ETD', j.etd, j.etd ? rel91(j.etd, t0) : j.mode === 'misc' ? 'costing only' : 'to confirm', '', tag(j))), 'data-cost="' + esc(j.jobNo) + '"');
       const at = (j) => tm(costByArrival91(j) ? j.eta : j.etd);
       const soon = (j) => !due(j) && costDueBy99(j, t0);   // v2.9.9: sailing / arriving by tomorrow (Friday: Sunday) is due too
-      html = group('SAILED OR ARRIVED', list.filter(due).sort((a, b) => at(a) - at(b)).map(r), 'red') + group(fri99(t0) ? 'SAILS OR ARRIVES BY SUNDAY' : 'SAILS OR ARRIVES BY TOMORROW', list.filter(soon).sort((a, b) => at(a) - at(b)).map(r), 'amber') +
+      html = group('SAILED OR ARRIVED', list.filter(due).sort((a, b) => at(a) - at(b)).map(r), 'red') + group(off911(t0) ? 'SAILS OR ARRIVES BY ' + dayLong911(off911(t0), t0).toUpperCase() : 'SAILS OR ARRIVES BY TOMORROW', list.filter(soon).sort((a, b) => at(a) - at(b)).map(r), 'amber') +
         group('NOT DUE YET', list.filter((j) => !costDueBy99(j, t0)).sort((a, b) => at(a) - at(b)).map(r));
     } else if (kind === 'sied') {   // v2.9.9: the red group is the Home number; no cutoff → the sailing date; tap a chip → its choice card
       const D = due99(t0);
@@ -5136,7 +5130,7 @@
         return { j, d: siedD99(j, t0), h: row(j, '', '<span class="dr-side is-cuts">' + siedParts99(j, t0).map(chip).join('') + '</span>') };
       };
       const L = list.map(item).sort((a, b) => a.d - b.d);
-      html = group(fri99(t0) ? 'OVERDUE, TODAY OR THIS WEEKEND' : 'OVERDUE, TODAY OR TOMORROW', L.filter((x) => x.d <= D).map((x) => x.h), 'red') + group('NEXT 3 DAYS', L.filter((x) => x.d > D && x.d <= 3).map((x) => x.h), 'amber') + group('LATER', L.filter((x) => x.d > 3).map((x) => x.h));
+      html = group(off911(t0) ? 'OVERDUE, TODAY OR ' + (offWord911(t0) === 'WEEKEND' ? 'THIS WEEKEND' : 'BY ' + dayLong911(off911(t0), t0).toUpperCase()) : 'OVERDUE, TODAY OR TOMORROW', L.filter((x) => x.d <= D).map((x) => x.h), 'red') + group('NEXT 3 DAYS', L.filter((x) => x.d > D && x.d <= 3).map((x) => x.h), 'amber') + group('LATER', L.filter((x) => x.d > 3).map((x) => x.h));
     } else if (kind === 'free') {   // v2.9.9: line and port free time — the sooner one on the right, the other one below
       const ends = (j) => [j.lineFreeEnd && { k: 'LINE FREE TIME', e: j.lineFreeEnd }, j.portFreeEnd && { k: 'PORT FREE TIME', e: j.portFreeEnd }].filter(Boolean).sort((a, b) => a.e - b.e);
       const txt = (d) => (d < 0 ? 'over ' + (-d) + (d === -1 ? ' day' : ' days') : d === 0 ? 'ends today' : d + (d === 1 ? ' day left' : ' days left'));
@@ -5650,20 +5644,7 @@
 
   // ------------------------------------------------------------------ search
   let searchIndex = -1;
-  function runSearch(q) {
-    const box = $('#searchResults'); if (!box) return;
-    q = q.trim().toUpperCase();
-    if (!q) { box.hidden = true; return; }
-    const blHit = (j) => blList98(j.blNo).find((x) => x.includes(q)) || '';   // v2.9.8: BL / AWB numbers are searched too
-    const hits = state.jobs.filter((j) => (j.jobNo + ' ' + j.customer + ' ' + j.pol + ' ' + j.pod + ' ' + j.cs + ' ' + j.sales + ' ' + j.type + ' ' + j.blNo).toUpperCase().includes(q))
-      .sort((a, b) => (b.active - a.active) || (canEdit() ? (b.cs === state.user) - (a.cs === state.user) : 0) || ((b.jobNo.toUpperCase().startsWith(q) ? 1 : 0) - (a.jobNo.toUpperCase().startsWith(q) ? 1 : 0)))
-      .slice(0, 8);
-    searchIndex = -1;
-    box.innerHTML = hits.length ? hits.map((j) =>
-      '<button type="button" class="result" data-job="' + esc(j.jobNo) + '"><span class="result-job">' + esc(j.jobNo) + '</span><span class="result-cust">' + esc(j.customer || '—') + '</span><span class="result-route">' + (blHit(j) && !(j.jobNo + ' ' + j.customer).toUpperCase().includes(q) ? esc(blWord98(j) + ' ' + blHit(j)) + ' · ' : '') + esc(j.route) + ' · ' + esc(j.type) + (j.active ? '' : ' · ' + esc(j.status)) + (canEdit() && j.cs !== state.user ? ' · ' + (j.cs ? 'WITH ' + esc(j.cs) : 'UNASSIGNED') : '') + '</span></button>'
-    ).join('') : '<div class="result-empty">No jobs match “' + esc(q) + '”.</div>';
-    box.hidden = false;
-  }
+  // runSearch — v2.9.11 version further down (+ MENTIONED IN REMARKS AND NOTES)
 
   // ----------------------------------------------------------------- refresh
   async function refresh(manual) {
@@ -5945,7 +5926,7 @@
   const invChip98 = (s) => '<span class="inv-chip is-' + s.tone + '">' + (s.open ? '' : icon('lock', 12)) + '<span>' + esc(s.label) + '</span></span>';
   function invRow98(j) {
     const s = invOf98(j); if (s.na) return '';
-    const can = canEdit() && !j.closed;
+    const can = canEditJob(j);
     return '<div class="kv inv-row"><span class="kv-k">Invoice</span>' + (can ? '<button type="button" class="inv-btn" data-inv="' + esc(j.jobNo) + '" aria-label="Invoice: ' + esc(s.label) + (s.open ? '. Change' : '') + '">' + invChip98(s) + (s.open ? icon('chevron', 13) : '') + '</button>' : invChip98(s)) + '</div>';
   }
   const invPop98 = (no) => () => {
@@ -5957,11 +5938,11 @@
   };
   function invSeg98(j) {   // the costing page, once costing is done
     const s = invOf98(j); if (!s.open) return '';
-    if (!canEdit() || j.closed) return '<span class="inv-on-cost"><span class="inv-k">INVOICE</span>' + invChip98(s) + '</span>';
+    if (!canEditJob(j)) return '<span class="inv-on-cost"><span class="inv-k">INVOICE</span>' + invChip98(s) + '</span>';
     return '<span class="inv-on-cost"><span class="inv-k">INVOICE</span><span class="inv-seg" role="group" aria-label="Invoice status">' + INV98.map((v) => '<button type="button" class="' + (v === s.value ? 'is-on is-' + INV_TONE98[v] : '') + '" data-inv-set="' + v + '" data-no="' + esc(j.jobNo) + '" aria-pressed="' + (v === s.value) + '">' + INV_LABEL98[v].replace('Invoice ', '').replace(/^n/, 'N').replace(/^i/, 'I') + '</button>').join('') + '</span></span>';
   }
   function invSave98(no, v) {
-    const j = findJob(no); if (!j || !canEdit()) return;
+    const j = findJob(no); if (!j || !canEditJob(j)) return;
     const s = invOf98(j); if (!s.open) { toast(s.frozen ? 'Costing was unlocked — the invoice status opens again once costing is done.' : 'The invoice status opens once costing is done.', { error: true }); return; }
     if (state.quick99) quickDone99(); else closeOverlays();   // v2.9.9
     if ((j.invoice || '') === v) return;
@@ -6006,8 +5987,8 @@
     const other = covOther98(c), n = covDays98(c), mine = c.cover === state.user, t = covToday98();
     const live = covOn98(c, t), jobs = covJobs98(c.owner);
     const btns = kind === 'incoming' ? '<button type="button" class="btn-ghost" data-cov-no="' + esc(c.id) + '">Decline</button><button type="button" class="btn-brutal" data-cov-yes="' + esc(c.id) + '">ACCEPT</button>'
-      : kind === 'sent' ? '<button type="button" class="btn-ghost" data-cov-end="' + esc(c.id) + '">Withdraw</button>'
-      : kind === 'live' || kind === 'soon' ? (live && mine ? '<button type="button" class="btn-ghost" data-href="#/jobs">' + icon('jobs', 15) + '<span>See the jobs</span></button>' : '') + '<button type="button" class="btn-ghost" data-cov-end="' + esc(c.id) + '">' + (live ? 'End cover' : 'Call off') + '</button>' : '';
+      : kind === 'sent' ? hoBtn911(c) + '<button type="button" class="btn-ghost" data-cov-end="' + esc(c.id) + '">Withdraw</button>'
+      : kind === 'live' || kind === 'soon' ? hoBtn911(c) + (live && mine ? '<button type="button" class="btn-ghost" data-href="#/jobs">' + icon('jobs', 15) + '<span>See the jobs</span></button>' : '') + '<button type="button" class="btn-ghost" data-cov-end="' + esc(c.id) + '">' + (live ? 'End cover' : 'Call off') + '</button>' : '';
     const state98 = kind === 'incoming' ? '<span class="cv-state is-ask">WAITING FOR YOU</span>' : kind === 'sent' ? '<span class="cv-state">WAITING FOR ' + esc(other) + '</span>'
       : kind === 'live' ? '<span class="cv-state is-live"><i></i>ON NOW</span>' : kind === 'soon' ? '<span class="cv-state is-soon">FROM ' + esc(covDay98(c.start).toUpperCase()) + '</span>' : '';
     return '<article class="cv-card' + (kind === 'incoming' ? ' is-incoming' : kind === 'live' ? ' is-live' : '') + '">' +
@@ -6029,7 +6010,7 @@
     const pastWord = (c) => c.status === 'DECLINED' ? 'declined' : c.status === 'WITHDRAWN' ? 'withdrawn' : c.status === 'ENDED' ? 'ended early' : c.status === 'ASKED' ? 'not answered' : 'done';
     $('#view').innerHTML = '<div class="wrap cover-page no-seg">' +
       '<header class="page-head' + anim + '"><div class="head-main"><div class="meta-line"><span>COVER · ' + esc(fmtLong(t0)) + '</span></div><h1 class="greeting">Cover</h1></div>' +
-        '<div class="head-actions"><button type="button" class="btn-ghost" data-cov-new="offer">' + icon('users', 16) + '<span class="btn-label">Offer to cover</span></button><button type="button" class="btn-brutal btn-icon" data-cov-new="ask">' + icon('plus', 16) + '<span>ASK FOR COVER</span></button></div></header>' +
+        '<div class="head-actions"><button type="button" class="btn-ghost ho-open911" data-href="#/handover">' + icon('handover911', 16) + '<span class="btn-label">Hand-over</span></button><button type="button" class="btn-ghost" data-cov-new="offer">' + icon('users', 16) + '<span class="btn-label">Offer to cover</span></button><button type="button" class="btn-brutal btn-icon" data-cov-new="ask">' + icon('plus', 16) + '<span>ASK FOR COVER</span></button></div></header>' +
       sec('WAITING FOR YOU', inc, 'incoming', 40) + sec('ON NOW', live, 'live', 80) + sec('COMING UP', soon, 'soon', 110) + sec('SENT', sent, 'sent', 140) +
       (!inc.length && !live.length && !soon.length && !sent.length ? '<section class="tile cv-empty' + anim + '" style="--d:40ms">' + empty('swap', 'No cover running or asked for.') + '</section>' : '') +
       (past.length ? '<section class="cv-sec' + anim + '" style="--d:170ms"><div class="tile-head"><h2 class="tile-title">EARLIER</h2></div><ul class="cv-past">' + past.map((c) => '<li><span class="avatar is-other">' + esc(initials(covOther98(c))) + '</span><span class="cv-p-who">' + esc(pastWho(c)) + '</span><span class="cv-p-when">' + esc(covRange98(c)) + '</span><span class="cv-p-st is-' + c.status.toLowerCase() + '">' + pastWord(c) + '</span></li>').join('') + '</ul></section>' : '') +
@@ -6293,9 +6274,7 @@
   }
 
   // ---------- Friday: Saturday and Sunday count as due today ----------
-  function fri99(t0) { return (t0 || today0()).getDay() === 5; }
-  function due99(t0) { return fri99(t0) ? 2 : 1; }
-  const dayWord99 = (d, t0) => (d === 0 ? 'today' : d === 1 ? (fri99(t0) ? 'Saturday' : 'tomorrow') : fri99(t0) && d === 2 ? 'Sunday' : 'in ' + d + ' days');
+  // fri99, due99, dayWord99 — v2.9.11 versions further down (the days off after today: weekend and UAE holidays)
 
   // ---------- Home: what is due now (overdue, today, tomorrow — Friday: the weekend too) ----------
   // Costing: an export once it has sailed or sails by then; an import / clearance once it has arrived or arrives by then.
@@ -6398,19 +6377,7 @@
 
   // ---------- Follow-ups: both ports' local times on the route ----------
   // POL and POD each with their time under the name; the white one is the port that matters now (it sets the order).
-  function rrRoute99(j, t0) {
-    const plain = '<span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span>';
-    if (j.mode === 'misc' || !j.pol || !j.pod) return plain;
-    const lead = clockPort(j, t0);
-    const tm = (port) => {
-      const z = portZone(port), c = z && clockBits(z);
-      if (!c) return '<span class="rt99 is-none"></span>';
-      return '<span class="rt99 is-' + c.tone + (port === lead ? ' is-lead' : '') + '" data-clock="' + esc(port) + '" data-mini="1" title="' + esc(clockTitle(port, z, c)) + '"><i></i><b>' + c.time + '</b></span>';
-    };
-    const a = tm(j.pol), b = tm(j.pod);
-    if (/is-none/.test(a) && /is-none/.test(b)) return plain;
-    return '<span class="rr-route r99"><span class="rp-n">' + esc(j.pol) + '</span><span class="rp-ar">→</span><span class="rp-n">' + esc(j.pod) + '</span>' + a + '<span></span>' + b + '</span>';
-  }
+  // rrRoute99 — v2.9.11 version further down (+ OFF TODAY / TOMORROW / DAY AFTER)
 
   // ---------- Follow-ups: the remark button and the remark card ----------
   function rmkBtn99(j, f) {
@@ -6636,11 +6603,7 @@
     watch.forEach((w) => { const k = keyOf(w.j); let g = by.get(k); if (!g) { g = { j: w.j, lead: w, tasks: [] }; by.set(k, g); out.push(g); } g.tasks.push(w); });
     return out;
   }
-  function watchGroups910(t0) {   // Friday: Saturday and Sunday are today's (v2.9.9)
-    const F = fri99(t0) ? 2 : 0;
-    return [['over', 'OVERDUE', (w) => w.d < 0 && w.d >= -21, 'red'], ['today', F ? 'TODAY + WEEKEND' : 'TODAY', (w) => w.d >= 0 && w.d <= F, 'red'],
-      ['soon', 'NEXT 3 DAYS', (w) => w.d > F, 'amber'], ['long', 'OVERDUE 3+ WEEKS', (w) => w.d < -21, '']];
-  }
+  // watchGroups910 — v2.9.11 version further down (TODAY + WEEKEND / a UAE holiday)
   const wtChip910 = (w) => '<span class="' + (w.level === 'urgent' ? 'chip chip-urgent' : 'chip chip-amber-dark') + '">' + (w.level === 'urgent' ? icon('alert', 12) : '') + esc(w.when) + '</span>';
   function watchTile91(m, anim) {
     const item = (w, more) => '<button type="button" class="wt li' + (more ? ' is-more' : '') + '" ' + wtAttr99(w) + '>' +   // one task: tap → its choice card (v2.9.9)
@@ -6698,7 +6661,7 @@
     return list.length ? { text: list[0][2], n: list.length } : null;
   }
   async function followNote910(no, text) {
-    const j = findJob(no); if (!j || !canEdit()) return;
+    const j = findJob(no); if (!j || !canEditJob(j)) return;
     const K = keyOf(j);
     text = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 200);
     if (!text) return;
@@ -6741,7 +6704,7 @@
     const add = !can ? '' : R.add ? '<form class="pop-form rk-addf" data-remark="' + esc(j.jobNo) + '"><label class="pop-label" for="remarkInput">Add a remark</label><input type="text" id="remarkInput" maxlength="200" value="" placeholder="Type a remark" autocomplete="off">' +
         '<button type="submit" class="btn-brutal pop-main" data-primary>ADD REMARK</button></form>'
       : '<button type="button" class="btn-ghost pop-wide rk-add" data-rmk-add="' + esc(j.jobNo) + '">' + icon('remark', 16) + 'Add remark</button>';
-    return '<div class="pop-title">' + (f.mineToday ? 'Checked today ' + hm(f.mineToday[0]) : 'Remarks') + '</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p>' +
+    return '<div class="pop-title">' + (f.mineToday ? 'Checked today ' + hm(f.mineToday[0]) : 'Remarks') + '</div><p class="pop-text">' + esc(j.jobNo) + ' · ' + esc(j.customer || '') + '</p>' + waitBlock911(j, can) +
       (html ? '<div class="rk-list">' + html + '</div>' : '<p class="pop-text rk-none">No follow-up remarks yet.</p>') +
       (all.length > list.length ? '<button type="button" class="link-btn quiet rk-more" data-rmk-more>Show older remarks</button>' : '') + add +
       (can && f.mineToday ? '<button type="button" class="link-btn quiet rk-undo" data-undo-check="' + esc(j.jobNo) + '">Undo today’s check</button>' : '');
@@ -6757,7 +6720,7 @@
   // edit (or clear) one of your own remarks — any day. Cleared: a remark on its own goes; a check's remark goes and the check
   // stays, unless you have another check that day on that job (then the line goes) — as the server does.
   async function rmkSave99(no, t, text) {
-    const j = findJob(no); if (!j || !canEdit()) return;
+    const j = findJob(no); if (!j || !canEditJob(j)) return;
     const K = keyOf(j); t = +t; text = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 200);
     const lists = [state.follow.checks[K], state.followHist[K]].filter(Array.isArray);
     const before = lists.map((L) => L.map((c) => c.slice()));
@@ -6784,12 +6747,7 @@
   // ---------- a customer's active jobs: tap the customer's name on the job page (and the costing page) ----------
   const custKey910 = (s) => String(s || '').toUpperCase().replace(/\s+/g, ' ').trim();
   function custJobs910(j) { const k = custKey910(j && j.customer); return k ? state.jobs.filter((x) => x.active && custKey910(x.customer) === k) : []; }
-  function custBtn910(j) {
-    if (!custKey910(j.customer)) return '<div class="vh-cust">—</div>';
-    const n = custJobs910(j).length, show = n > 1 || (n === 1 && !j.active);
-    return '<div class="vh-cust"><button type="button" class="cust910" data-cust910="' + esc(j.jobNo) + '" aria-haspopup="dialog" aria-label="' + esc('Active jobs for ' + j.customer) + '">' +
-      '<span class="cust-name910">' + esc(j.customer) + '</span>' + (show ? '<span class="cust-n910">' + n + (n === 1 ? ' ACTIVE JOB' : ' ACTIVE JOBS') + icon('chevron', 12) + '</span>' : '') + '</button></div>';
-  }
+  // custBtn910 — v2.9.11 version further down (+ the customer briefing)
   const custCard910 = (no) => () => {
     const j = findJob(no); if (!j) return '';
     const t0 = today0(), L = custJobs910(j);
@@ -6838,6 +6796,688 @@
     }, true);
   }
 
+  // ==================================================================== v2.9.11
+  // Amal's next list (agreed 4 Nov 2026, "chambikko" 5 Nov):
+  //  1–2 the customer briefing beside the customer's name on the job page, with WhatsApp contacts
+  //  3   line free time learnt from earlier jobs (same customer + line, else the line's usual) — filled in, always editable
+  //  4   search: MENTIONED IN REMARKS AND NOTES (the job's remarks, notes, follow-up remarks)
+  //  5   public holidays: port clocks and Home office hours know them, OFF TODAY / TOMORROW / DAY AFTER under the port times
+  //      on Follow-ups, and a UAE holiday counts like the Friday weekend ("TODAY + NATIONAL DAY")
+  //  6   leave hand-over: a page (from Cover) and a Word file in the style of the Active jobs list
+  //  7   a job is changed by its Customer Service owner — and the colleague covering them on those days
+  //  8   "waiting on" on Follow-ups: the tag on the row, the choice in the remark card, the filter in the dark tile
+  I.brief911 = '<rect x="5" y="4" width="14" height="17" rx="3"/><path d="M9.5 4v2.5h5V4"/><path d="M8.5 11h7M8.5 15h5"/>';
+  I.wa911 = '<path d="M20 11.6a8.4 8.4 0 0 1-12.4 7.4L3.5 20.3l1.3-4A8.4 8.4 0 1 1 20 11.6z"/><path d="M9 9.2c.2 2.3 2.4 4.6 4.8 4.9l1.1-1.2 1.6.9"/>';
+  I.hourglass911 = '<path fill="currentColor" stroke="none" fill-rule="evenodd" d="M5 2h14v2.2h-1.6v2.3c0 2.3-1.7 4-3.7 5.5 2 1.5 3.7 3.2 3.7 5.5v2.3H19V22H5v-2.2h1.6v-2.3c0-2.3 1.7-4 3.7-5.5-2-1.5-3.7-3.2-3.7-5.5V4.2H5V2zm3.8 2.2v2.3c0 1.3 1.1 2.6 3.2 4.1 2.1-1.5 3.2-2.8 3.2-4.1V4.2H8.8zM12 13.4c-2.1 1.5-3.2 2.8-3.2 4.1v2.3h6.4v-2.3c0-1.3-1.1-2.6-3.2-4.1z"/><path fill="currentColor" stroke="none" d="M9.6 19.8h4.8v-1.3c0-.8-.8-1.7-2.4-2.9-1.6 1.2-2.4 2.1-2.4 2.9z"/>';
+  I.off911 = '<rect x="4" y="5.5" width="16" height="14" rx="3"/><path d="M4 10h16M9 13.5l6 4.5M15 13.5l-6 4.5"/>';
+  I.handover911 = '<rect x="3.5" y="3.5" width="12" height="17" rx="2.5"/><path d="M7 8.5h5M7 12h4M13 16.5h7.5M17.5 13.5l3 3-3 3"/>';
+
+  function applyBoot911(boot) {
+    if (Array.isArray(boot.holidays)) { state.hol911 = boot.holidays; holIx911 = null; offMemo911.clear(); }
+    if (boot.briefs && typeof boot.briefs === 'object') state.briefs911 = boot.briefs;
+    if (boot.waits && typeof boot.waits === 'object') state.waits911 = boot.waits;
+    if (Array.isArray(boot.waitNames)) state.waitNames911 = boot.waitNames;
+    if (boot.freeMem && typeof boot.freeMem === 'object') state.freeMem911 = boot.freeMem;
+  }
+  const DAYS_LONG911 = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const dayTxt911 = (t) => { const d = dayOf(t); return DOW[d.getDay()] + ' ' + d.getDate() + ' ' + MON91[d.getMonth()]; };   // a moment → "Tue 3 Nov" (Dubai)
+  const isoTxt911 = (iso) => { const d = parseDate(iso); return d ? DOW[d.getDay()] + ' ' + d.getDate() + ' ' + MON91[d.getMonth()] : iso; };
+  const needs911 = (e, what) => (/not available|unknown/i.test((e && e.message) || '') ? what + ' needs the v2.9.11 Code.gs update.' : (e && e.message) || 'Not saved.');
+
+  // ================================================================ 7 · who changes a job
+  // Its Customer Service owner, and the colleague covering them on those days. A job with no owner, or whose owner is no
+  // longer a Customer Service account, is open to everyone in Customer Service (nothing is ever stuck). Anyone can still
+  // read it, add notes and duplicate it. The server checks the same.
+  function isCsName911(n) {
+    const L = state.users || [], u = L.find((x) => String((x && x.name) || '').toUpperCase().trim() === n);
+    return u ? normRole(u.role, n) === 'CS' : !L.length;
+  }
+  function mayEdit911(j) {
+    if (!j || !canEdit()) return false;
+    const o = String(j.cs || '').toUpperCase().trim();
+    return !o || o === state.user || covOwners98().has(o) || !isCsName911(o);
+  }
+  function viewOnly911(j) {
+    const o = nice(j.cs);
+    return '<div class="vh-actions is-ro is-view911"><span class="ro-chip" title="' + esc('Only ' + o + ' — or the colleague covering ' + o + ' — changes this job. You can add notes.') + '">' + icon('lock', 14) + '<span>' + esc(j.cs) + '’S JOB · VIEW ONLY</span></span>' +
+      '<button type="button" class="btn-ghost" data-act="duplicate" title="Duplicate job" aria-label="Duplicate job">' + icon('copy', 16) + '<span>Duplicate</span></button>' +
+      '<button type="button" class="btn-brutal btn-icon" data-act="focus-note">' + icon('note', 16) + '<span>ADD A NOTE</span></button></div>';
+  }
+
+  // ================================================================ 1–2 · the customer briefing
+  const briefKey911 = (c) => String(c || '').toUpperCase().replace(/\s+/g, ' ').trim();
+  const briefOf911 = (c) => (state.briefs911 || {})[briefKey911(c)] || null;
+  const canBrief911 = (j) => !!j && !!briefKey911(j.customer) && (canEdit() || (isSales() && j.sales === state.user));
+  const waDigits911 = (p) => { let d = String(p || '').replace(/[^\d+]/g, ''); if (d.startsWith('00')) d = d.slice(2); d = d.replace(/\+/g, ''); return d.length >= 7 && d.length <= 15 ? d : ''; };
+  function briefBtn911(j) {
+    if (!briefKey911(j.customer)) return '';
+    const b = briefOf911(j.customer);
+    return '<button type="button" class="brief911' + (b ? ' has' : '') + '" data-brief911="' + esc(j.jobNo) + '" aria-haspopup="dialog" aria-label="' + esc(b ? 'Customer briefing' : 'Customer briefing — none yet') + '" title="Customer briefing">' + icon('brief911', 15) + '</button>';
+  }
+  function custBtn910(j) {   // the name opens the customer's active jobs (v2.9.10); v2.9.11: + the briefing beside it, on the job page
+    if (!custKey910(j.customer)) return '<div class="vh-cust">—</div>';
+    const n = custJobs910(j).length, show = n > 1 || (n === 1 && !j.active);
+    const brief = state.route && state.route.name === 'job' ? briefBtn911(j) : '';
+    return '<div class="vh-cust' + (brief ? ' has-brief911' : '') + '"><button type="button" class="cust910" data-cust910="' + esc(j.jobNo) + '" aria-haspopup="dialog" aria-label="' + esc('Active jobs for ' + j.customer) + '">' +
+      '<span class="cust-name910">' + esc(j.customer) + '</span>' + (show ? '<span class="cust-n910">' + n + (n === 1 ? ' ACTIVE JOB' : ' ACTIVE JOBS') + icon('chevron', 12) + '</span>' : '') + '</button>' + brief + '</div>';
+  }
+  function contactRow911(c) {
+    const d = waDigits911(c[2]);
+    return '<div class="bf-ct911"><span class="bf-who911"><b>' + esc(c[0] || 'Contact') + (c[1] ? '<i> · ' + esc(c[1]) + '</i>' : '') + '</b><span>' + esc(c[2]) + '</span></span>' +
+      (d ? '<a class="bf-wa911" href="https://wa.me/' + d + '" target="_blank" rel="noopener" aria-label="' + esc('WhatsApp ' + (c[0] || c[2])) + '">' + icon('wa911', 15) + 'WhatsApp</a>' : '') + '</div>';
+  }
+  function briefBody911(b) {
+    return (b.req.length ? '<div class="bf-k911">REQUIREMENTS</div><ul class="bf-list911">' + b.req.map((r) => '<li>' + esc(r) + '</li>').join('') + '</ul>' : '') +
+      (b.ct.length ? '<div class="bf-k911">CONTACTS</div><div class="bf-cts911">' + b.ct.map(contactRow911).join('') + '</div>' : '');
+  }
+  const briefCard911 = (no) => () => {
+    const j = findJob(no); if (!j) return '';
+    const b = briefOf911(j.customer), can = canBrief911(j);
+    const edit = can ? '<button type="button" class="bf-edit911" data-brief-edit911="' + esc(j.jobNo) + '">' + icon('edit', 13) + (b ? 'Edit' : 'Add briefing') + '</button>' : '';
+    return '<div class="pop-title bf-name911">' + esc(j.customer) + '</div>' +
+      (b ? briefBody911(b) + '<div class="bf-foot911"><span>Edited by ' + esc(b.by === state.user ? 'you' : nice(b.by)) + (b.at ? ' · ' + esc(dayTxt911(b.at)) : '') + '</span>' + edit + '</div>'
+        : '<p class="pop-text bf-none911">No briefing yet' + (can ? ' — what should a colleague know about this customer?' : '.') + '</p>' + (edit ? '<div class="bf-foot911"><span></span>' + edit + '</div>' : ''));
+  };
+  const bfOpen911 = () => !!(state.overlay === 'pop' && state.brief911 && popRender === state.brief911.render);
+  function openBrief911(btn, pinned) {
+    const render = briefCard911(btn.dataset.brief911);
+    keepFocus911(() => openPop(btn, 'CUSTOMER BRIEFING', render), pinned);
+    state.brief911 = { no: btn.dataset.brief911, render, pinned: !!pinned };
+  }
+  // a card opened by pointing at something must not take the keyboard from where you are typing
+  function keepFocus911(open, pinned) {
+    const had = document.activeElement;
+    open();
+    if (!pinned && had && had !== document.body && document.body.contains(had)) had.focus({ preventScroll: true });
+  }
+  // the form (side panel): requirements one per line, up to six contacts
+  function briefEdit911(no) {
+    const j = findJob(no); if (!j || !canBrief911(j)) return;
+    const b = briefOf911(j.customer) || { req: [], ct: [] };
+    state.bfForm911 = { no: j.jobNo, cust: j.customer, req: b.req.join('\n'), ct: b.ct.length ? b.ct.map((c) => c.slice()) : [['', '', '']] };
+    closeOverlays(true);
+    $('#drawerKicker').textContent = 'CUSTOMER BRIEFING';
+    popRender = briefForm911;
+    $('#drawerBody').innerHTML = briefForm911();
+    showDrawer(document.activeElement);
+    state.overlay = 'sheet';
+    const t = $('#bfReq911'); if (t) t.focus({ preventScroll: true });
+  }
+  function briefForm911() {
+    const F = state.bfForm911; if (!F) return '';
+    const row = (c, i) => '<div class="bf-row911">' +
+      '<div class="field"><label for="bfN' + i + '">Name</label><input id="bfN' + i + '" maxlength="40" value="' + esc(c[0]) + '" placeholder="Contact name" autocomplete="off"></div>' +
+      '<div class="field"><label for="bfR' + i + '">Role</label><input id="bfR' + i + '" maxlength="30" value="' + esc(c[1]) + '" placeholder="Their role" autocomplete="off"></div>' +
+      '<div class="field bf-ph911"><label for="bfP' + i + '">WhatsApp number</label><input id="bfP' + i + '" maxlength="24" inputmode="tel" value="' + esc(c[2]) + '" placeholder="Number with country code" autocomplete="off"></div>' +
+      '<button type="button" class="icon-btn bf-rm911" data-bf-rm911="' + i + '" aria-label="Remove this contact">' + icon('close', 14) + '</button></div>';
+    return '<h2 class="peek-job form-title" id="drawerTitle">' + esc(F.cust) + '</h2>' +
+      '<form class="job-form bf-form911" id="briefForm911" novalidate>' +
+        '<fieldset><legend>REQUIREMENTS</legend><div class="field is-wide"><label for="bfReq911">What a colleague should know — one per line</label><textarea id="bfReq911" rows="6" maxlength="1800" placeholder="One requirement per line">' + esc(F.req) + '</textarea></div></fieldset>' +
+        '<fieldset><legend>CONTACTS</legend><div class="bf-rows911">' + F.ct.map(row).join('') + '</div>' +
+          (F.ct.length < 6 ? '<button type="button" class="link-btn bf-addct911" data-bf-addct911>' + icon('plus', 14) + 'Add a contact</button>' : '') + '</fieldset>' +
+        '<p class="pop-hint">Shows beside ' + esc(F.cust) + ' on the job page, for everyone in Customer Service' + (isSales() ? ' and you' : ' and the sales person') + '. WhatsApp opens a chat with that number — EWS sends nothing.</p>' +
+        '<div class="form-error" id="formError" role="alert"></div>' +
+        '<div class="form-actions"><button type="button" class="btn-ghost" data-act="form-cancel">Cancel</button><button type="submit" class="btn-brutal" id="formSubmit">SAVE BRIEFING</button></div></form>';
+  }
+  function briefRedraw911() { const b = $('#drawerBody'); if (!b || !state.bfForm911) return; const y = b.scrollTop; b.innerHTML = briefForm911(); b.scrollTop = y; }
+  function briefCollect911() {
+    const F = state.bfForm911; if (!F) return null;
+    const v = (id) => (($('#' + id) || {}).value || '');
+    F.req = v('bfReq911');
+    F.ct = F.ct.map((c, i) => [v('bfN' + i), v('bfR' + i), v('bfP' + i)]);
+    return F;
+  }
+  async function briefSave911() {
+    const F = briefCollect911(); if (!F) return;
+    const err = $('#formError'), btn = $('#formSubmit');
+    const req = F.req.split(/\r?\n/).map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const ct = F.ct.map((c) => ({ name: c[0].trim(), role: c[1].trim(), phone: c[2].trim() })).filter((c) => c.name || c.phone);
+    const bad = ct.find((c) => !waDigits911(c.phone));
+    if (bad) { if (err) err.textContent = bad.phone ? 'Check the number for ' + (bad.name || 'the contact') + ' — the full number with the country code.' : 'Add the number for ' + (bad.name || 'the contact') + '.'; return; }
+    if (err) err.textContent = '';
+    if (btn) { btn.disabled = true; btn.textContent = 'SAVING…'; }
+    setSaving(1);
+    try {
+      const res = await api.call('ethixBriefSave', [F.cust, { req, ct }]);
+      if (!res || !res.ok) throw new Error((res && res.error) || 'Not saved.');
+      state.briefs911 = state.briefs911 || {};
+      if (res.brief) state.briefs911[res.key || briefKey911(F.cust)] = res.brief; else delete state.briefs911[res.key || briefKey911(F.cust)];
+      state.bfForm911 = null;
+      closeOverlays(); rerender();
+      toast(res.brief ? 'Briefing saved · ' + F.cust : 'Briefing cleared · ' + F.cust);
+    } catch (e) {
+      if (e.kind === 'auth') return;
+      if (err) err.textContent = needs911(e, 'The briefing');
+      if (btn) { btn.disabled = false; btn.textContent = 'SAVE BRIEFING'; }
+    } finally { setSaving(-1); }
+  }
+
+  // ================================================================ 3 · line free time learnt from earlier jobs
+  // New job: filled in (and said where it came from) — change it if this one differs. Edit details, field empty: offered.
+  function freeSuggest911(type, cust, line, skipNo) {
+    if (!['SFIF', 'SFIL', 'CND'].includes(type)) return null;
+    const L = upq(line), C = upq(cust); if (!L) return null;
+    let best = null;
+    if (C) state.jobs.forEach((j) => {
+      if (j.jobNo === skipNo || upq(j.vendor) !== L || upq(j.customer) !== C || !/^\d{1,3}$/.test(String(j.lineFreeRaw || ''))) return;
+      const t = +(j.opened || j.eta || 0);
+      if (!best || t >= best.t) best = { d: +j.lineFreeRaw, no: j.jobNo, t };
+    });
+    const ln = L;   // line names stay as the tracker has them (MSC, HAPAG LLOYD)
+    if (best && best.d > 0) return { d: best.d, why: 'from this customer’s last ' + ln + ' job · ' + best.no };
+    const M = state.freeMem911 || {}, p = C && M.pairs && M.pairs[L + '|' + C];
+    if (p && p[0] > 0) return { d: p[0], why: 'from this customer’s last ' + ln + ' job' + (p[1] ? ' · ' + p[1] : '') };
+    const u = M.lines && M.lines[L];
+    if (u && u[0] > 0) return { d: u[0], why: ln + '’s usual · ' + u[1] + ' of ' + u[2] + (u[2] === 1 ? ' job' : ' jobs') };
+    return null;
+  }
+  function freeRun911() {
+    const f = $('#jobForm') || $('#editForm'), inp = f && f.querySelector('[name="lineFree"]'), hint = $('#ftHint911');
+    if (!inp || !hint) return;
+    const isNew = f.id === 'jobForm', val = (n) => ((f.querySelector('[name="' + n + '"]') || {}).value || '');
+    const type = val('type') || (isNew ? state.newJob && state.newJob.type : (findJob(state.editing && state.editing.no) || {}).type) || '';
+    const sug = freeSuggest911(type, val('customer'), val('vendor'), isNew ? '' : state.editing && state.editing.no);
+    if (isNew) {
+      const auto = inp.dataset.auto911 === '1';
+      if (!inp.value || auto) { if (sug) { inp.value = sug.d; inp.dataset.auto911 = '1'; } else if (auto) { inp.value = ''; inp.dataset.auto911 = ''; } }
+      hint.innerHTML = inp.dataset.auto911 === '1' && sug ? '<span>' + esc(sug.why.charAt(0).toUpperCase() + sug.why.slice(1)) + '</span>' : '';
+    } else {
+      hint.innerHTML = !String(inp.value).trim() && sug ? '<button type="button" class="ft-use911" data-ft-use911="' + sug.d + '">Use ' + sug.d + ' days</button><span>' + esc(sug.why) + '</span>' : '';
+    }
+  }
+  function freeWire911() {
+    const f = $('#jobForm') || $('#editForm'), inp = f && f.querySelector('[name="lineFree"]');
+    if (!inp || inp.dataset.w911) return;
+    inp.dataset.w911 = '1';
+    const field = inp.closest('.field'); if (!field) return;
+    field.insertAdjacentHTML('beforeend', '<div class="ft-hint911" id="ftHint911" aria-live="polite"></div>');
+    freeRun911();
+  }
+
+  // ================================================================ 4 · search: words in remarks, notes and follow-up remarks
+  let srchT911 = 0;
+  function runSearch(q) {   // v2.9.11: + MENTIONED IN REMARKS AND NOTES under the jobs
+    const box = $('#searchResults'); if (!box) return;
+    q = q.trim().toUpperCase();
+    if (!q) { box.hidden = true; return; }
+    const blHit = (j) => blList98(j.blNo).find((x) => x.includes(q)) || '';   // v2.9.8: BL / AWB numbers are searched too
+    const hits = state.jobs.filter((j) => (j.jobNo + ' ' + j.customer + ' ' + j.pol + ' ' + j.pod + ' ' + j.cs + ' ' + j.sales + ' ' + j.type + ' ' + j.blNo).toUpperCase().includes(q))
+      .sort((a, b) => (b.active - a.active) || (canEdit() ? (b.cs === state.user) - (a.cs === state.user) : 0) || ((b.jobNo.toUpperCase().startsWith(q) ? 1 : 0) - (a.jobNo.toUpperCase().startsWith(q) ? 1 : 0)))
+      .slice(0, 8);
+    searchIndex = -1;
+    const jobs = hits.map((j) =>
+      '<button type="button" class="result" data-job="' + esc(j.jobNo) + '"><span class="result-job">' + esc(j.jobNo) + '</span><span class="result-cust">' + esc(j.customer || '—') + '</span><span class="result-route">' + (blHit(j) && !(j.jobNo + ' ' + j.customer).toUpperCase().includes(q) ? esc(blWord98(j) + ' ' + blHit(j)) + ' · ' : '') + esc(j.route) + ' · ' + esc(j.type) + (j.active ? '' : ' · ' + esc(j.status)) + (canEdit() && j.cs !== state.user ? ' · ' + (j.cs ? 'WITH ' + esc(j.cs) : 'UNASSIGNED') : '') + '</span></button>'
+    ).join('');
+    state.srchQ911 = q;
+    const T = q.length >= 3 ? textHits911(q) : null;
+    const group = T && (T.list.length || T.loading) ? textGroup911(q, T) : '';
+    box.innerHTML = (jobs ? (group ? '<div class="sr-k911 is-jobs">JOBS</div>' : '') + jobs : group ? '' : '<div class="result-empty">No jobs match “' + esc(q) + '”.</div>') + group;
+    box.hidden = false;
+    if (T && T.loading) { clearTimeout(srchT911); srchT911 = setTimeout(() => textAsk911(q), 350); }
+  }
+  // the job's own REMARKS here and now; notes and follow-up remarks from the server (asked once per word)
+  function textHits911(q) {
+    const C = state.srch911 || {}, got = C[q];
+    const list = state.jobs.filter((j) => j.active && String(j.remarks || '').toUpperCase().includes(q)).slice(0, 8).map((j) => ({ no: j.jobNo, kind: 'remarks', text: String(j.remarks), t: 0 }));
+    (got || []).forEach((h) => { if (findJob(h.no)) list.push(h); });
+    return { list, loading: !got };
+  }
+  function snippet911(text, q) {
+    const T = String(text).replace(/\s+/g, ' ').trim(), i = T.toUpperCase().indexOf(q);
+    if (i < 0) return esc(T.slice(0, 90)) + (T.length > 90 ? '…' : '');
+    const a = Math.max(0, i - 34), b = Math.min(T.length, i + q.length + 56);
+    return (a ? '…' : '') + esc(T.slice(a, i)) + '<mark>' + esc(T.slice(i, i + q.length)) + '</mark>' + esc(T.slice(i + q.length, b)) + (b < T.length ? '…' : '');
+  }
+  function textGroup911(q, T) {
+    const src = (h) => (h.kind === 'remarks' ? 'REMARKS' : (h.kind === 'note' ? 'NOTE' : 'FOLLOW-UP') + (h.by ? ' · ' + esc(h.by) : '') + (h.t ? ' · ' + esc(dayTxt911(h.t).toUpperCase().replace(/^\w+ /, '')) : ''));
+    return '<div class="sr-group911" role="group" aria-label="Mentioned in remarks and notes"><div class="sr-k911">MENTIONED IN REMARKS AND NOTES' + (T.loading ? '<span class="sr-wait911"><i></i>Looking in notes…</span>' : '') + '</div>' +
+      T.list.slice(0, 10).map((h) => { const j = findJob(h.no) || { customer: '' };
+        return '<button type="button" class="result is-text911" data-job="' + esc(h.no) + '"' + (h.kind === 'note' ? ' data-tab911="notes"' : '') + '><span class="result-job">' + esc(h.no) + '</span><span class="result-cust">' + esc(j.customer || '—') + '</span>' +
+          '<span class="sr-line911"><b>' + src(h) + '</b><span>' + snippet911(h.text, q) + '</span></span></button>'; }).join('') + '</div>';
+  }
+  async function textAsk911(q) {
+    state.srch911 = state.srch911 || {};
+    if (state.srch911[q]) return;
+    let hits = [];
+    try { const res = await api.call('ethixSearchText', [q]); hits = (res && Array.isArray(res.hits)) ? res.hits : []; } catch (e) { hits = []; }
+    const keys = Object.keys(state.srch911); if (keys.length > 30) delete state.srch911[keys[0]];
+    state.srch911[q] = hits;
+    const inp = $('#searchInput'), box = $('#searchResults');
+    if (inp && box && !box.hidden && inp.value.trim().toUpperCase() === q) runSearch(inp.value);
+  }
+
+  // ================================================================ 5 · public holidays
+  let holIx911 = null;
+  const holC911 = {};
+  function holIndex911() {
+    if (holIx911) return holIx911;
+    holIx911 = new Map();
+    (state.hol911 || []).forEach((h) => { const k = h[1] + '|' + h[0]; if (!holIx911.has(k)) holIx911.set(k, []); holIx911.get(k).push({ name: h[2], note: h[3] || '' }); if (h[4]) holC911[h[1]] = h[4]; });
+    return holIx911;
+  }
+  const holOn911 = (cc, iso) => (cc && iso && holIndex911().get(cc + '|' + iso)) || [];
+  const isoPlus911 = (iso, n) => { const d = new Date(iso + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const zIsoMemo911 = new Map();
+  function zoneIso911(tz, now) {   // today's date where the port is
+    let f = zIsoMemo911.get(tz);
+    if (f === undefined) {
+      const mk = (z) => { try { return new Intl.DateTimeFormat('en-CA', { timeZone: z, year: 'numeric', month: '2-digit', day: '2-digit' }); } catch (e) { return null; } };
+      f = mk(tz) || ({ 'Europe/Kyiv': 'Europe/Kiev', 'Asia/Yangon': 'Asia/Rangoon' }[tz] ? mk({ 'Europe/Kyiv': 'Europe/Kiev', 'Asia/Yangon': 'Asia/Rangoon' }[tz]) : null);
+      zIsoMemo911.set(tz, f);
+    }
+    if (!f) return null;
+    const p = {}; f.formatToParts(now || new Date()).forEach((x) => { p[x.type] = x.value; });
+    return p.year && p.month && p.day ? p.year + '-' + p.month + '-' + p.day : null;
+  }
+  function officeState(z, now) {   // v2.9.11: a public holiday (the HOLIDAYS tab) is a day off, like the weekend
+    now = now || new Date();
+    const t = zoneNow(z.tz, now); if (!t) return null;
+    const iso0 = zoneIso911(z.tz, now), off = WEEKEND[z.cc] || [0, 6];
+    const hol = (k) => !!iso0 && holOn911(z.cc, isoPlus911(iso0, k)).length > 0;
+    const work = (d, k) => !off.includes(d) && !hol(k), mins = t.h * 60 + t.m, H = hoursOf(z);
+    if (work(t.dow, 0) && mins >= H[0] && mins < H[1]) return { open: true, t, toClose: H[1] - mins };
+    let add, d = t.dow, k = 0;
+    if (work(d, 0) && mins < H[0]) add = H[0] - mins;
+    else { add = 1440 - mins; d = (d + 1) % 7; k = 1; for (let n = 0; n < 30 && !work(d, k); n++) { add += 1440; d = (d + 1) % 7; k++; } add += H[0]; }
+    const h = iso0 ? holOn911(z.cc, iso0) : [];
+    return { open: false, t, toOpen: add, opensDow: d, hol: h.length ? h[0].name : '' };
+  }
+  // Home · OVERSEAS OFFICE HOURS: Ethix closed for a UAE holiday shows beside Dubai time
+  function aeHolChip911() {
+    const h = holOn911('AE', isoOf(today0()));
+    return h.length ? '<span class="po-hol911" title="' + esc('UAE public holiday — ' + h.map((x) => x.name).join(', ')) + '">' + icon('off911', 12) + 'CLOSED · ' + esc(h[0].name.toUpperCase()) + '</span>' : '';
+  }
+  // Follow-ups: OFF TODAY / OFF TOMORROW / OFF DAY AFTER under a port's time (that port's own calendar)
+  function holSoon911(port) {
+    const z = portZone(port); if (!z) return null;
+    const iso0 = zoneIso911(z.tz); if (!iso0) return null;
+    const hits = [];
+    for (let n = 0; n <= 2; n++) holOn911(z.cc, isoPlus911(iso0, n)).forEach((h) => hits.push({ n, iso: isoPlus911(iso0, n), name: h.name, note: h.note }));
+    return hits.length ? { port, z, hits } : null;
+  }
+  function holChip911(port, col) {
+    const o = holSoon911(port); if (!o) return '';
+    const n = o.hits[0].n;
+    return '<span class="hol911' + (n === 0 ? ' is-today' : '') + '" style="grid-column:' + col + '" role="button" tabindex="0" data-hol911="' + esc(port) + '" aria-label="' + esc('Public holiday at ' + portName91(port)) + '">' + icon('off911', 10) + (n === 0 ? 'OFF TODAY' : n === 1 ? 'OFF TOMORROW' : 'OFF DAY AFTER') + '</span>';
+  }
+  const holCard911 = (port) => () => {
+    const o = holSoon911(port); if (!o) return '<p class="pop-text">No public holiday at ' + esc(portName91(port)) + ' in the next days.</p>';
+    const when = (n) => (n === 0 ? 'today' : n === 1 ? 'tomorrow' : 'day after tomorrow');
+    return '<div class="hp911">' + o.hits.map((h) => '<div class="hp-day911"><b>' + esc(h.name) + '</b><span>' + esc(isoTxt911(h.iso)) + ' · ' + when(h.n) + (/estimat/i.test(h.note) ? ' · date estimated' : '') + '</span></div>').join('') +
+      '<div class="hp-port911">' + esc(portName91(port)) + ' office closed' + (o.hits.length === 1 && o.hits[0].n > 0 ? ' that day' : '') + '</div></div>';
+  };
+  const holKick911 = (port) => { const z = portZone(port); holIndex911(); return 'PUBLIC HOLIDAY' + (z && holC911[z.cc] ? ' · ' + holC911[z.cc].toUpperCase() : ''); };
+  function rrRoute99(j, t0) {   // both ports' local times (v2.9.9); v2.9.11: + a public holiday at either port in the next days
+    const plain = '<span class="rr-route">' + esc(j.mode === 'misc' ? 'COSTING ONLY' : j.route) + '</span>';
+    if (j.mode === 'misc' || !j.pol || !j.pod) return plain;
+    const lead = clockPort(j, t0);
+    const tm = (port) => {
+      const z = portZone(port), c = z && clockBits(z);
+      if (!c) return '<span class="rt99 is-none"></span>';
+      return '<span class="rt99 is-' + c.tone + (port === lead ? ' is-lead' : '') + '" data-clock="' + esc(port) + '" data-mini="1" title="' + esc(clockTitle(port, z, c)) + '"><i></i><b>' + c.time + '</b></span>';
+    };
+    const a = tm(j.pol), b = tm(j.pod);
+    if (/is-none/.test(a) && /is-none/.test(b)) return plain;
+    const ha = holChip911(j.pol, 1), hb = holChip911(j.pod, 3);
+    return '<span class="rr-route r99' + (ha || hb ? ' has-hol911' : '') + '"><span class="rp-n">' + esc(j.pol) + '</span><span class="rp-ar">→</span><span class="rp-n">' + esc(j.pod) + '</span>' + a + '<span></span>' + b + ha + hb + '</span>';
+  }
+  // The Friday rule, wider: the days off right after a working day (Saturday, Sunday, UAE holidays) count as today's.
+  const offMemo911 = new Map();
+  const isOff911 = (d) => d.getDay() === 0 || d.getDay() === 6 || holOn911('AE', isoOf(d)).length > 0;
+  function off911(t0) {
+    t0 = t0 || today0();
+    const k = isoOf(t0); if (offMemo911.has(k)) return offMemo911.get(k);
+    let n = 0;
+    if (!isOff911(t0)) for (let i = 1; i <= 10 && isOff911(addDays(t0, i)); i++) n++;   // a day off itself: just today
+    offMemo911.set(k, n);
+    return n;
+  }
+  function offWord911(t0) {   // WEEKEND · a holiday's name · LONG WEEKEND · HOLIDAYS
+    t0 = t0 || today0();
+    const n = off911(t0); if (!n) return '';
+    let weekend = false; const names = [];
+    for (let i = 1; i <= n; i++) { const d = addDays(t0, i); if (d.getDay() === 0 || d.getDay() === 6) weekend = true; holOn911('AE', isoOf(d)).forEach((h) => { const x = h.name.replace(/\s+holiday$/i, ''); if (!names.includes(x)) names.push(x); }); }
+    if (!names.length) return 'WEEKEND';
+    if (weekend) return 'LONG WEEKEND';
+    return names.length === 1 && names[0].length <= 22 ? names[0].toUpperCase() : 'HOLIDAYS';
+  }
+  const dayLong911 = (d, t0) => DAYS_LONG911[addDays(t0 || today0(), d).getDay()];
+  function fri99(t0) { return off911(t0) > 0; }   // v2.9.11: Friday — or the day before UAE holidays
+  function due99(t0) { return Math.max(1, off911(t0)); }
+  const dayWord99 = (d, t0) => (d === 0 ? 'today' : off911(t0) && d >= 1 && d <= off911(t0) ? dayLong911(d, t0) : d === 1 ? 'tomorrow' : 'in ' + d + ' days');
+  function watchGroups910(t0) {   // the days off after today are today's (Friday: the weekend, v2.9.9 · v2.9.11: UAE holidays)
+    const F = off911(t0);
+    return [['over', 'OVERDUE', (w) => w.d < 0 && w.d >= -21, 'red'], ['today', F ? 'TODAY + ' + offWord911(t0) : 'TODAY', (w) => w.d >= 0 && w.d <= F, 'red'],
+      ['soon', 'NEXT 3 DAYS', (w) => w.d > F, 'amber'], ['long', 'OVERDUE 3+ WEEKS', (w) => w.d < -21, '']];
+  }
+
+  // ================================================================ 8 · "waiting on" (Follow-ups)
+  const WAIT_FIX911 = ['CUSTOMER', 'LINE', 'AGENT', 'CUSTOMS', 'SALES'];
+  const waitOf911 = (j) => (state.waits911 || {})[keyOf(j)] || null;
+  const waitDays911 = (w) => Math.max(0, days(dayOf(+w[1] || Date.now()), today0()));
+  function waitTitle911(w) { const n = waitDays911(w); return 'Waiting on ' + nice(w[0]) + ' since ' + (n ? dayTxt911(w[1]) + ' (' + n + (n === 1 ? ' day' : ' days') + ')' : 'today') + ' · set by ' + (w[2] === state.user ? 'you' : nice(w[2])); }
+  function waitTag911(j, ro) {
+    const w = waitOf911(j); if (!w) return '';
+    const n = waitDays911(w), txt = upq(w[0]) + (n ? ' · ' + n + (n === 1 ? ' DAY' : ' DAYS') : '');
+    const tight = txt.length >= 18;   // a long name or many days: the hourglass alone says "waiting", so the whole text fits
+    const inner = icon('hourglass911', 11) + (tight ? '<b class="sr-only">WAITING </b>' : '<b>WAITING</b>') + '<span>' + esc(txt) + '</span>';
+    const cls = 'wtag911' + (tight ? ' is-tight911' : '');
+    return ro ? '<span class="' + cls + '" title="' + esc(waitTitle911(w)) + '">' + inner + '</span>'
+      : '<button type="button" class="' + cls + '" data-wait911="' + esc(j.jobNo) + '" title="' + esc(waitTitle911(w) + ' — tap to change') + '" aria-label="' + esc(waitTitle911(w) + '. Change') + '">' + inner + '</button>';
+  }
+  function waitNames911() {   // the five, then names typed by hand (everyone's), then any other name still on a job
+    const out = WAIT_FIX911.slice();
+    (state.waitNames911 || []).concat(Object.values(state.waits911 || {}).map((w) => w[0])).forEach((n) => { n = upq(n); if (n && !out.includes(n)) out.push(n); });
+    return out;
+  }
+  function waitBlock911(j, can) {   // inside the remark card
+    const w = waitOf911(j), adding = state.woAdd911 === j.jobNo;
+    if (!can) return w ? '<div class="wo911 is-ro"><div class="wo-k911">' + icon('hourglass911', 11) + 'WAITING ON</div><div class="wo-foot911"><span>' + esc(waitTitle911(w)) + '</span></div></div>' : '';
+    return '<div class="wo911" data-wo911="' + esc(j.jobNo) + '"><div class="wo-k911">' + icon('hourglass911', 11) + 'WAITING ON</div>' +
+      '<div class="wo-chips911" role="group" aria-label="Waiting on">' + waitNames911().map((n) => '<button type="button" class="wo-c911' + (w && upq(w[0]) === n ? ' is-on' : '') + '" data-wo-set911="' + esc(n) + '" aria-pressed="' + !!(w && upq(w[0]) === n) + '">' + esc(nice(n)) + '</button>').join('') +
+        (adding ? '' : '<button type="button" class="wo-c911 is-add" data-wo-add911>' + icon('plus', 12) + 'Add</button>') + '</div>' +
+      (adding ? '<form class="wo-new911" data-wo-new911><input id="woName911" maxlength="24" placeholder="Type a name" autocomplete="off" aria-label="Who are you waiting on?"><button type="submit" class="btn-brutal">ADD</button><button type="button" class="link-btn quiet" data-wo-cancel911>Cancel</button></form>' : '') +
+      '<div class="wo-foot911">' + (w ? '<span>Since ' + (waitDays911(w) ? esc(dayTxt911(w[1])) + ' · ' + waitDays911(w) + (waitDays911(w) === 1 ? ' day' : ' days') : 'today') + ' · set by ' + esc(w[2] === state.user ? 'you' : nice(w[2])) + '</span><button type="button" class="wo-clear911" data-wo-clear911>Clear</button>'
+        : '<span>Shows on the row until you change or clear it. A name you add is there for everyone.</span>') + '</div></div>';
+  }
+  async function waitSet911(no, on) {
+    const j = findJob(no); if (!j || !canEditJob(j)) return;
+    const K = keyOf(j), prev = waitOf911(j), names = (state.waitNames911 || []).slice();
+    on = upq(on).slice(0, 24);
+    state.waits911 = state.waits911 || {};
+    if (!on) delete state.waits911[K];
+    else state.waits911[K] = prev && upq(prev[0]) === on ? prev : [on, Date.now(), state.user];
+    if (on && !WAIT_FIX911.includes(on) && !(state.waitNames911 || []).includes(on)) state.waitNames911 = (state.waitNames911 || []).concat([on]);
+    state.woAdd911 = null;
+    rerender(); refreshOverlay();
+    try {
+      const res = await api.call('ethixWaitSet', [j.jobNo, on]);
+      if (!res || !res.ok) throw new Error((res && res.error) || 'Not saved.');
+      if (res.wait) state.waits911[K] = res.wait; else delete state.waits911[K];
+      if (Array.isArray(res.names)) state.waitNames911 = res.names;
+      rerender(); refreshOverlay();
+      toast(on ? 'Waiting on ' + nice(on) + ' · ' + j.jobNo : 'Cleared · ' + j.jobNo);
+    } catch (e) {
+      if (prev) state.waits911[K] = prev; else delete state.waits911[K];
+      state.waitNames911 = names;
+      rerender(); refreshOverlay();
+      if (e.kind !== 'auth') toast(needs911(e, '“Waiting on”'), { error: true });
+    }
+  }
+  // the filter: a row along the bottom of the dark tile — only the names in use, with how many
+  const wMatch911 = (x) => !state.wf911 || (waitOf911(x.j) && upq(waitOf911(x.j)[0]) === state.wf911);
+  function waitBar911(rows) {
+    const n = new Map();
+    rows.forEach((x) => { const w = waitOf911(x.j); if (w) n.set(upq(w[0]), (n.get(upq(w[0])) || 0) + 1); });
+    if (state.wf911 && !n.has(state.wf911)) state.wf911 = '';
+    if (!n.size) return '';
+    const order = waitNames911().filter((x) => n.has(x));
+    return '<div class="rp-wait911" role="group" aria-label="Waiting on"><span class="rpw-k911">' + icon('hourglass911', 12) + 'WAITING ON</span>' +
+      order.map((k) => '<button type="button" class="rpw911' + (state.wf911 === k ? ' is-on' : '') + '" data-wf911="' + esc(k) + '" aria-pressed="' + (state.wf911 === k) + '">' + esc(nice(k)) + '<b>' + n.get(k) + '</b></button>').join('') +
+      (state.wf911 ? '<button type="button" class="rpw911 is-all" data-wf911="">Show all</button>' : '') + '</div>';
+  }
+
+  // ================================================================ 6 · leave hand-over
+  // Your active jobs (or the colleague's you cover — from the day they accept), the way a colleague needs them: what needs
+  // doing in the next three days first, then by where the shipment is; each with its open tasks, the last follow-up remark
+  // and who you are waiting on; then the customers' briefings. The Word file has the same, in the Active jobs style.
+  function hoOwnerOk911(owner) {
+    if (!canEdit()) return false;
+    if (owner === state.user) return true;
+    const t = covToday98();
+    return (state.covers || []).some((c) => c.cover === state.user && c.owner === owner && c.status === 'ACCEPTED' && c.end >= t);
+  }
+  function hoCover911(owner) {   // the cover this hand-over is for (running first, then coming up, then asked)
+    const t = covToday98(), L = (state.covers || []).filter((c) => c.owner === owner && (c.status === 'ACCEPTED' || c.status === 'ASKED') && c.end >= t && (owner === state.user || c.cover === state.user));
+    return L.sort((a, b) => (a.status === 'ACCEPTED' ? 0 : 1) - (b.status === 'ACCEPTED' ? 0 : 1) || (a.start < b.start ? -1 : 1))[0] || null;
+  }
+  function hoBtn911(c) {
+    if (c.owner === state.user) return '<button type="button" class="btn-ghost" data-href="#/handover">' + icon('handover911', 15) + '<span>Hand-over</span></button>';
+    if (c.cover === state.user && c.status === 'ACCEPTED') return '<button type="button" class="btn-ghost" data-href="#/handover/' + esc(encodeURIComponent(c.owner)) + '">' + icon('handover911', 15) + '<span>Their hand-over</span></button>';
+    return '';
+  }
+  function hoData911(owner) {
+    const t0 = today0(), jobs = state.jobs.filter((j) => j.active && j.cs === owner);
+    const watch = watchItems91(jobs, t0), tasks = new Map();
+    watch.forEach((w) => { const k = keyOf(w.j); if (!tasks.has(k)) tasks.set(k, []); tasks.get(k).push(w); });
+    const soonD = (j) => (tasks.get(keyOf(j)) || []).filter((w) => w.d >= -21).reduce((a, w) => Math.min(a, w.d), 99);   // as TODAY'S WATCH: older than 3 weeks is not "now"
+    const stage = (j) => (j.mode === 'misc' ? 'nodate' : stageOf91(j, t0));
+    const tm = (d) => (d ? +d : 9e15);
+    const need = jobs.filter((j) => soonD(j) <= 3).sort((a, b) => soonD(a) - soonD(b) || String(a.jobNo).localeCompare(String(b.jobNo)));
+    const rest = jobs.filter((j) => !need.includes(j));
+    const by = (s) => rest.filter((j) => stage(j) === s);
+    const groups = [
+      ['need', 'NEEDS DOING — NEXT 3 DAYS', need],
+      ['before', 'BEFORE SAILING', by('before').sort((a, b) => tm(a.etd) - tm(b.etd))],
+      ['sea', 'ON THE WAY', by('sea').sort((a, b) => tm(a.eta) - tm(b.eta))],
+      ['arrived', 'ARRIVED', by('arrived').sort((a, b) => tm(a.eta) - tm(b.eta))],
+      ['nodate', 'COSTING ONLY · NO DATES YET', by('nodate').concat(rest.filter((j) => !['before', 'sea', 'arrived', 'nodate'].includes(stage(j))))]
+    ].filter((g) => g[2].length);
+    const custs = []; jobs.forEach((j) => { const k = briefKey911(j.customer); if (k && briefOf911(k) && !custs.includes(k)) custs.push(k); });
+    return { t0, jobs, tasks, groups, custs: custs.sort(), cover: hoCover911(owner), waiting: jobs.filter((j) => waitOf911(j)).length, needN: need.length };
+  }
+  function hoLast911(j) {   // the newest follow-up remark: [t, user, text]
+    const L = rmkAll99(j); return L.length ? L[0] : null;
+  }
+  const hoRoute911 = (j) => [j.mode === 'misc' ? (j.against ? 'AGAINST ' + j.against : 'COSTING ONLY') : j.pol && j.pod ? j.pol + ' → ' + j.pod : j.pol || j.pod || '', String(j.vendor || '').trim().toUpperCase()].filter(Boolean).join(' · ') || '—';
+  function hoRow911(j, D) {
+    const st = jobStatus91(j, D.t0), T = D.tasks.get(keyOf(j)) || [], last = hoLast911(j), f = followState(j, D.t0);
+    const where = '<span class="ho-where911">' + (st.hold ? '<b class="is-hold">On hold</b> · ' : '') + '<b>' + esc(st.where) + '</b>' + (st.eta ? ' · <b>' + esc(st.eta) + '</b>' : '') + (st.rest.length ? '<span>' + esc(st.rest.join(' · ')) + '</span>' : '') + '</span>';
+    const todo = T.length ? '<span class="ho-tasks911">' + T.slice(0, 4).map((w) => '<span class="ho-t911 is-' + (w.level === 'urgent' ? 'red' : 'amber') + '"><b>' + esc(w.what) + '</b>' + esc(w.when) + '</span>').join('') + (T.length > 4 ? '<span class="ho-more911">+' + (T.length - 4) + ' more</span>' : '') + '</span>'
+      : '<span class="ho-next911">' + toneChip(rowNext(j)) + '</span>';
+    const fu = (last ? '<span class="ho-rmk911">“' + esc(last[2]) + '”</span><span class="ho-by911">' + esc(last[1] === state.user ? 'You' : nice(last[1])) + ' · ' + esc(dayTxt911(last[0])) + '</span>' : '<span class="ho-by911">' + esc(lastCheckText(f, D.t0)) + '</span>') +
+      '<span class="ho-tags911">' + waitTag911(j, true) + '<span class="ho-pace911">' + esc(f.label) + '</span></span>';
+    return '<li class="ho-row911"><button type="button" class="ho-main911" data-job="' + esc(j.jobNo) + '"><span class="ho-no911">' + changedDot(j) + esc(j.jobNo) + '<span class="badge">' + esc(j.type) + '</span></span>' +
+        '<span class="ho-cust911">' + esc(j.customer || '—') + '</span><span class="ho-route911">' + esc(hoRoute911(j)) + '</span></button>' +
+      '<span class="ho-mid911">' + where + todo + '</span><span class="ho-fu911">' + fu + '</span>' + (briefOf911(j.customer) ? '<span class="ho-bf911">' + briefBtn911(j) + '</span>' : '') + '</li>';
+  }
+  function renderHandover911(owner, first) {
+    owner = upq(owner || state.user);
+    if (!hoOwnerOk911(owner)) { history.replaceState(null, '', '#/cover'); render(false); return; }
+    const anim = first ? ' reveal' : '', D = hoData911(owner), me = owner === state.user, c = D.cover;
+    const other = c ? (me ? c.cover : c.owner) : '', days = c ? covDays98(c) : 0;
+    const forTxt = c ? (me ? 'For ' + nice(other) : 'From ' + nice(other)) + ' · ' + covRange98(c) + ' · ' + days + (days === 1 ? ' day' : ' days') + (c.status === 'ASKED' ? ' (not accepted yet)' : '') : me ? 'For whoever covers you — set the days on Cover' : '';
+    const sec = (g, i) => '<section class="ho-sec911' + anim + '" style="--d:' + (80 + i * 30) + 'ms" aria-labelledby="ho-' + g[0] + '"><div class="tile-head"><h2 class="tile-title" id="ho-' + g[0] + '">' + g[1] + ' <span class="tile-count">' + g[2].length + '</span></h2></div><ol class="ho-list911">' + g[2].map((j) => hoRow911(j, D)).join('') + '</ol></section>';
+    const briefs = D.custs.length ? '<section class="ho-sec911 ho-briefs911' + anim + '" style="--d:' + (80 + D.groups.length * 30) + 'ms" aria-labelledby="ho-bf"><div class="tile-head"><h2 class="tile-title" id="ho-bf">CUSTOMER BRIEFINGS <span class="tile-count">' + D.custs.length + '</span></h2></div><div class="ho-bgrid911">' +
+      D.custs.map((k) => { const b = briefOf911(k); return '<article class="ho-bcard911"><div class="ho-bname911">' + esc(k) + '</div>' + briefBody911(b) + '<div class="bf-foot911"><span>Edited by ' + esc(b.by === state.user ? 'you' : nice(b.by)) + (b.at ? ' · ' + esc(dayTxt911(b.at)) : '') + '</span></div></article>'; }).join('') + '</div></section>' : '';
+    $('#view').innerHTML = '<div class="wrap handover-page no-seg">' +
+      '<header class="page-head' + anim + '"><div class="head-main"><div class="crumbs ho-crumbs911"><button type="button" class="back-btn" data-href="#/cover" aria-label="Back to Cover">' + icon('back', 18) + '</button><button type="button" class="link-btn" data-href="#/cover">COVER</button><span>/ HAND-OVER</span></div>' +
+        '<h1 class="greeting">' + (me ? 'Your hand-over' : esc(nice(owner)) + '’s hand-over') + '</h1></div>' +
+        '<div class="head-actions"><button type="button" class="btn-brutal btn-icon" data-ho-word911="' + esc(owner) + '"' + (D.jobs.length ? '' : ' disabled') + '>' + icon('download', 16) + '<span>WORD FILE</span></button></div></header>' +
+      '<section class="ho-sum911 tile tile-ink' + anim + '" style="--d:40ms" aria-label="Summary"><div class="rp-num"><b>' + D.jobs.length + '</b><span>' + (D.jobs.length === 1 ? 'active job' : 'active jobs') + '</span></div>' +
+        '<div class="rp-main"><div class="rp-label">' + esc(forTxt || fmtLong(D.t0)) + '</div><div class="ho-chips911">' +
+          '<span class="' + (D.needN ? 'is-red' : '') + '"><b>' + D.needN + '</b> to do in the next 3 days</span><span><b>' + D.waiting + '</b> waiting on someone</span><span><b>' + D.jobs.filter((j) => j.hold).length + '</b> on hold</span><span><b>' + D.custs.length + '</b> ' + (D.custs.length === 1 ? 'customer briefing' : 'customer briefings') + '</span>' +
+        '</div></div></section>' +
+      (D.jobs.length ? D.groups.map(sec).join('') + briefs : '<section class="tile' + anim + '">' + empty('check', me ? 'You have no active jobs to hand over.' : nice(owner) + ' has no active jobs.') + '</section>') +
+      '</div>';
+  }
+  // ---------- the Word file (A4 landscape, the look of the Active jobs list) ----------
+  function docXml911(o) {   // o: { W, title, sub, foot, body, logo, sz } → the files of a .docx
+    const X = XL.X, NAVY = '1C5179', INK = '0B1B2B', MUTE = '6B7A8A', HAIR = 'DFE6ED', TEAL = '0E7C7B', W = o.W;
+    const rPr = (q) => '<w:rPr>' + (q.b ? '<w:b/><w:bCs/>' : '') + '<w:color w:val="' + (q.c || INK) + '"/>' + (q.sp ? '<w:spacing w:val="' + q.sp + '"/>' : '') + '<w:sz w:val="' + (q.sz || 18) + '"/><w:szCs w:val="' + (q.sz || 18) + '"/></w:rPr>';
+    const run = (t, q) => '<w:r>' + rPr(q || {}) + '<w:t xml:space="preserve">' + X(t) + '</w:t></w:r>';
+    const para = (runs, q) => { q = q || {}; return '<w:p><w:pPr><w:spacing w:before="0" w:after="0"/>' + (q.jc ? '<w:jc w:val="' + q.jc + '"/>' : '') + '</w:pPr>' + runs + '</w:p>'; };
+    const NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    const DNS = NS + ' xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"';
+    const XMLH = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+    const sect = '<w:sectPr><w:headerReference w:type="default" r:id="rIdH"/><w:footerReference w:type="default" r:id="rIdF"/><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/><w:pgMar w:top="1300" w:right="850" w:bottom="1000" w:left="850" w:header="420" w:footer="420" w:gutter="0"/><w:cols w:space="720"/></w:sectPr>';
+    const doc = XMLH + '<w:document ' + NS + '><w:body>' + o.body + para('') + sect + '</w:body></w:document>';
+    const E = 360000, lh = Math.round(0.95 * E), lw = o.sz ? Math.round(lh * o.sz[0] / o.sz[1]) : 0;
+    const pic = o.sz ? '<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="' + lw + '" cy="' + lh + '"/><wp:docPr id="1" name="ETHIX logo"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>' +
+      '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="logo.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdLogo"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>' +
+      '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + lw + '" cy="' + lh + '"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>' : run('ETHIX SHIPPING', { b: true, c: NAVY, sz: 22 });
+    const hcell = (w, content) => '<w:tc><w:tcPr><w:tcW w:w="' + w + '" w:type="dxa"/><w:vAlign w:val="bottom"/></w:tcPr>' + content + '</w:tc>';
+    const header = XMLH + '<w:hdr ' + DNS + '><w:tbl><w:tblPr><w:tblW w:w="' + W + '" w:type="dxa"/><w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="single" w:sz="8" w:space="0" w:color="' + NAVY + '"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders><w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/><w:bottom w:w="90" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="0000" w:firstRow="0" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/></w:tblPr>' +
+      '<w:tblGrid><w:gridCol w:w="' + (W / 2) + '"/><w:gridCol w:w="' + (W / 2) + '"/></w:tblGrid><w:tr>' +
+      hcell(W / 2, para(pic)) + hcell(W / 2, para(run(o.title, { b: true, c: INK, sz: 26, sp: 20 }), { jc: 'right' }) + para(run(o.sub, { b: true, c: TEAL, sz: 15, sp: 10 }), { jc: 'right' })) +
+      '</w:tr></w:tbl><w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p></w:hdr>';
+    const fld = (code) => '<w:fldSimple w:instr=" ' + code + ' "><w:r>' + rPr({ c: MUTE, sz: 15 }) + '<w:t>1</w:t></w:r></w:fldSimple>';
+    const footer = XMLH + '<w:ftr ' + NS + '><w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:space="6" w:color="' + HAIR + '"/></w:pBdr><w:tabs><w:tab w:val="right" w:pos="' + W + '"/></w:tabs><w:spacing w:before="0" w:after="0"/></w:pPr>' +
+      run(o.foot, { c: MUTE, sz: 15 }) + '<w:r>' + rPr({ c: MUTE, sz: 15 }) + '<w:tab/></w:r>' + run('Page ', { c: MUTE, sz: 15 }) + fld('PAGE') + run(' of ', { c: MUTE, sz: 15 }) + fld('NUMPAGES') + '</w:p></w:ftr>';
+    const styles = XMLH + '<w:styles ' + NS + '><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/><w:color w:val="' + INK + '"/><w:sz w:val="18"/><w:szCs w:val="18"/><w:lang w:val="en-GB"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="0" w:line="252" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>' +
+      '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style><w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:uiPriority w:val="99"/><w:semiHidden/><w:tblPr><w:tblInd w:w="0" w:type="dxa"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="108" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style></w:styles>';
+    const settings = XMLH + '<w:settings ' + NS + '><w:defaultTabStop w:val="720"/><w:characterSpacingControl w:val="doNotCompress"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>';
+    const rel = (id, type, target) => '<Relationship Id="' + id + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/' + type + '" Target="' + target + '"/>';
+    const RELS = (inner) => XMLH + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + inner + '</Relationships>';
+    const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const files = [
+      { name: '[Content_Types].xml', data: XMLH + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>' + (o.sz ? '<Default Extension="png" ContentType="image/png"/>' : '') +
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>' +
+        '<Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/><Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>' +
+        '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>' },
+      { name: '_rels/.rels', data: RELS('<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>') },
+      { name: 'docProps/core.xml', data: XMLH + '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>' + X(o.docTitle) + '</dc:title><dc:creator>' + X(state.user) + '</dc:creator><cp:lastModifiedBy>' + X(state.user) + '</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">' + now + '</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">' + now + '</dcterms:modified></cp:coreProperties>' },
+      { name: 'docProps/app.xml', data: XMLH + '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>ETHIX</Application></Properties>' },
+      { name: 'word/document.xml', data: doc },
+      { name: 'word/styles.xml', data: styles },
+      { name: 'word/settings.xml', data: settings },
+      { name: 'word/header1.xml', data: header },
+      { name: 'word/footer1.xml', data: footer },
+      { name: 'word/_rels/document.xml.rels', data: RELS(rel('rIdS', 'styles', 'styles.xml') + rel('rIdT', 'settings', 'settings.xml') + rel('rIdH', 'header', 'header1.xml') + rel('rIdF', 'footer', 'footer1.xml')) }
+    ];
+    if (o.sz) { files.push({ name: 'word/_rels/header1.xml.rels', data: RELS(rel('rIdLogo', 'image', 'media/logo.png')) }); files.push({ name: 'word/media/logo.png', data: o.logo }); }
+    return files;
+  }
+  async function hoWord911(owner) {
+    owner = upq(owner || state.user);
+    if (!hoOwnerOk911(owner)) return;
+    const D = hoData911(owner); if (!D.jobs.length) { toast('No active jobs to put in the file'); return; }
+    const X = XL.X, t0 = D.t0, c = D.cover, me = owner === state.user;
+    const NAVY = '1C5179', INK = '0B1B2B', INK2 = '3E4C5E', MUTE = '6B7A8A', HAIR = 'DFE6ED', FOG = 'F3F6F9', RED = 'B42318', AMBER = 'B54708';
+    const W = 15138, COLS = [680, 1640, 2780, 2440, 2900, 2500, 2198];   // S.NO wide enough to stay on one line
+    const rPr = (o) => '<w:rPr>' + (o.b ? '<w:b/><w:bCs/>' : '') + (o.i ? '<w:i/><w:iCs/>' : '') + '<w:color w:val="' + (o.c || INK) + '"/>' + (o.sp ? '<w:spacing w:val="' + o.sp + '"/>' : '') + '<w:sz w:val="' + (o.sz || 18) + '"/><w:szCs w:val="' + (o.sz || 18) + '"/></w:rPr>';
+    const run = (t, o) => '<w:r>' + rPr(o || {}) + '<w:t xml:space="preserve">' + X(t) + '</w:t></w:r>';
+    const para = (runs, o) => { o = o || {}; return '<w:p><w:pPr>' + (o.keep ? '<w:keepNext/>' : '') + '<w:spacing w:before="' + (o.before || 0) + '" w:after="' + (o.after || 0) + '" w:line="' + (o.line || 252) + '" w:lineRule="auto"/>' + (o.jc ? '<w:jc w:val="' + o.jc + '"/>' : '') + '</w:pPr>' + runs + '</w:p>'; };
+    const cell = (w, content, o) => { o = o || {}; return '<w:tc><w:tcPr><w:tcW w:w="' + w + '" w:type="dxa"/>' + (o.border ? '<w:tcBorders><w:bottom w:val="single" w:sz="8" w:space="0" w:color="' + NAVY + '"/></w:tcBorders>' : '') + (o.fill ? '<w:shd w:val="clear" w:color="auto" w:fill="' + o.fill + '"/>' : '') + '<w:vAlign w:val="' + (o.v || 'top') + '"/></w:tcPr>' + content + '</w:tc>'; };
+    const tbl = (cols, head, rows) => '<w:tbl><w:tblPr><w:tblW w:w="' + W + '" w:type="dxa"/><w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="single" w:sz="4" w:space="0" w:color="' + HAIR + '"/><w:right w:val="nil"/><w:insideH w:val="single" w:sz="4" w:space="0" w:color="' + HAIR + '"/><w:insideV w:val="nil"/></w:tblBorders>' +
+      '<w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="70" w:type="dxa"/><w:left w:w="100" w:type="dxa"/><w:bottom w:w="70" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="0420" w:firstRow="1" w:lastRow="0" w:firstColumn="0" w:lastColumn="0" w:noHBand="1" w:noVBand="1"/></w:tblPr>' +
+      '<w:tblGrid>' + cols.map((x) => '<w:gridCol w:w="' + x + '"/>').join('') + '</w:tblGrid>' +
+      '<w:tr><w:trPr><w:cantSplit/><w:tblHeader/></w:trPr>' + head.map((h, i) => cell(cols[i], para(run(h, { b: true, c: INK2, sz: 14, sp: 10 }), { jc: i === 0 && h === 'S.NO' ? 'center' : 'left' }), { fill: FOG, border: true, v: 'bottom' })).join('') + '</w:tr>' + rows.join('') + '</w:tbl>';
+    const jobRow = (j, n) => {
+      const st = jobStatus91(j, t0), T = D.tasks.get(keyOf(j)) || [], last = hoLast911(j), w = waitOf911(j), f = followState(j, t0);
+      const where = para((st.hold ? run('On hold', { b: true, c: RED }) + run(' · ', { c: MUTE }) : '') + run(st.where, { b: true, c: NAVY }) + (st.eta ? run(' · ', { c: MUTE }) + run(st.eta, { b: true, c: NAVY }) : '')) + (st.rest.length ? para(run(st.rest.join(' · '), { c: INK2, sz: 16 }), { before: 30 }) : '');
+      const todo = T.length ? T.slice(0, 5).map((x, i) => para(run(x.what, { b: true, c: x.level === 'urgent' ? RED : AMBER, sz: 16 }) + run(' · ' + x.when, { c: INK2, sz: 16 }), { before: i ? 30 : 0 })).join('')
+        : (j.next && j.next.text ? para(run(j.next.text, { c: INK2 })) : para(run('—', { c: MUTE })));
+      const fu = (last ? para(run('“' + last[2] + '”', { i: true, c: INK })) + para(run((last[1] === state.user && me ? nice(owner) : nice(last[1])) + ' · ' + dayTxt911(last[0]), { c: MUTE, sz: 15 }), { before: 20 }) : para(run(lastCheckText(f, t0), { c: MUTE })))
+        + (w ? para(run('WAITING ON ' + upq(w[0]), { b: true, c: NAVY, sz: 15, sp: 6 }) + run((waitDays911(w) ? ' · ' + waitDays911(w) + (waitDays911(w) === 1 ? ' DAY' : ' DAYS') : ' · TODAY'), { c: NAVY, sz: 15 }), { before: 40 }) : '')
+        + para(run('Follow-up ' + f.label.toLowerCase(), { c: MUTE, sz: 15 }), { before: 20 });
+      const route = j.mode === 'misc' ? (j.against ? 'Against ' + j.against : 'Costing only') : (j.pol ? portName91(j.pol) : '—') + ' → ' + (j.pod ? portName91(j.pod) : '—');
+      return '<w:tr><w:trPr><w:cantSplit/></w:trPr>' +
+        cell(COLS[0], para(run(String(n), { c: MUTE }), { jc: 'center' })) + cell(COLS[1], para(run(j.jobNo, { b: true })) + para(run(j.type || '—', { b: true, c: MUTE, sz: 14, sp: 10 }), { before: 20 })) +
+        cell(COLS[2], para(run(j.customer || '—')) + (briefOf911(j.customer) ? para(run('BRIEFING AT THE END', { b: true, c: '0E7C7B', sz: 13, sp: 6 }), { before: 30 }) : '')) +
+        cell(COLS[3], para(run(route, { c: INK2 })) + (String(j.vendor || '').trim() ? para(run(String(j.vendor).trim().toUpperCase(), { b: true, c: MUTE, sz: 14, sp: 6 }), { before: 20 }) : '')) +
+        cell(COLS[4], where) + cell(COLS[5], todo) + cell(COLS[6], fu) + '</w:tr>';
+    };
+    const head = ['S.NO', 'JOB NO.', 'CUSTOMER', 'ROUTE · LINE', 'WHERE IT STANDS', 'TO DO', 'LAST FOLLOW-UP'];
+    const day = t0.getDate() + ' ' + MON91[t0.getMonth()] + ' ' + t0.getFullYear();
+    const forTxt = c ? (me ? 'For ' + nice(c.cover) : 'From ' + nice(c.owner)) + ' · ' + covRange98(c) + (c.status === 'ASKED' ? ' (not accepted yet)' : '') : '';
+    let body = para(run(D.jobs.length + (D.jobs.length === 1 ? ' active job' : ' active jobs') + ' of ' + nice(owner), { b: true, sz: 20 }) + (forTxt ? run('   ·   ' + forTxt, { c: MUTE, sz: 18 }) : '') +
+      run('   ·   ' + D.needN + ' to do in the next 3 days   ·   ' + D.waiting + ' waiting on someone', { c: MUTE, sz: 18 }), { after: 60 });
+    let n = 0;
+    D.groups.forEach((g, gi) => {
+      body += para(run(g[1].charAt(0) + g[1].slice(1).toLowerCase().replace(/ — next 3 days/, ' — next 3 days'), { b: true, c: g[0] === 'need' ? RED : NAVY, sz: 24 }) + run('   ' + g[2].length + (g[2].length === 1 ? ' job' : ' jobs'), { c: MUTE, sz: 17 }), { keep: true, before: gi ? 360 : 240, after: 100 }) +
+        tbl(COLS, head, g[2].map((j) => jobRow(j, ++n)));
+    });
+    if (D.custs.length) {
+      const BC = [3300, 6838, 5000];
+      body += para(run('Customer briefings', { b: true, c: NAVY, sz: 24 }) + run('   ' + D.custs.length, { c: MUTE, sz: 17 }), { keep: true, before: 360, after: 100 }) +
+        tbl(BC, ['CUSTOMER', 'REQUIREMENTS', 'CONTACTS'], D.custs.map((k) => { const b = briefOf911(k);
+          return '<w:tr><w:trPr><w:cantSplit/></w:trPr>' + cell(BC[0], para(run(k, { b: true })) + para(run('Edited by ' + nice(b.by) + (b.at ? ' · ' + dayTxt911(b.at) : ''), { c: MUTE, sz: 15 }), { before: 30 })) +
+            cell(BC[1], b.req.length ? b.req.map((r, i) => para(run('•  ' + r, { c: INK }), { before: i ? 40 : 0 })).join('') : para(run('—', { c: MUTE }))) +
+            cell(BC[2], b.ct.length ? b.ct.map((x, i) => para(run(x[0] || 'Contact', { b: true }) + (x[1] ? run(' · ' + x[1], { c: INK2 }) : '') + run('   ' + x[2], { c: NAVY }), { before: i ? 40 : 0 })).join('') : para(run('—', { c: MUTE }))) + '</w:tr>'; }));
+    }
+    const logo = await costLogo(), sz = logo ? XL.pngSize(logo) : null;
+    const files = docXml911({ W, title: 'HAND-OVER', sub: (nice(owner) + ' · ' + day).toUpperCase() + (c ? ' · ' + (me ? 'FOR ' + c.cover : 'COVERED BY ' + c.cover) : ''), foot: 'ETHIX · Hand-over · ' + nice(owner) + ' · ' + day, body, logo, sz, docTitle: 'ETHIX hand-over ' + nice(owner) + ' ' + day });
+    try {
+      const blob = XL.zip(files, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+      const name = 'ETHIX_Hand-over_' + nice(owner).replace(/\s+/g, '-') + '_' + day.replace(/ /g, '-') + '.docx';
+      const url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = url; a.download = name; document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 4000);
+      toast('Word file ready · ' + name);
+    } catch (e) { toast('The Word file could not be made: ' + e.message, { error: true }); }
+  }
+
+  // ================================================================ wiring
+  function initV2911() {
+    // ---- hover cards (laptop): pointing opens after a moment, leaving closes; a click keeps it open. Phone: a tap.
+    const hoverable = () => usePop() && window.matchMedia && window.matchMedia('(hover: hover)').matches;
+    let hT = 0, hOpenT = 0, hWas = null;
+    const kinds = [
+      ['[data-brief911]', (el, pin) => openBrief911(el, pin), () => bfOpen911(), () => state.brief911],
+      ['[data-hol911]', (el, pin) => { const render = holCard911(el.dataset.hol911); keepFocus911(() => openPop(el, holKick911(el.dataset.hol911), render), pin); state.hol911p = { port: el.dataset.hol911, render, pinned: !!pin }; },
+        () => !!(state.overlay === 'pop' && state.hol911p && popRender === state.hol911p.render), () => state.hol911p]
+    ];
+    const kindOf = (el) => kinds.find((k) => el && el.closest && el.closest(k[0]));
+    const same = (k, el) => { const s = k[3](); if (!s) return false; const a = el.closest(k[0]); return k[0] === '[data-brief911]' ? s.no === a.dataset.brief911 : s.port === a.dataset.hol911; };
+    document.addEventListener('mouseover', (e) => {
+      if (!hoverable()) return;
+      if (e.target.closest && e.target.closest('#pop')) { clearTimeout(hT); return; }
+      const k = kindOf(e.target); if (!k) return;
+      clearTimeout(hT);
+      const el = e.target.closest(k[0]);
+      if (k[2]() && same(k, el)) return;
+      clearTimeout(hOpenT);
+      hOpenT = setTimeout(() => { if (el.matches(':hover') && !(state.overlay && state.overlay !== 'pop')) k[1](el, false); }, 220);
+    }, true);
+    document.addEventListener('mouseout', (e) => {
+      if (!hoverable()) return;
+      const k = kinds.find((x) => x[2]()); if (!k || k[3]().pinned) return;
+      const to = e.relatedTarget;
+      if (to && to.closest && (to.closest('#pop') || to.closest(k[0]))) return;
+      clearTimeout(hOpenT);
+      hT = setTimeout(() => { if (k[2]() && !k[3]().pinned && !$('#pop').matches(':hover')) closeOverlays(); }, 280);
+    }, true);
+    // the click: open and keep open — or, when it is already kept open, close (the tap outside closes it before the click)
+    window.addEventListener('pointerdown', (e) => {
+      const k = kindOf(e.target); hWas = null;
+      if (!k) return;
+      const el = e.target.closest(k[0]);
+      if (k[2]() && same(k, el)) { hWas = k[3]().pinned ? 'pinned' : 'hover'; if (hWas === 'hover') e.stopPropagation(); }
+    }, true);
+    document.addEventListener('click', (e) => {
+      const k = kindOf(e.target);
+      if (k) {
+        e.preventDefault(); e.stopPropagation(); clearTimeout(hOpenT); clearTimeout(hT);
+        const el = e.target.closest(k[0]);
+        if (hWas === 'pinned') { hWas = null; if (k[2]()) closeOverlays(); return; }
+        if (hWas === 'hover' && k[2]()) { k[3]().pinned = true; hWas = null; return; }
+        hWas = null;
+        k[1](el, true);
+        return;
+      }
+      const be = e.target.closest('[data-brief-edit911]'); if (be) { e.preventDefault(); briefEdit911(be.dataset.briefEdit911); return; }
+      const ac = e.target.closest('[data-bf-addct911]'); if (ac) { const F = briefCollect911(); if (F && F.ct.length < 6) { F.ct.push(['', '', '']); briefRedraw911(); const i = $('#bfN' + (F.ct.length - 1)); if (i) i.focus(); } return; }
+      const rm = e.target.closest('[data-bf-rm911]'); if (rm) { const F = briefCollect911(); if (F) { F.ct.splice(+rm.dataset.bfRm911, 1); if (!F.ct.length) F.ct.push(['', '', '']); briefRedraw911(); } return; }
+      const tag = e.target.closest('[data-wait911]'); if (tag) { e.preventDefault(); e.stopPropagation(); rmkOpen99(tag, tag.dataset.wait911, { add: false }); return; }
+      const ws = e.target.closest('[data-wo-set911]'); if (ws) { const no = ws.closest('[data-wo911]').dataset.wo911, cur = waitOf911(findJob(no)); if (!cur || upq(cur[0]) !== ws.dataset.woSet911) waitSet911(no, ws.dataset.woSet911); return; }
+      if (e.target.closest('[data-wo-clear911]')) { waitSet911(e.target.closest('[data-wo911]').dataset.wo911, ''); return; }
+      if (e.target.closest('[data-wo-add911]')) { state.woAdd911 = e.target.closest('[data-wo911]').dataset.wo911; refreshOverlay(); const i = $('#woName911'); if (i) i.focus(); return; }
+      if (e.target.closest('[data-wo-cancel911]')) { state.woAdd911 = null; refreshOverlay(); return; }
+      const wf = e.target.closest('[data-wf911]'); if (wf) { state.wf911 = state.wf911 === wf.dataset.wf911 ? '' : wf.dataset.wf911; rerender(); return; }
+      const fu = e.target.closest('[data-ft-use911]'); if (fu) { const i = $('[name="lineFree"]'); if (i) { i.value = fu.dataset.ftUse911; i.dispatchEvent(new Event('input', { bubbles: true })); i.focus(); } return; }
+      const hw = e.target.closest('[data-ho-word911]'); if (hw) { hoWord911(hw.dataset.hoWord911); return; }
+      const nt = e.target.closest('[data-tab911]'); if (nt && nt.dataset.job) { const j = findJob(nt.dataset.job); if (j) state.voyageTab[j.jobNo] = nt.dataset.tab911; }
+    }, true);
+    document.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' || e.key === ' ') && e.target.closest && e.target.closest('[data-hol911]')) { e.preventDefault(); e.target.click(); }
+    });
+    document.addEventListener('submit', (e) => {
+      if (e.target.closest('#briefForm911')) { e.preventDefault(); e.stopPropagation(); briefSave911(); return; }
+      const wn = e.target.closest('[data-wo-new911]');
+      if (wn) { e.preventDefault(); e.stopPropagation(); const v = (($('#woName911') || {}).value || '').replace(/\s+/g, ' ').trim(); const no = wn.closest('[data-wo911]').dataset.wo911; if (v) waitSet911(no, v); else { const i = $('#woName911'); if (i) i.focus(); } }
+    }, true);
+    document.addEventListener('input', (e) => {
+      const n = e.target.name;
+      if (!e.target.closest('#jobForm, #editForm')) return;
+      if (n === 'lineFree') { e.target.dataset.auto911 = ''; freeRun911(); }
+      else if (n === 'customer' || n === 'vendor' || n === 'type') freeRun911();
+    }, true);
+    document.addEventListener('change', (e) => { if (e.target.closest('#jobForm, #editForm') && ['type', 'customer', 'vendor'].includes(e.target.name)) freeRun911(); }, true);
+    const body = $('#drawerBody');
+    if (body && window.MutationObserver) new MutationObserver(() => freeWire911()).observe(body, { childList: true });
+  }
+
   // -------------------------------------------------------------------- start
   function start() {
     if (savedSession()) document.body.classList.add('is-resuming');
@@ -6853,6 +7493,7 @@
     initV298();
     initV299();
     initV2910();
+    initV2911();
     if (savedSession()) resumeSession();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
