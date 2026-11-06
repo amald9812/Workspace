@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders, cover — v2.9.11)
+   enquiries, follow-ups, delays, close & archive, costing, reminders, cover — v2.9.12)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -708,6 +708,7 @@
     state.costing = boot.costing || {};
     applyBoot9(boot);   // v2.9: reminders, what changed, what you opened
     applyBoot911(boot);   // v2.9.11: holidays, briefings, waiting on, free time
+    applyBoot912(boot);   // v2.9.12: every UAE holiday (the month calendar)
     if (boot.rate) state.rate = boot.rate;
     state.followHist = {};
     state.syncedAt = Date.now();
@@ -3315,7 +3316,7 @@
     const quick = (QUICK[j.type === 'CND' ? 'cnd' : j.mode] || QUICK.sea);
     return '<section class="cost-card" aria-label="Charges">' +
       '<div class="ct-bar"><div class="ct-bar-t"><h2 class="tile-title">CHARGES</h2><span class="tile-count">' + lines.length + '</span></div>' +
-        '<span class="ct-mode-hint">All-in: a line without selling is included in the price</span></div>' +
+        '<span class="cp912-right"><span class="ct-mode-hint">All-in: a line without selling is included in the price</span>' + (edit ? '<button type="button" class="btn-ghost cp912-btn" data-act="cost-copy912" aria-label="Copy charges from another job" title="Copy charges from another job">' + icon('copy', 15) + '<span class="btn-label">Copy from job…</span></button>' : '') + '</span></div>' +
       '<div class="ct' + (edit ? '' : ' is-ro') + '" role="table">' +
         '<div class="ct-head" role="row"><span>CHARGE</span><span>VENDOR</span><span>BASIS · QTY</span><span class="ct-hb">BUYING</span><span class="r ct-hb">AED</span><span class="ct-hs">SELLING</span><span class="r ct-hs">AED</span><span></span></div>' +
         '<div id="ctBody">' + (lines.length ? lines.map((l, i) => costRow(j, l, edit, i)).join('') : '<div class="ct-empty">' + icon('costing', 22) + '<span>' + (edit ? 'No charges yet. Pick one below — buying and selling sit side by side on one line.' : 'No charges in this costing.') + '</span></div>') + '</div>' +
@@ -4768,15 +4769,7 @@
         (r.repeat ? '<span class="rm-rep">' + icon('refresh', 11) + remRep93(r) + '</span>' : '') + '</span></button>' +
       (r.job && !noJob ? '<button type="button" class="rm-job" data-job="' + esc(r.job) + '">' + esc(r.job) + '</button>' : '') + '</li>';
   }
-  // grouped: late · today · tomorrow · later (next 14 days) · done today
-  function remGroups(list, max) {
-    const t0 = today0(), T = isoOf(t0), M = isoOf(addDays(t0, 1)), H = isoOf(addDays(t0, 14));
-    const open = list.filter((r) => r.status !== 'DONE');
-    const g = [['LATE', open.filter((r) => r.due < T)], ['TODAY', open.filter((r) => r.due === T)], ['TOMORROW', open.filter((r) => r.due === M)], ['NEXT TWO WEEKS', open.filter((r) => r.due > M && r.due <= H)],
-      ['DONE TODAY', list.filter((r) => r.status === 'DONE' && r.doneAt >= +t0)]];
-    let shown = 0;
-    return g.filter(([, l]) => l.length).map(([label, l]) => { const part = max ? l.slice(0, Math.max(0, max - shown)) : l; shown += part.length; return part.length ? '<div class="rm-gh is-' + label.split(' ')[0].toLowerCase() + '">' + label + '</div><ul class="rm-list">' + part.map((r) => remItem(r)).join('') + '</ul>' : ''; }).join('');
-  }
+  // remGroups — v2.9.12 version further down (every reminder shown, later days by date)
   function remStart(r, job) {
     state.remForm = r ? { id: r.id, text: r.text, due: r.due, time: r.time, job: r.job, repeat: r.repeat || '' } : { id: '', text: '', due: isoOf(today0()), time: '', job: job || '', repeat: '' };
   }
@@ -4875,7 +4868,7 @@
     const body = remGroups(state.reminders || [], 0);
     return '<section class="tile t-act t-day' + anim + '" style="--d:340ms" aria-labelledby="dayTitle">' +
       '<div class="tile-head"><h2 class="tile-title" id="dayTitle">MY DAY</h2><button type="button" class="tile-link rm-add" data-act="rem-add">' + icon('plus', 14) + 'Reminder</button></div>' +
-      '<div class="tile-body">' + (brief ? '<div class="md-brief">' + brief + '</div>' : '') +
+      '<div class="tile-body">' + missBox912() + (brief ? '<div class="md-brief">' + brief + '</div>' : '') +
         (body || '<p class="rm-empty">No reminders. Add one for anything that is not a booking — a call, a payment, a rate to check.</p>') + '</div></section>';
   }
   // ================================================================ v2.9.1 — TODAY'S WATCH: what still has to happen, and by when
@@ -4997,7 +4990,7 @@
     const none = pick ? 'Nothing ' + (pick < t0 ? 'sailed or arrived' : 'sails or arrives') + ' on ' + DOW[pick.getDay()] + ' ' + dm93(pick) + '.'
       : 'Nothing ' + (gone ? 'sailed or arrived' : 'sails or arrives') + ' ' + (off === 0 ? 'this week' : off === 1 ? 'next week' : off === -1 ? 'last week' : 'from ' + dm93(start) + ' to ' + dm93(end)) + '.';
     return '<section class="tile t-week' + anim + '" style="--d:280ms" aria-labelledby="weekTitle">' +
-      '<div class="tile-head"><div class="wk-head"><h2 class="tile-title" id="weekTitle">' + wkName93(off, start) + '</h2><span class="wk-nav"><button type="button" class="wk-arrow is-prev" data-wk-off="' + (off - 1) + '" aria-label="Previous week">' + icon('chevron', 15) + '</button><button type="button" class="wk-arrow is-next" data-wk-off="' + (off + 1) + '" aria-label="Next week">' + icon('chevron', 15) + '</button></span></div><span class="tile-count">' + ev.length + '</span></div>' +
+      '<div class="tile-head"><div class="wk-head"><h2 class="tile-title" id="weekTitle">' + wkName93(off, start) + '</h2><button type="button" class="wk-arrow wk-cal912" data-act="cal912" aria-label="Month calendar" title="Month calendar">' + icon('cal912', 16) + '</button></div><span class="tile-count">' + ev.length + '</span></div>' +
       strip + '<div class="wk-legend"><span><i class="is-dep"></i>Sailing ' + nD + '</span><span><i class="is-arr"></i>Arriving ' + nA + '</span>' +
         (pick || off ? '<span class="wk-links">' + (pick ? '<button type="button" class="wk-all" data-wkday="">Whole week</button>' : '') + (off ? '<button type="button" class="wk-all" data-wk-off="0">This week</button>' : '') + '</span>' : '') + '</div>' +
       '<div class="tile-body">' + (list || empty('calendar', none)) + '</div>' + seeAll('week', ev.length) + '</section>';
@@ -7478,6 +7471,396 @@
     if (body && window.MutationObserver) new MutationObserver(() => freeWire911()).observe(body, { childList: true });
   }
 
+  // ================================================================ v2.9.12 — Amal's list of 6 Nov 2026 (Chambikko)
+  //  1 every reminder always shown — after NEXT TWO WEEKS each later day has its own heading (the count = the list)
+  //  2 the month calendar from THIS WEEK: glass, dots and counts only, the day's jobs on the side, UAE public holidays
+  //  3 MISSING INFO at the top of MY DAY — Fill opens Edit details at that field
+  //  4 Copy from job… on a costing page — the lines come in as a draft; nothing is saved until Save
+  I.cal912 = '<rect x="3" y="4.5" width="18" height="16" rx="3"/><path d="M3 9.5h18M8 2.5v4M16 2.5v4"/>';
+  I.l912 = '<path d="M15 6l-6 6 6 6"/>';
+  I.r912 = '<path d="M9 6l6 6-6 6"/>';
+  I.x912 = '<path d="M6 6l12 12M18 6L6 18"/>';
+  I.hol912 = '<path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/><circle cx="12" cy="12" r="3.2"/>';
+  const MONTHS912 = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const dm912 = (d) => d.getDate() + ' ' + MON91[d.getMonth()];   // "6 Nov"
+
+  // ---------------------------------------------------------------- 1 · reminders: every one shown
+  const remDay912 = (iso, t0) => { const d = parseDate(iso); return d ? DOW_UP[d.getDay()] + ' ' + d.getDate() + ' ' + MON91[d.getMonth()].toUpperCase() + (d.getFullYear() !== t0.getFullYear() ? ' ' + d.getFullYear() : '') : String(iso || ''); };
+  // grouped: late · today · tomorrow · next two weeks · then each later day under its own date · done today
+  function remGroups(list, max) {
+    const t0 = today0(), T = isoOf(t0), M = isoOf(addDays(t0, 1)), H = isoOf(addDays(t0, 14));
+    const open = list.filter((r) => r.status !== 'DONE');
+    const byDay = [];
+    open.filter((r) => r.due > H).sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : String(a.time || '').localeCompare(String(b.time || ''))))
+      .forEach((r) => { const g = byDay[byDay.length - 1]; if (g && g.k === r.due) g.l.push(r); else byDay.push({ k: r.due, l: [r] }); });
+    const g = [['LATE', open.filter((r) => r.due < T), 'late'], ['TODAY', open.filter((r) => r.due === T), 'today'], ['TOMORROW', open.filter((r) => r.due === M), 'tomorrow'],
+      ['NEXT TWO WEEKS', open.filter((r) => r.due > M && r.due <= H), 'next']].concat(byDay.map((x) => [remDay912(x.k, t0), x.l, 'date912']))
+      .concat([['DONE TODAY', list.filter((r) => r.status === 'DONE' && r.doneAt >= +t0), 'done']]);
+    let shown = 0;
+    return g.filter(([, l]) => l.length).map(([label, l, cls]) => { const part = max ? l.slice(0, Math.max(0, max - shown)) : l; shown += part.length; return part.length ? '<div class="rm-gh is-' + cls + '">' + label + '</div><ul class="rm-list">' + part.map((r) => remItem(r)).join('') + '</ul>' : ''; }).join('');
+  }
+
+  // ---------------------------------------------------------------- 2 · the month calendar (THIS WEEK → calendar button)
+  // Own jobs (+ the colleague you cover today), the dates THIS WEEK and TODAY'S WATCH use: ETD · ETA · the cutoffs still open
+  // (SI · ED · DG) · free time ending (imports not delivered yet). Every date is a Dubai day.
+  const KEYS912 = ['sail', 'arr', 'cut', 'free'];
+  const CHIP912 = { all: 'All', sail: 'Sailing', arr: 'Arriving', cut: 'Cutoffs', free: 'Free time' };
+  const LEG912 = { sail: 'Sailing', arr: 'Arriving', cut: 'Cutoff', free: 'Free time ends' };
+  const cutTime912 = (raw) => { const m = String(raw || '').match(/\b(\d{1,2}):(\d{2})\b/); return m ? ' ' + m[1].padStart(2, '0') + ':' + m[2] : ''; };
+  function calEvents912() {
+    const map = new Map();
+    const add = (d, k, j, say) => {
+      if (!d) return;
+      const key = isoOf(d); let e = map.get(key); if (!e) map.set(key, e = { sail: [], arr: [], cut: [], free: [] });
+      const x = e[k].find((y) => y.j === j);
+      if (x) { if (say && !x.say.includes(say)) x.say.push(say); } else e[k].push({ j, say: say ? [say] : [] });
+    };
+    const open = (v) => !v || v === 'PENDING';
+    scoped().forEach((j) => {
+      if (!j.active || j.mode === 'misc') return;
+      add(j.etd, 'sail', j); add(j.eta, 'arr', j);
+      if ((j.cat === 'EXPORT' || j.cat === 'CROSS') && j.type !== 'CRR') {
+        if (open(j.sido)) add(j.siCut, 'cut', j, 'SI cutoff' + cutTime912(j.raw.siCut));
+        if (j.cat === 'EXPORT' && open(j.ed)) add(j.edCut, 'cut', j, 'ED cutoff' + cutTime912(j.raw.edCut));
+        if (j.cat === 'EXPORT' && j.dg === 'DG' && (j.mode !== 'sea' || open(j.dgpc))) add(j.dgCut, 'cut', j, 'DG cutoff' + cutTime912(j.raw.dgCut));
+      }
+      if (j.cat === 'IMPORT' && !j.delivery) { add(j.lineFreeEnd, 'free', j, 'Line free time'); add(j.portFreeEnd, 'free', j, 'Port free time'); }
+    });
+    return map;
+  }
+  // UAE public holidays: the whole HOLIDAYS tab (v2.9.12 Code.gs), else the six weeks every app has
+  function holAE912(iso) {
+    const all = state.holAE912;
+    if (Array.isArray(all) && all.length) return all.filter((h) => h[0] === iso).map((h) => h[1]);
+    return holOn911('AE', iso).map((h) => h.name);
+  }
+  const holShort912 = (n) => String(n || '').replace(/\s+holiday$/i, '').trim();
+  const cal912 = () => state.cal912 || (state.cal912 = { f: 'all' });
+  const isPh912 = () => !usePop();
+  function calPick912(iso) {   // the day shown on the side (and its month)
+    const d = parseDate(iso) || today0(), C = cal912();
+    C.sel = isoOf(d); C.y = d.getFullYear(); C.m = d.getMonth();
+  }
+  function calMonth912(step) {
+    const C = cal912(), t0 = today0(), d = new Date(C.y, C.m + step, 1);
+    C.y = d.getFullYear(); C.m = d.getMonth();
+    C.sel = (t0.getFullYear() === C.y && t0.getMonth() === C.m) ? isoOf(t0) : isoOf(d);
+  }
+  function calDayList912(iso, e, f, t0) {
+    const d = parseDate(iso), n = d ? days(t0, d) : 0, past = n < 0;
+    const keys = f === 'all' ? KEYS912 : [f];
+    const row = (x, k) => {
+      const j = x.j, sub = k === 'cut' ? x.say.join(' · ') + ' · ' + nice(j.route) : k === 'free' ? x.say.join(' · ') + (x.say.length > 1 ? ' end' : ' ends') + ' · ' + nice(j.route) : nice(j.route);
+      return '<button type="button" class="c912-r" data-c912-job="' + esc(j.jobNo) + '" title="' + esc('Open ' + j.jobNo) + '"><b>' + esc(j.jobNo) + '</b><i>' + esc(j.type) + '</i><span>' + esc(j.customer || '—') + '</span><em>' + esc(sub) + '</em></button>';
+    };
+    const head = (k, L) => {
+      const air = L.filter((x) => x.j.mode === 'air').length, all = air === L.length;
+      const w = k === 'sail' ? (past ? (all ? 'DEPARTED' : air ? 'SAILED · DEPARTED' : 'SAILED') : (all ? 'DEPARTS' : air ? 'SAILS · DEPARTS' : 'SAILS'))
+        : k === 'arr' ? (past ? 'ARRIVED' : 'ARRIVES') : k === 'cut' ? 'CUTOFFS' : (past ? 'FREE TIME ENDED' : 'FREE TIME ENDS');
+      return '<div class="c912-gh"><i class="k912-' + k + '"></i>' + w + '<span>' + L.length + '</span></div>';
+    };
+    const out = keys.filter((k) => e && e[k].length).map((k) => '<div class="c912-g" role="group">' + head(k, e[k]) + e[k].map((x) => row(x, k)).join('') + '</div>').join('');
+    if (out) return out;
+    const what = f === 'all' ? (past ? 'Nothing sailed, arrived or was due on this day.' : 'Nothing sails, arrives or is due on this day.')
+      : { sail: past ? 'Nothing sailed on this day.' : 'Nothing sails on this day.', arr: past ? 'Nothing arrived on this day.' : 'Nothing arrives on this day.', cut: 'No open cutoffs on this day.', free: 'No free time ends on this day.' }[f];
+    return '<div class="c912-none">' + icon('cal912', 22) + '<span>' + esc(what) + '</span></div>';
+  }
+  function calHtml912() {
+    const C = cal912(), t0 = today0(), ph = isPh912(), f = C.f || 'all', ev = calEvents912();
+    const first = new Date(C.y, C.m, 1), start = addDays(first, -((first.getDay() + 6) % 7));
+    const keys = f === 'all' ? KEYS912 : [f];
+    let cells = '';
+    for (let i = 0; i < 42; i++) {
+      const d = addDays(start, i), iso = isoOf(d), inM = d.getMonth() === C.m, e = ev.get(iso);
+      const c = keys.map((k) => [k, e ? e[k].length : 0]).filter((x) => x[1]), n = c.reduce((a, x) => a + x[1], 0);
+      const we = d.getDay() === 0 || d.getDay() === 6, hol = holAE912(iso), today = +d === +t0, sel = iso === C.sel;
+      const say = DOW[d.getDay()] + ' ' + dm912(d) + (today ? ', today' : '') + (hol.length ? ', ' + hol.join(', ') : '') + ' — ' + (n ? c.map(([k, v]) => v + ' ' + LEG912[k].toLowerCase()).join(', ') : 'nothing');
+      const inner = !inM ? '' : ph ? '<span class="c912-dots">' + c.map(([k]) => '<i class="k912-' + k + '"></i>').join('') + '</span>'
+        : '<span class="c912-ks">' + c.map(([k, v]) => '<span class="c912-k"><i class="k912-' + k + '"></i>' + v + '</span>').join('') + '</span>';
+      cells += '<button type="button" class="c912-d' + (inM ? '' : ' is-out') + (we ? ' is-we' : '') + (hol.length && inM ? ' is-hol' : '') + (today ? ' is-today' : '') + (sel ? ' is-sel' : '') + '" data-c912-day="' + iso + '" style="--b:' + (inM ? Math.min(n, 9) : 0) + '" aria-pressed="' + sel + '" aria-label="' + esc(say) + '"' + (sel ? '' : ' tabindex="-1"') + (hol.length ? ' title="' + esc(hol.join(' · ') + ' — UAE public holiday') + '"' : '') + '>' +
+        '<b>' + d.getDate() + '</b>' + (hol.length && inM && !ph ? '<span class="c912-hol">' + esc(holShort912(hol[0])) + '</span>' : '') + inner + '</button>';
+    }
+    const wd = (ph ? ['M', 'T', 'W', 'T', 'F', 'S', 'S'] : ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']).map((x) => '<span aria-hidden="true">' + x + '</span>').join('');
+    const chips = '<div class="c912-chips" role="group" aria-label="Show">' + Object.keys(CHIP912).map((k) => '<button type="button" class="c912-chip' + (f === k ? ' is-on' : '') + '" data-c912-f="' + k + '" aria-pressed="' + (f === k) + '">' + (k === 'all' ? '' : '<i class="k912-' + k + '"></i>') + CHIP912[k] + '</button>').join('') + '</div>';
+    const title = ph ? MONTHS912[C.m] + ' ' + C.y : MONTHS912[C.m].toUpperCase() + ' ' + C.y;
+    const sd = parseDate(C.sel) || t0, sn = days(t0, sd), se = ev.get(C.sel);
+    const jobsN = new Set(); if (se) keys.forEach((k) => se[k].forEach((x) => jobsN.add(x.j)));
+    const sHol = holAE912(C.sel);
+    const kick = DOW_UP[sd.getDay()] + ' ' + sd.getDate() + ' ' + MON91[sd.getMonth()].toUpperCase() + (sd.getFullYear() !== t0.getFullYear() ? ' ' + sd.getFullYear() : '') + (sn === 0 ? ' · TODAY' : sn === 1 ? ' · TOMORROW' : sn === -1 ? ' · YESTERDAY' : '');
+    const nb = (dir) => '<button type="button" class="c912-rb" data-c912-mo="' + dir + '" aria-label="' + (dir < 0 ? 'Previous month' : 'Next month') + '">' + icon(dir < 0 ? 'l912' : 'r912', 16) + '</button>';
+    const close = (cls) => '<button type="button" class="c912-rb' + (cls || '') + '" data-c912-close aria-label="Close">' + icon('x912', 16) + '</button>';
+    return '<div class="c912-m">' + (ph ? '<div class="c912-grab" data-c912-grab aria-hidden="true"></div>' : '') +
+        '<div class="c912-mh"><h2 id="c912Title">' + title + '</h2>' + nb(-1) + nb(1) + '<button type="button" class="c912-pill" data-c912-today>Today</button>' + (ph ? close(' c912-xph') : '') + '</div>' + chips +
+        '<div class="c912-wd">' + wd + '</div><div class="c912-grid" role="group" aria-label="' + esc(MONTHS912[C.m] + ' ' + C.y) + '">' + cells + '</div>' +
+        (ph ? '' : '<div class="c912-lg">' + KEYS912.map((k) => '<span><i class="k912-' + k + '"></i>' + LEG912[k] + '</span>').join('') + '<span class="c912-lgh"><i></i>UAE holiday</span><em>Deeper colour = busier day</em></div>') +
+      '</div>' +
+      '<div class="c912-dp"><div class="c912-dph"><small>' + esc(kick) + '</small><h3>' + (jobsN.size ? jobsN.size + (jobsN.size === 1 ? ' job' : ' jobs') : 'No jobs') + '</h3>' +
+          (sHol.length ? '<span class="c912-holchip">' + icon('hol912', 13) + esc(sHol.map(holShort912).join(' · ')) + ' · UAE holiday</span>' : '') + (ph ? '' : close(' c912-x')) + '</div>' +
+        '<div class="c912-dl">' + calDayList912(C.sel, se, f, t0) + '</div></div>';
+  }
+  function calPaint912(keepFocus) {
+    const box = $('#cal912 .c912-cal'); if (!box) return;
+    const fa = document.activeElement, wasDay = fa && fa.closest && fa.closest('.c912-grid'), wasEl = fa && fa.closest && fa.closest('#cal912') ? (fa.dataset.c912F ? '[data-c912-f="' + fa.dataset.c912F + '"]' : fa.dataset.c912Mo ? '[data-c912-mo="' + fa.dataset.c912Mo + '"]' : fa.hasAttribute('data-c912-today') ? '[data-c912-today]' : '') : '';
+    const y = ($('#cal912 .c912-dl') || {}).scrollTop || 0, same = box.dataset.sel === cal912().sel;
+    box.innerHTML = calHtml912(); box.dataset.sel = cal912().sel;
+    const dl = $('#cal912 .c912-dl'); if (dl && same) dl.scrollTop = y;
+    if (keepFocus || wasDay) { const s = $('#cal912 .c912-d.is-sel'); if (s) s.focus({ preventScroll: true }); }
+    else if (wasEl) { const el = $('#cal912 ' + wasEl); if (el) el.focus({ preventScroll: true }); }
+  }
+  function openCal912(from) {
+    if ($('#cal912')) return;
+    closeOverlays(true);
+    const C = cal912(); calPick912(state.wkDay92 || isoOf(today0()));
+    C.from = from || document.activeElement;
+    const ph = isPh912();
+    document.body.insertAdjacentHTML('beforeend', '<div class="c912-ov' + (ph ? ' is-ph' : '') + '" id="cal912"><div class="c912-cal' + (ph ? ' is-ph' : '') + '" role="dialog" aria-modal="true" aria-labelledby="c912Title" tabindex="-1"></div></div>');
+    calPaint912();
+    const ov = $('#cal912');
+    requestAnimationFrame(() => { ov.classList.add('is-in'); const s = $('#cal912 .c912-d.is-sel'); (s || $('#cal912 .c912-cal')).focus({ preventScroll: true }); });
+  }
+  function closeCal912(quiet) {
+    const ov = $('#cal912'); if (!ov) return;
+    const C = cal912(), back = C.from; C.from = null;
+    ov.classList.remove('is-in'); ov.classList.add('is-out');
+    ov.removeAttribute('id');
+    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    setTimeout(() => ov.remove(), reduce ? 0 : 220);
+    if (!quiet && back && document.body.contains(back)) back.focus({ preventScroll: true });
+  }
+  function initCal912() {
+    document.addEventListener('click', (e) => {
+      const ob = e.target.closest('[data-act="cal912"]'); if (ob) { openCal912(ob); return; }
+      const ov = e.target.closest('.c912-ov'); if (!ov || !ov.id) return;
+      const C = cal912();
+      if (e.target === ov || e.target.closest('[data-c912-close]')) { closeCal912(); return; }
+      const jb = e.target.closest('[data-c912-job]'); if (jb) { closeCal912(true); openJob(jb.dataset.c912Job); return; }
+      const dy = e.target.closest('[data-c912-day]');
+      if (dy) { const iso = dy.dataset.c912Day, d = parseDate(iso); if (d && d.getMonth() !== C.m) calPick912(iso); else C.sel = iso; calPaint912(true); return; }
+      const mo = e.target.closest('[data-c912-mo]'); if (mo) { calMonth912(+mo.dataset.c912Mo); calPaint912(); return; }
+      if (e.target.closest('[data-c912-today]')) { calPick912(isoOf(today0())); calPaint912(); return; }
+      const fc = e.target.closest('[data-c912-f]'); if (fc) { C.f = fc.dataset.c912F; calPaint912(); return; }
+    });
+    // keyboard: Esc closes · arrows move the day · Page Up / Down the month · T today · Tab stays inside
+    document.addEventListener('keydown', (e) => {
+      const ov = $('#cal912'); if (!ov) return;
+      const C = cal912(), k = e.key;
+      if (k === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); closeCal912(); return; }
+      if (k === 'Tab') {
+        const f = $$('#cal912 button:not([tabindex="-1"]), #cal912 .c912-d.is-sel').filter((x) => x.offsetParent !== null);
+        if (!f.length) return;
+        const i = f.indexOf(document.activeElement);
+        if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); } else if (!e.shiftKey && (i === f.length - 1 || i === -1)) { e.preventDefault(); f[0].focus(); }
+        return;
+      }
+      const inGrid = document.activeElement && document.activeElement.closest && document.activeElement.closest('.c912-grid');
+      const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[k];
+      if (step && inGrid) { e.preventDefault(); calPick912(isoOf(addDays(parseDate(C.sel) || today0(), step))); calPaint912(true); return; }
+      if (k === 'PageUp' || k === 'PageDown') { e.preventDefault(); calMonth912(k === 'PageUp' ? -1 : 1); calPaint912(true); return; }
+      if ((k === 't' || k === 'T') && !e.metaKey && !e.ctrlKey) { calPick912(isoOf(today0())); calPaint912(true); }
+    }, true);
+    // phone: swipe the month sideways, pull the sheet down to close
+    let sx = 0, sy = 0, where = '';
+    document.addEventListener('touchstart', (e) => {
+      if (!$('#cal912') || !e.target.closest('#cal912')) { where = ''; return; }
+      const t = e.touches[0]; sx = t.clientX; sy = t.clientY;
+      where = e.target.closest('.c912-grid') ? 'grid' : e.target.closest('[data-c912-grab], .c912-mh') ? 'grab' : '';
+    }, { passive: true });
+    document.addEventListener('touchend', (e) => {
+      if (!where || !$('#cal912')) return;
+      const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+      if (where === 'grid' && Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.4) { calMonth912(dx < 0 ? 1 : -1); calPaint912(); }
+      else if (where === 'grab' && dy > 80 && Math.abs(dy) > Math.abs(dx)) closeCal912();
+      where = '';
+    }, { passive: true });
+    window.addEventListener('hashchange', () => closeCal912(true));
+  }
+
+  // ---------------------------------------------------------------- 3 · MISSING INFO (top of MY DAY)
+  // Own jobs (+ covered), from the jobs already loaded: no ETA once sailed · no BL / AWB no. once sailed or sailing within
+  // 2 days · no line within 3 days of the ETD (the tracker has no vessel column) · no POL / POD. On hold and misc jobs are left out.
+  function when912(j, t0) {
+    const air = j.mode === 'air', cr = j.mode === 'courier';
+    if (j.etd) {
+      const n = days(t0, j.etd);
+      if (n < 0) return (cr ? 'picked up ' : air ? 'departed ' : 'sailed ') + dm912(j.etd);
+      const v = cr ? 'pick-up ' : air ? 'departs ' : 'sails ';
+      return v + (n === 0 ? 'today' : n === 1 ? 'tomorrow' : dm912(j.etd));
+    }
+    if (j.eta) { const n = days(t0, j.eta); return n < 0 ? 'arrived ' + dm912(j.eta) : 'arrives ' + (n === 0 ? 'today' : n === 1 ? 'tomorrow' : dm912(j.eta)); }
+    return 'no dates yet';
+  }
+  function missing912() {
+    const t0 = today0(), out = [];
+    scoped().forEach((j) => {
+      if (!j.active || j.hold || j.mode === 'misc' || !TYPE_FIELDS[j.type]) return;
+      const sd = j.etd ? days(t0, j.etd) : null, air = j.mode === 'air', cr = j.mode === 'courier', miss = [];
+      if (!cr) {
+        if (sd !== null && sd < 0 && !j.eta) miss.push(['eta', 'ETA']);
+        if (sd !== null && sd <= 2 && j.bl !== NA && !blList98(j.raw.blNo).length) miss.push(['blNo', air ? 'AWB no.' : 'BL no.']);
+        if (sd !== null && sd <= 3 && !j.vendor) miss.push(['vendor', air ? 'Airline' : 'Line']);
+      }
+      if (!j.pol) miss.push(['pol', cr ? 'From' : 'POL']);
+      if (!j.pod) miss.push(['pod', cr ? 'To' : 'POD']);
+      if (miss.length) out.push({ j, miss, n: sd !== null ? sd : j.eta ? days(t0, j.eta) : null, when: when912(j, t0) });
+    });
+    const rank = (x) => (x.n === null ? [2, 0] : x.n >= 0 ? [0, x.n] : [1, -x.n]);   // coming up first (soonest), then gone (latest), then no dates
+    return out.sort((a, b) => { const p = rank(a), q = rank(b); return p[0] - q[0] || p[1] - q[1] || String(a.j.jobNo).localeCompare(String(b.j.jobNo)); });
+  }
+  function missBox912() {
+    if (!canEdit()) return '';   // Customer Service fills the tracker (sales see their jobs, they do not edit them)
+    const L = missing912(); if (!L.length) return '';
+    const all = !!state.mi912All, show = all || L.length <= 4 ? L : L.slice(0, 3);
+    return '<div class="mi912" role="region" aria-label="Missing info">' +
+      '<div class="mi912-h"><span>MISSING INFO · ' + L.length + (L.length === 1 ? ' JOB' : ' JOBS') + '</span><span aria-hidden="true">FIX</span></div>' +
+      show.map((x) => '<div class="mi912-r"><button type="button" class="mi912-no" data-job="' + esc(x.j.jobNo) + '">' + esc(x.j.jobNo) + '</button><span class="mi912-w">' + esc(x.miss.map((m) => m[1]).join(' · ')) + '</span><em>' + esc(x.when) + '</em>' +
+        '<button type="button" class="mi912-fill" data-mi912-fill="' + esc(x.j.jobNo) + '" data-mi912-f="' + esc(x.miss.map((m) => m[0]).join(',')) + '" aria-label="' + esc('Fill ' + x.miss.map((m) => m[1]).join(' and ') + ' for ' + x.j.jobNo) + '">Fill</button></div>').join('') +
+      (L.length > show.length || all && L.length > 4 ? '<button type="button" class="mi912-more" data-mi912-more>' + (all ? 'Show fewer' : (L.length - show.length) + ' more') + '</button>' : '') +
+    '</div>';
+  }
+  // Fill: Edit details opens with every missing field marked, the cursor in the first one
+  function fill912(no, fields) {
+    const j = findJob(no); if (!j || !canEditJob(j)) return;
+    openEdit(no);
+    const F = String(fields || '').split(',').filter(Boolean);
+    setTimeout(() => {
+      const form = $('#editForm'); if (!form) return;
+      let first = null;
+      F.forEach((f) => { const box = form.querySelector('[data-field="' + f + '"]'); if (!box) return; box.classList.add('is-miss912'); if (!first) first = box; });
+      if (!first) return;
+      first.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      const inp = first.querySelector('input:not([type="hidden"]), select, textarea'); if (inp) inp.focus({ preventScroll: true });
+    }, 60);
+  }
+
+  // ---------------------------------------------------------------- 4 · Copy from job… (costing page)
+  // Any costing you can open is a source; its lines come in as this job's draft (charges, vendors, basis, amounts,
+  // currencies and USD rates — box quantities follow this job). Nothing is saved until Save.
+  const cp912 = () => state.cp912 || (state.cp912 = { q: '', step: 'pick' });
+  function cpSources912(j) {
+    const K = String(j.jobNo).toUpperCase(), cu = upq(j.customer);
+    return state.jobs.filter((x) => { const s = state.costing[String(x.jobNo).toUpperCase()]; return String(x.jobNo).toUpperCase() !== K && canCostSee(x) && s && (s[0] === 'DRAFT' || s[0] === 'LOCKED') && (Number(s[1]) || Number(s[2])); })
+      .map((x) => { const s = state.costing[String(x.jobNo).toUpperCase()]; return { x, s, g: upq(x.customer) === cu && cu ? 0 : x.type === j.type ? 1 : 2, at: Number(s[5]) || 0 }; })
+      .sort((a, b) => a.g - b.g || b.at - a.at);
+  }
+  function cpRow912(o) {
+    const x = o.x, s = o.s;
+    return '<button type="button" class="cp912-row" data-cp912="' + esc(x.jobNo) + '"><span class="cp912-a"><b>' + esc(x.jobNo) + '</b><i>' + esc(x.type) + '</i></span>' +
+      '<span class="cp912-c">' + esc(x.customer || '—') + '</span><span class="cp912-d">' + esc(x.mode === 'misc' ? (x.against ? 'Against ' + x.against : 'Costing only') : nice(x.route)) + '</span>' +
+      '<span class="cp912-s">' + (s[0] === 'LOCKED' ? 'DONE' : 'DRAFT') + ' · SELL ' + money(s[1]) + '</span></button>';
+  }
+  function cpList912(j) {
+    const P = cp912(), q = upq(P.q), src = cpSources912(j);
+    const hit = q ? src.filter((o) => (o.x.jobNo + ' ' + o.x.customer + ' ' + o.x.route + ' ' + o.x.type).toUpperCase().includes(q)) : src;
+    const names = ['THIS CUSTOMER', 'SAME JOB TYPE', 'OTHER JOBS'];
+    let html = '', last = -1;
+    hit.slice(0, 40).forEach((o) => { if (!q && o.g !== last) { last = o.g; html += '<div class="cp912-gh">' + names[o.g] + '</div>'; } html += cpRow912(o); });
+    const look = q.replace(/\s+/g, '');
+    if (/^(?=.*\d)[A-Z0-9/-]{6,}$/.test(look) && !hit.some((o) => String(o.x.jobNo).toUpperCase() === look) && look !== String(j.jobNo).toUpperCase())
+      html += '<button type="button" class="cp912-row cp912-look" data-cp912="' + esc(look) + '"><span class="cp912-a"><b>' + esc(look) + '</b></span><span class="cp912-c">Open this job’s costing — closed jobs too</span></button>';
+    return html || '<div class="cp912-none">' + esc(q ? 'No costing matches “' + P.q.trim() + '”.' : 'No other job has a saved costing yet.') + '</div>';
+  }
+  function cpDraft912(j, data) {   // the source's lines as this job's draft lines (new ids)
+    const fx0 = Number(data.rate) || COMPANY_FX();
+    return (data.lines || []).map((l) => {
+      const bc = l.bc || 'AED', sc = l.sc || 'AED';
+      const bx = bc === 'USD' ? fxTxt(l.bx || fx0) : '', sx = sc === 'USD' ? fxTxt(l.sx || fx0) : '';
+      const basis = l.basis || 'SHIP', qty = l.qty === 0 ? '0' : numTxt(l.qty) || '1';
+      return { id: newLineId(), charge: l.charge, vendor: l.vendor || '', basis, qty: ['BOX', 'B20', 'B40'].includes(basis) ? costQtyFor(j, basis, qty) : qty, bc, br: numTxt(l.br), bx, sc, sr: numTxt(l.sr), sx, bxAuto: !bx || num6(bx) === vendorFx(l.vendor), was912: qty };
+    });
+  }
+  const cpBuild912 = (j) => () => {
+    const P = cp912(), C = costFor(j.jobNo), have = C && C.draft ? C.draft.lines.filter((l) => String(l.charge || '').trim()).length : 0;
+    if (P.step === 'pick') {
+      return '<div class="pop-title">Copy charges from a job</div><p class="pop-text cp912-lead">Its lines come in as this job’s draft — change anything, then Save.</p>' +
+        '<label class="search cp912-q">' + icon('search', 16) + '<input type="search" id="cp912Q" autocomplete="off" spellcheck="false" placeholder="Job number or customer" aria-label="Find a job" value="' + esc(P.q) + '"></label>' +
+        '<div class="cp912-list" id="cp912List">' + cpList912(j) + '</div>';
+    }
+    const back = '<button type="button" class="link-btn cp912-back" data-cp912-back>' + icon('l912', 14) + 'Pick another job</button>';
+    if (P.step === 'load') return back + '<div class="cp912-src is-loading"><span class="sk"></span><span class="sk"></span><span class="sk short"></span></div>';
+    if (P.step === 'err') return back + '<div class="cp912-none is-err">' + esc(P.err || 'Could not open that costing.') + '</div><button type="button" class="btn-ghost pop-wide" data-cp912="' + esc(P.src) + '">Try again</button>';
+    const D = P.data, x = findJob(P.src), lines = cpDraft912(j, D), t = costTotals(lines), moved = lines.filter((l) => l.qty !== l.was912).length;
+    const head = '<div class="cp912-src"><div class="cp912-a"><b>' + esc(P.src) + '</b><i>' + esc((x && x.type) || D.type || '') + '</i><span class="cp912-st">' + (D.closed ? 'CLOSED JOB' : D.status === 'LOCKED' ? 'COSTING DONE' : 'DRAFT · V' + esc(D.version)) + '</span></div>' +
+      '<div class="cp912-c">' + esc((x && x.customer) || D.customer || '') + '</div>' + (x ? '<div class="cp912-d">' + esc(nice(x.route)) + '</div>' : '') + '</div>';
+    if (!lines.length) return back + head + '<div class="cp912-none">This costing has no charges to copy.</div>';
+    const amt = (l, k) => (k === 's' && !num6(l.sr) ? 'incl.' : l[k + 'c'] + ' ' + money(num6(l[k + 'r']) || 0));
+    return back + head +
+      '<ol class="cp912-lines">' + lines.map((l) => '<li><span class="cp912-ln">' + esc(l.charge) + '</span><span class="cp912-lv">' + esc((l.vendor ? l.vendor + ' · ' : '') + (BASIS_SHORT[l.basis] || l.basis) + ' × ' + l.qty) + '</span>' +
+        '<span class="cp912-lm"><em>BUY</em>' + esc(amt(l, 'b')) + '<em>SELL</em>' + esc(amt(l, 's')) + '</span></li>').join('') + '</ol>' +
+      '<div class="cp912-tot"><span><em>BUYING</em>' + money(t.buy) + '</span><span><em>SELLING</em>' + money(t.sell) + '</span><span class="' + (t.profit < 0 ? 'is-loss' : '') + '"><em>PROFIT · AED</em>' + money(t.profit) + '</span></div>' +
+      (moved ? '<p class="pop-text cp912-note">Box quantities follow this job (' + esc(j.cargo || boxesOf(j) + ' boxes') + ').</p>' : '') +
+      (have ? '<div class="pop-label">The ' + have + (have === 1 ? ' charge' : ' charges') + ' already here</div><div class="seg seg-mini cp912-mode" role="group" aria-label="The charges already here">' +
+        '<button type="button" data-cp912-mode="replace" aria-pressed="' + (P.mode !== 'add') + '">Replace them</button><button type="button" data-cp912-mode="add" aria-pressed="' + (P.mode === 'add') + '">Keep and add</button></div>' : '') +
+      '<button type="button" class="btn-brutal pop-main" data-primary data-cp912-use>COPY ' + lines.length + (lines.length === 1 ? ' CHARGE' : ' CHARGES') + '</button>' +
+      '<div class="pop-note">NOTHING IS SAVED UNTIL YOU PRESS SAVE</div>';
+  };
+  function cpOpen912(anchor, j) {
+    state.cp912 = { q: '', step: 'pick', mode: 'replace' };
+    openPop(anchor, 'COPY FROM JOB', cpBuild912(j));
+    setTimeout(() => { const q = $('#cp912Q'); if (q && !isTouch()) q.focus(); }, 40);
+  }
+  async function cpPick912(j, no) {
+    const P = cp912(), K = String(no).toUpperCase();
+    Object.assign(P, { step: 'load', src: K, data: null, err: '' }); refreshOverlay();
+    try {
+      const res = await api.call('ethixCosting', [K]);
+      if (state.cp912 !== P || P.src !== K) return;
+      if (res && res.ok && res.costing) { P.data = res.costing; P.step = 'preview'; }
+      else { P.step = 'err'; P.err = (res && res.error) || 'Could not open that costing.'; }
+    } catch (e) { if (state.cp912 !== P) return; P.step = 'err'; P.err = e.kind === 'auth' ? 'Please sign in again.' : e.message; }
+    refreshOverlay();
+    const b = $('[data-cp912-use]'); if (b && !isTouch()) b.focus({ preventScroll: true });
+  }
+  function cpUse912(j) {
+    const P = cp912(), C = costFor(j.jobNo); if (!P.data || !C || !C.draft || !costCanEdit(j, C.data)) return;
+    const lines = cpDraft912(j, P.data).map((l) => { delete l.was912; return l; });
+    const before = C.draft.lines.slice(), wasDirty = C.dirty, src = P.src;
+    const keep = before.filter((l) => String(l.charge || '').trim() || num6(l.br) || num6(l.sr));
+    C.draft.lines = P.mode === 'add' && keep.length ? keep.concat(lines) : lines;
+    C.dirty = true;
+    state.cp912 = null; closeOverlays(true); rerender();
+    const row = document.querySelector('.ct-row[data-line="' + lines[0].id + '"]'); if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
+    $$('.ct-row').forEach((r) => { if (lines.some((l) => l.id === r.dataset.line)) r.classList.add('is-new912'); });
+    toast(lines.length + (lines.length === 1 ? ' charge' : ' charges') + ' copied from ' + src + ' · not saved yet', { action: { label: 'Undo', fn: () => { const C2 = costFor(j.jobNo); if (!C2 || !C2.draft) return; C2.draft.lines = before; C2.dirty = wasDirty; rerender(); } } });
+  }
+  function initCopy912() {
+    $('#view').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-act="cost-copy912"]'); if (!b) return;
+      const r = state.route; if (!r || r.name !== 'costjob') return;
+      const j = findJob(r.jobNo), C = j && costFor(j.jobNo); if (!C || !C.draft || !costCanEdit(j, C.data)) return;
+      cpOpen912(b, j);
+    });
+    const onPop = (e) => {
+      if (!state.cp912) return;
+      const r = state.route, j = r && r.name === 'costjob' ? findJob(r.jobNo) : null; if (!j) return;
+      const pk = e.target.closest('[data-cp912]'); if (pk) { e.stopPropagation(); cpPick912(j, pk.dataset.cp912); return; }
+      if (e.target.closest('[data-cp912-back]')) { e.stopPropagation(); const P = cp912(); P.step = 'pick'; P.data = null; refreshOverlay(); const q = $('#cp912Q'); if (q && !isTouch()) q.focus(); return; }
+      const md = e.target.closest('[data-cp912-mode]'); if (md) { e.stopPropagation(); cp912().mode = md.dataset.cp912Mode; refreshOverlay(); return; }
+      if (e.target.closest('[data-cp912-use]')) { e.stopPropagation(); cpUse912(j); }
+    };
+    $('#pop').addEventListener('click', onPop, true);
+    $('#drawerBody').addEventListener('click', onPop, true);
+    const onInput = (e) => {
+      if (!e.target || e.target.id !== 'cp912Q' || !state.cp912) return;
+      const r = state.route, j = r && r.name === 'costjob' ? findJob(r.jobNo) : null; if (!j) return;
+      state.cp912.q = e.target.value; const L = $('#cp912List'); if (L) L.innerHTML = cpList912(j);
+    };
+    $('#pop').addEventListener('input', onInput);
+    $('#drawerBody').addEventListener('input', onInput);
+    const onKey = (e) => { if (e.key === 'Enter' && e.target && e.target.id === 'cp912Q') { e.preventDefault(); const f = $('#cp912List [data-cp912]'); if (f) f.click(); } };
+    $('#pop').addEventListener('keydown', onKey);
+    $('#drawerBody').addEventListener('keydown', onKey);
+  }
+
+  function applyBoot912(boot) { if (boot && Array.isArray(boot.holAE)) state.holAE912 = boot.holAE; }
+  function initV2912() {
+    initCal912();
+    initCopy912();
+    $('#view').addEventListener('click', (e) => {
+      const f = e.target.closest('[data-mi912-fill]'); if (f) { e.stopPropagation(); fill912(f.dataset.mi912Fill, f.dataset.mi912F); return; }
+      if (e.target.closest('[data-mi912-more]')) { e.stopPropagation(); state.mi912All = !state.mi912All; rerender(); }
+    }, true);
+  }
+
   // -------------------------------------------------------------------- start
   function start() {
     if (savedSession()) document.body.classList.add('is-resuming');
@@ -7494,6 +7877,7 @@
     initV299();
     initV2910();
     initV2911();
+    initV2912();
     if (savedSession()) resumeSession();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
