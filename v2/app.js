@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders, cover — v2.9.12)
+   enquiries, follow-ups, delays, close & archive, costing, reminders, cover, system health — v2.9.13)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -765,11 +765,11 @@
     const h = decodeURIComponent(location.hash || '');
     const m = h.match(/^#\/job\/(.+)$/);
     const mc = h.match(/^#\/costing\/(.+)$/);
-    let r = m ? { name: 'job', jobNo: m[1].trim() } : mc ? { name: 'costjob', jobNo: mc[1].trim() } : h === '#/costing' ? { name: 'costing' } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : h === '#/notifications' ? { name: 'notif' } : h === '#/cover' ? { name: 'cover' } : { name: 'home' };
+    let r = m ? { name: 'job', jobNo: m[1].trim() } : mc ? { name: 'costjob', jobNo: mc[1].trim() } : h === '#/costing' ? { name: 'costing' } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/health' ? { name: 'health' } : h === '#/names' ? { name: 'names' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : h === '#/notifications' ? { name: 'notif' } : h === '#/cover' ? { name: 'cover' } : { name: 'home' };
     const mh911 = h.match(/^#\/handover(?:\/(.+))?$/); if (mh911) r = { name: 'handover', jobNo: (mh911[1] || '').trim().toUpperCase() };   // v2.9.11: the leave hand-over
-    if (isAdmin()) { if (r.name !== 'activity') r = { name: 'admin' }; }      // admin works with people, not jobs
-    else if (r.name === 'admin' || r.name === 'activity' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote()) || ((r.name === 'costing' || r.name === 'costjob') && !canNote()) || ((r.name === 'cover' || r.name === 'handover') && !canEdit())) r = { name: 'home' };
-    const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity|round|follow-ups|enquiries|costing)$/.test(h) ? '#/home' : r.name === 'round' && h === '#/round' ? '#/follow-ups' : null;
+    if (isAdmin()) { if (!['activity', 'health', 'names'].includes(r.name)) r = { name: 'admin' }; }      // admin works with people, not jobs (v2.9.13: + System health, Customer names)
+    else if (r.name === 'admin' || r.name === 'activity' || r.name === 'health' || r.name === 'names' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote()) || ((r.name === 'costing' || r.name === 'costjob') && !canNote()) || ((r.name === 'cover' || r.name === 'handover') && !canEdit())) r = { name: 'home' };
+    const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity|health|names|round|follow-ups|enquiries|costing)$/.test(h) ? '#/home' : r.name === 'round' && h === '#/round' ? '#/follow-ups' : null;
     if (want && h !== want) history.replaceState(null, '', want);
     return r;
   }
@@ -788,6 +788,8 @@
     document.body.classList.toggle('on-voyage', r.name === 'job' && canEdit());
     if (r.name === 'admin') renderAdmin(changed || first);
     else if (r.name === 'activity') renderActivity(changed || first);
+    else if (r.name === 'health') renderHealth913(changed || first);   // v2.9.13
+    else if (r.name === 'names') renderNames913(changed || first);
     else if (r.name === 'jobs') renderJobs(changed || first);
     else if (r.name === 'round') renderRound(back99 ? 'back99' : (changed || first));
     else if (r.name === 'enquiries') renderEnquiries(changed || first);
@@ -821,7 +823,9 @@
     const active = scoped().filter((j) => j.active).length;
     if (isAdmin()) return [
       { id: 'admin', label: 'People', icon: 'users', href: '#/admin', count: state.admin ? state.admin.users.length : 0 },
-      { id: 'activity', label: 'Activity', icon: 'clock', href: '#/activity' }
+      { id: 'activity', label: 'Activity', icon: 'clock', href: '#/activity' },
+      { id: 'health', label: 'System health', icon: 'health913', href: '#/health' },   // v2.9.13
+      { id: 'names', label: 'Customer names', icon: 'names913', href: '#/names' }
     ];
     const items = [
       { id: 'home', label: 'Home', icon: 'home', href: '#/home' },
@@ -977,7 +981,7 @@
       '<span class="jr-type"><span class="badge">' + esc(j.type || '—') + '</span><span class="jr-typename">' + esc(j.typeName) + '</span></span>' +
       '<span class="jr-cust"><span class="jr-name">' + esc(j.customer || '—') + '</span><span class="jr-route">' + esc(j.mode === 'misc' ? (j.against ? 'AGAINST ' + j.against : 'COSTING ONLY') : j.route) + '</span></span>' +
       '<span class="jr-track">' + miniTrack(j, 26) + '</span>' +
-      '<span class="jr-next">' + toneChip(rowNext(j)) + cutChips(j) + '</span>' +
+      '<span class="jr-next">' + arch913Tag(j) + toneChip(rowNext(j)) + cutChips(j) + '</span>' +
       '<span class="jr-etd"><span class="jr-k">ETD</span>' + esc(j.etd ? fmt(j.etd) : '—') + '</span>' +
       '<span class="jr-eta"><span class="jr-k">ETA</span>' + esc(j.eta ? fmt(j.eta) : '—') + delayTag(j) + '</span>' +
       '<span class="jr-people"><span class="jr-cs' + (covered98(j) ? ' is-cover' : '') + '">' + esc(j.cs || '—') + '</span><span class="jr-sales">' + esc(j.sales || '') + '</span></span>' +
@@ -1922,7 +1926,8 @@
   function accountPanel() {
     const go2 = (href, ic, label, n) => '<button type="button" class="acct-go" data-href="' + href + '">' + icon(ic, 18) + '<span>' + label + '</span>' + (n ? '<b>' + n + '</b>' : '') + '</button>';
     const shortcuts = canEdit() ? go2('#/follow-ups', 'check', 'Follow-ups', roundRows(today0()).due.length + remDueCount()) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length) + go2('#/costing', 'costing', 'Costing', costRows().open) + go2('#/cover', 'swap', 'Cover', covIncoming98().length)
-      : isSales() ? go2('#/enquiries', 'enq', 'My enquiries', enqOpen().length) + go2('#/costing', 'costing', 'Costing', costRows().open) : '';
+      : isSales() ? go2('#/enquiries', 'enq', 'My enquiries', enqOpen().length) + go2('#/costing', 'costing', 'Costing', costRows().open)
+      : isAdmin() ? go2('#/health', 'health913', 'System health') + go2('#/names', 'names913', 'Customer names') : '';   // v2.9.13
     return (shortcuts ? '<div class="acct-shortcuts">' + shortcuts + '</div>' : '') + '<div class="acct"><span class="avatar">' + esc(initials(state.user)) + '</span><div><div class="acct-name" id="drawerTitle">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(ROLE_NAMES[state.role] || state.role) + '</div></div></div>' +
       '<form class="tile pw-form" id="pwForm" novalidate><h3 class="tile-title">CHANGE PASSWORD</h3>' +
         '<input type="text" name="username" autocomplete="username" value="' + esc(state.user) + '" class="sr-only" tabindex="-1" aria-hidden="true" readonly>' +
@@ -2827,11 +2832,7 @@
   const isReady = (j) => j.active && !j.closed && closeCheck(j).ready;
   const readyChip = (j) => canEditJob(j) && isReady(j) ? '<button type="button" class="ready-chip" data-act="close-job">' + icon('check', 13) + 'READY TO CLOSE</button>' : '';
   const canEditJob = (j) => canEdit() && !(j && j.closed) && (!j || mayEdit911(j));   // v2.9.11: its owner, or the colleague covering them
-  function closedActions(j) {
-    const c = j.closed || {};
-    return '<div class="vh-actions is-ro is-closed"><span class="ro-chip closed-chip">' + icon('lock', 14) + '<span>CLOSED' + (c.at ? ' ' + esc(c.at) : '') + (c.by ? ' · ' + esc(c.by) : '') + '</span></span>' +
-      (canEdit() && mayEdit911(j) ? '<button type="button" class="btn-brutal" data-act="reopen">REOPEN JOB</button>' : '') + '</div>';
-  }
+  // closedActions — v2.9.13 version further down (the yearly archive is read-only)
   function buildClosed(ix, row, closed) {
     const j = buildJob(row, ix, today0());
     j.closed = closed || { at: '', by: '', reason: '' };
@@ -7507,27 +7508,7 @@
   const CHIP912 = { all: 'All', sail: 'Sailing', arr: 'Arriving', cut: 'Cutoffs', free: 'Free time' };
   const LEG912 = { sail: 'Sailing', arr: 'Arriving', cut: 'Cutoff', free: 'Free time ends' };
   const cutTime912 = (raw) => { const m = String(raw || '').match(/\b(\d{1,2}):(\d{2})\b/); return m ? ' ' + m[1].padStart(2, '0') + ':' + m[2] : ''; };
-  function calEvents912() {
-    const map = new Map();
-    const add = (d, k, j, say) => {
-      if (!d) return;
-      const key = isoOf(d); let e = map.get(key); if (!e) map.set(key, e = { sail: [], arr: [], cut: [], free: [] });
-      const x = e[k].find((y) => y.j === j);
-      if (x) { if (say && !x.say.includes(say)) x.say.push(say); } else e[k].push({ j, say: say ? [say] : [] });
-    };
-    const open = (v) => !v || v === 'PENDING';
-    scoped().forEach((j) => {
-      if (!j.active || j.mode === 'misc') return;
-      add(j.etd, 'sail', j); add(j.eta, 'arr', j);
-      if ((j.cat === 'EXPORT' || j.cat === 'CROSS') && j.type !== 'CRR') {
-        if (open(j.sido)) add(j.siCut, 'cut', j, 'SI cutoff' + cutTime912(j.raw.siCut));
-        if (j.cat === 'EXPORT' && open(j.ed)) add(j.edCut, 'cut', j, 'ED cutoff' + cutTime912(j.raw.edCut));
-        if (j.cat === 'EXPORT' && j.dg === 'DG' && (j.mode !== 'sea' || open(j.dgpc))) add(j.dgCut, 'cut', j, 'DG cutoff' + cutTime912(j.raw.dgCut));
-      }
-      if (j.cat === 'IMPORT' && !j.delivery) { add(j.lineFreeEnd, 'free', j, 'Line free time'); add(j.portFreeEnd, 'free', j, 'Port free time'); }
-    });
-    return map;
-  }
+  // calEvents912 — v2.9.13 version further down (done cutoffs too)
   // UAE public holidays: the whole HOLIDAYS tab (v2.9.12 Code.gs), else the six weeks every app has
   function holAE912(iso) {
     const all = state.holAE912;
@@ -7546,58 +7527,8 @@
     C.y = d.getFullYear(); C.m = d.getMonth();
     C.sel = (t0.getFullYear() === C.y && t0.getMonth() === C.m) ? isoOf(t0) : isoOf(d);
   }
-  function calDayList912(iso, e, f, t0) {
-    const d = parseDate(iso), n = d ? days(t0, d) : 0, past = n < 0;
-    const keys = f === 'all' ? KEYS912 : [f];
-    const row = (x, k) => {
-      const j = x.j, sub = k === 'cut' ? x.say.join(' · ') + ' · ' + nice(j.route) : k === 'free' ? x.say.join(' · ') + (x.say.length > 1 ? ' end' : ' ends') + ' · ' + nice(j.route) : nice(j.route);
-      return '<button type="button" class="c912-r" data-c912-job="' + esc(j.jobNo) + '" title="' + esc('Open ' + j.jobNo) + '"><b>' + esc(j.jobNo) + '</b><i>' + esc(j.type) + '</i><span>' + esc(j.customer || '—') + '</span><em>' + esc(sub) + '</em></button>';
-    };
-    const head = (k, L) => {
-      const air = L.filter((x) => x.j.mode === 'air').length, all = air === L.length;
-      const w = k === 'sail' ? (past ? (all ? 'DEPARTED' : air ? 'SAILED · DEPARTED' : 'SAILED') : (all ? 'DEPARTS' : air ? 'SAILS · DEPARTS' : 'SAILS'))
-        : k === 'arr' ? (past ? 'ARRIVED' : 'ARRIVES') : k === 'cut' ? 'CUTOFFS' : (past ? 'FREE TIME ENDED' : 'FREE TIME ENDS');
-      return '<div class="c912-gh"><i class="k912-' + k + '"></i>' + w + '<span>' + L.length + '</span></div>';
-    };
-    const out = keys.filter((k) => e && e[k].length).map((k) => '<div class="c912-g" role="group">' + head(k, e[k]) + e[k].map((x) => row(x, k)).join('') + '</div>').join('');
-    if (out) return out;
-    const what = f === 'all' ? (past ? 'Nothing sailed, arrived or was due on this day.' : 'Nothing sails, arrives or is due on this day.')
-      : { sail: past ? 'Nothing sailed on this day.' : 'Nothing sails on this day.', arr: past ? 'Nothing arrived on this day.' : 'Nothing arrives on this day.', cut: 'No open cutoffs on this day.', free: 'No free time ends on this day.' }[f];
-    return '<div class="c912-none">' + icon('cal912', 22) + '<span>' + esc(what) + '</span></div>';
-  }
-  function calHtml912() {
-    const C = cal912(), t0 = today0(), ph = isPh912(), f = C.f || 'all', ev = calEvents912();
-    const first = new Date(C.y, C.m, 1), start = addDays(first, -((first.getDay() + 6) % 7));
-    const keys = f === 'all' ? KEYS912 : [f];
-    let cells = '';
-    for (let i = 0; i < 42; i++) {
-      const d = addDays(start, i), iso = isoOf(d), inM = d.getMonth() === C.m, e = ev.get(iso);
-      const c = keys.map((k) => [k, e ? e[k].length : 0]).filter((x) => x[1]), n = c.reduce((a, x) => a + x[1], 0);
-      const we = d.getDay() === 0 || d.getDay() === 6, hol = holAE912(iso), today = +d === +t0, sel = iso === C.sel;
-      const say = DOW[d.getDay()] + ' ' + dm912(d) + (today ? ', today' : '') + (hol.length ? ', ' + hol.join(', ') : '') + ' — ' + (n ? c.map(([k, v]) => v + ' ' + LEG912[k].toLowerCase()).join(', ') : 'nothing');
-      const inner = !inM ? '' : ph ? '<span class="c912-dots">' + c.map(([k]) => '<i class="k912-' + k + '"></i>').join('') + '</span>'
-        : '<span class="c912-ks">' + c.map(([k, v]) => '<span class="c912-k"><i class="k912-' + k + '"></i>' + v + '</span>').join('') + '</span>';
-      cells += '<button type="button" class="c912-d' + (inM ? '' : ' is-out') + (we ? ' is-we' : '') + (hol.length && inM ? ' is-hol' : '') + (today ? ' is-today' : '') + (sel ? ' is-sel' : '') + '" data-c912-day="' + iso + '" style="--b:' + (inM ? Math.min(n, 9) : 0) + '" aria-pressed="' + sel + '" aria-label="' + esc(say) + '"' + (sel ? '' : ' tabindex="-1"') + (hol.length ? ' title="' + esc(hol.join(' · ') + ' — UAE public holiday') + '"' : '') + '>' +
-        '<b>' + d.getDate() + '</b>' + (hol.length && inM && !ph ? '<span class="c912-hol">' + esc(holShort912(hol[0])) + '</span>' : '') + inner + '</button>';
-    }
-    const wd = (ph ? ['M', 'T', 'W', 'T', 'F', 'S', 'S'] : ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']).map((x) => '<span aria-hidden="true">' + x + '</span>').join('');
-    const chips = '<div class="c912-chips" role="group" aria-label="Show">' + Object.keys(CHIP912).map((k) => '<button type="button" class="c912-chip' + (f === k ? ' is-on' : '') + '" data-c912-f="' + k + '" aria-pressed="' + (f === k) + '">' + (k === 'all' ? '' : '<i class="k912-' + k + '"></i>') + CHIP912[k] + '</button>').join('') + '</div>';
-    const title = ph ? MONTHS912[C.m] + ' ' + C.y : MONTHS912[C.m].toUpperCase() + ' ' + C.y;
-    const sd = parseDate(C.sel) || t0, sn = days(t0, sd), se = ev.get(C.sel);
-    const jobsN = new Set(); if (se) keys.forEach((k) => se[k].forEach((x) => jobsN.add(x.j)));
-    const sHol = holAE912(C.sel);
-    const kick = DOW_UP[sd.getDay()] + ' ' + sd.getDate() + ' ' + MON91[sd.getMonth()].toUpperCase() + (sd.getFullYear() !== t0.getFullYear() ? ' ' + sd.getFullYear() : '') + (sn === 0 ? ' · TODAY' : sn === 1 ? ' · TOMORROW' : sn === -1 ? ' · YESTERDAY' : '');
-    const nb = (dir) => '<button type="button" class="c912-rb" data-c912-mo="' + dir + '" aria-label="' + (dir < 0 ? 'Previous month' : 'Next month') + '">' + icon(dir < 0 ? 'l912' : 'r912', 16) + '</button>';
-    const close = (cls) => '<button type="button" class="c912-rb' + (cls || '') + '" data-c912-close aria-label="Close">' + icon('x912', 16) + '</button>';
-    return '<div class="c912-m">' + (ph ? '<div class="c912-grab" data-c912-grab aria-hidden="true"></div>' : '') +
-        '<div class="c912-mh"><h2 id="c912Title">' + title + '</h2>' + nb(-1) + nb(1) + '<button type="button" class="c912-pill" data-c912-today>Today</button>' + (ph ? close(' c912-xph') : '') + '</div>' + chips +
-        '<div class="c912-wd">' + wd + '</div><div class="c912-grid" role="group" aria-label="' + esc(MONTHS912[C.m] + ' ' + C.y) + '">' + cells + '</div>' +
-        (ph ? '' : '<div class="c912-lg">' + KEYS912.map((k) => '<span><i class="k912-' + k + '"></i>' + LEG912[k] + '</span>').join('') + '<span class="c912-lgh"><i></i>UAE holiday</span><em>Deeper colour = busier day</em></div>') +
-      '</div>' +
-      '<div class="c912-dp"><div class="c912-dph"><small>' + esc(kick) + '</small><h3>' + (jobsN.size ? jobsN.size + (jobsN.size === 1 ? ' job' : ' jobs') : 'No jobs') + '</h3>' +
-          (sHol.length ? '<span class="c912-holchip">' + icon('hol912', 13) + esc(sHol.map(holShort912).join(' · ')) + ' · UAE holiday</span>' : '') + (ph ? '' : close(' c912-x')) + '</div>' +
-        '<div class="c912-dl">' + calDayList912(C.sel, se, f, t0) + '</div></div>';
-  }
+  // calDayList912 — v2.9.13 version further down (Open / Done ✓ / Missed)
+  // calHtml912 — v2.9.13 version further down (dot = open, ring = done)
   function calPaint912(keepFocus) {
     const box = $('#cal912 .c912-cal'); if (!box) return;
     const fa = document.activeElement, wasDay = fa && fa.closest && fa.closest('.c912-grid'), wasEl = fa && fa.closest && fa.closest('#cal912') ? (fa.dataset.c912F ? '[data-c912-f="' + fa.dataset.c912F + '"]' : fa.dataset.c912Mo ? '[data-c912-mo="' + fa.dataset.c912Mo + '"]' : fa.hasAttribute('data-c912-today') ? '[data-c912-today]' : '') : '';
@@ -7861,6 +7792,412 @@
     }, true);
   }
 
+  // ==================================================================== v2.9.13 — admin and safety (6 Nov 2026)
+  // 5 System health · 6 the yearly archive · 7 the problem log · 8 customer names tidy-up (admin) · 9 calendar cutoffs open / done
+  I.health913 = '<path d="M3 12.5h4.2l2.3-5.5 4 11 2.4-5.5H21"/>';
+  I.names913 = '<rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="11" r="2.2"/><path d="M5.8 16.2a3.4 3.4 0 0 1 6.4 0M14.5 10h4M14.5 13.5h3"/>';
+  I.arch913 = '<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9M10 13h4"/>';
+  const n913 = (v) => Number(v || 0).toLocaleString('en-US');
+  const p2913 = (v) => String(v).padStart(2, '0');
+  // a moment as Dubai reads it: "Today 02:14" · "Yesterday 08:31" · "Wed 4 Nov 16:42" (+ the year when not this year)
+  function when913(t, noDay) {
+    if (!t) return '';
+    const d = dxb(t), d0 = new Date(d); d0.setHours(0, 0, 0, 0);
+    const n = days(d0, today0()), hm = p2913(d.getHours()) + ':' + p2913(d.getMinutes());
+    const day = n === 0 ? 'Today' : n === 1 ? 'Yesterday' : DOW[d.getDay()] + ' ' + d.getDate() + ' ' + MON91[d.getMonth()] + (d.getFullYear() !== today0().getFullYear() ? ' ' + d.getFullYear() : '');
+    return noDay ? hm : day + ' ' + hm;
+  }
+  const logWhen913 = (t) => { const d = dxb(t); return DOW[d.getDay()] + ' ' + d.getDate() + ' ' + MON91[d.getMonth()] + ' ' + p2913(d.getHours()) + ':' + p2913(d.getMinutes()); };
+
+  // -------------------------------------------------------------------- 7 · the problem log — what the app saw
+  // No connection / no answer in time (sent once it works again), an error page from Google instead of an answer, an app
+  // error. Background reads that fail while a laptop sleeps are not problems; nothing typed and no password is ever sent.
+  const QUIET913 = ['ethixPing', 'ethixBootstrap', 'ethixNotifications', 'ethixNotifMore', 'ethixSeen', 'ethixSeenAll', 'ethixLogProblem', 'ethixSearchText', 'ethixArchiveSearch',
+    'ethixLists', 'ethixReminders', 'ethixJobStory', 'ethixFollowHistory', 'ethixAdminList', 'ethixAdminActivity', 'ethixAdminHealth', 'ethixAdminNames'];
+  const P913 = { q: (() => { const v = store.get('ethix.p913', []); return Array.isArray(v) ? v : []; })(), down: null, sent: 0, busy: false, errs: 0, seen: {} };
+  const dev913 = () => { const u = navigator.userAgent || ''; return /iPhone/.test(u) ? 'iPhone' : /iPad/.test(u) ? 'iPad' : /Android/.test(u) ? 'Android' : /Windows/.test(u) ? 'Windows' : /Mac/.test(u) ? 'Mac' : 'Browser'; };
+  const job913 = (a) => { const v = Array.isArray(a) ? a[0] : ''; const t = typeof v === 'string' || typeof v === 'number' ? String(v).trim() : ''; return /^[A-Z0-9][A-Z0-9\-\/]{3,19}$/i.test(t) && /\d/.test(t) ? t.toUpperCase() : ''; };
+  const dur913 = (ms) => { const s = Math.max(1, Math.round(ms / 1000)); return s < 60 ? s + ' s' : s < 3600 ? Math.round(s / 60) + ' min' : Math.floor(s / 3600) + ' h ' + Math.round((s % 3600) / 60) + ' min'; };
+  function p913Push(x) { P913.q.push(x); if (P913.q.length > 20) P913.q = P913.q.slice(-20); store.set('ethix.p913', P913.q); }
+  function p913Flush() {
+    if (P913.busy || !P913.q.length || !api.token || !api.connected) return;
+    const wait = 15000 - (Date.now() - P913.sent);
+    if (wait > 0) { clearTimeout(P913.t); P913.t = setTimeout(p913Flush, wait + 50); return; }   // at most one report every 15 s
+    P913.busy = true; P913.sent = Date.now();
+    const batch = P913.q.slice(0, 10);
+    api.call('ethixLogProblem', [batch, dev913()]).then(() => { P913.q = P913.q.slice(batch.length); store.set('ethix.p913', P913.q); }).catch(() => {}).finally(() => { P913.busy = false; });
+  }
+  function p913Fail(fn, args, e) {
+    if (fn === 'ethixLogProblem' || !e) return;
+    if (e.kind === 'network') {
+      const slow = /too long/i.test(e.message);
+      if (QUIET913.includes(fn)) { if (!P913.down) P913.down = { t: Date.now(), fn: '', job: '', slow, quiet: true }; return; }
+      if (!P913.down || P913.down.quiet) P913.down = { t: P913.down ? P913.down.t : Date.now(), fn, job: job913(args), slow };
+      return;
+    }
+    if (e.kind === 'server' && /unexpected reply/i.test(e.message)) { p913Push({ t: Date.now(), fn, job: job913(args), what: 'Google sent an error page instead of an answer' }); setTimeout(p913Flush, 1500); }
+  }
+  function p913Ok(fn) {
+    const d = P913.down;
+    if (d) { P913.down = null; if (!d.quiet) p913Push({ t: d.t, fn: d.fn, job: d.job, what: (d.slow ? 'No answer from Google in time' : 'No connection') + ' — worked again after ' + dur913(Date.now() - d.t) }); }
+    if (P913.q.length) setTimeout(p913Flush, fn === 'ethixSignIn' ? 4000 : 600);
+  }
+  const call0913 = api.call;
+  api.call = async function (fn, args = [], opts = {}) {
+    let r;
+    try { r = await call0913.call(this, fn, args, opts); } catch (e) { p913Fail(fn, args, e); throw e; }
+    if (fn !== 'ethixLogProblem') p913Ok(fn);
+    return r;
+  };
+  function p913Err(msg, where) {
+    msg = String(msg || '').replace(/^Uncaught\s+/, '').replace(/^(Error|TypeError|ReferenceError|RangeError|SyntaxError):\s*/, '');
+    if (P913.errs >= 3 || !msg || P913.seen[msg] || /ResizeObserver|^Script error/i.test(msg)) return;
+    P913.errs++; P913.seen[msg] = 1;
+    p913Push({ t: Date.now(), doing: 'Using EWS' + (state.route ? ' · ' + state.route.name : ''), what: 'App error: ' + msg.slice(0, 120), details: ('v2.9.13 · ' + String(where || '')).slice(0, 500) });
+    setTimeout(p913Flush, 1500);
+  }
+  window.addEventListener('error', (e) => {
+    if (!e || (e.filename && !/\/v2\/|app\.js|config\.js/.test(e.filename))) return;
+    p913Err(e.message, String(e.filename || '').split('/').pop() + ':' + e.lineno + ':' + e.colno + (e.error && e.error.stack ? ' | ' + String(e.error.stack).split('\n').slice(0, 3).join(' / ') : ''));
+  });
+  window.addEventListener('unhandledrejection', (e) => { const r = e && e.reason; if (!r || r instanceof ApiError) return; p913Err(r.message || String(r), r.stack ? String(r.stack).split('\n').slice(0, 3).join(' / ') : ''); });
+
+  // -------------------------------------------------------------------- 5 · System health (admin)
+  const h913 = () => state.h913 || (state.h913 = { data: null, loading: false, err: '', all: false, more: false, run: null });
+  function loadHealth913(force) {
+    const H = h913(); if (H.loading) return;
+    H.loading = true; H.err = '';
+    if (state.route && state.route.name === 'health') rerender();
+    api.call('ethixAdminHealth', [!!force], { timeout: 60000 }).then((d) => { H.data = d; H.got = Date.now(); })
+      .catch((e) => { H.err = /not available/i.test(e.message) ? 'System health needs the v2.9.13 Code.gs.' : e.message; })
+      .finally(() => { H.loading = false; if (state.route && state.route.name === 'health') rerender(); });
+  }
+  function tone913(D) {   // the four cards: [tone, big, sub]
+    const t0 = today0(), now = dxb(), pct = D.cells / D.max * 100;
+    const size = [pct < 50 ? 'ok' : pct < 80 ? 'warn' : 'bad', (pct > 0 && pct < 1 ? '<1' : Math.round(pct)) + '%',
+      (D.cells >= 1e6 ? (D.cells / 1e6).toFixed(1) + ' million' : n913(Math.round(D.cells / 1000)) + ' thousand') + ' of ' + (D.max / 1e6) + ' million cells'];
+    const B = D.backup || {}, age = B.t ? (Date.now() - B.t) / 36e5 : 1e9;
+    const backup = [B.on === false && !B.t ? 'bad' : age <= 30 ? 'ok' : age <= 54 ? 'warn' : 'bad', B.t ? when913(B.t) : 'None yet',
+      B.on === false ? 'nightly backup not switched on' : n913(B.copies) + (B.copies === 1 ? ' copy' : ' copies') + ' kept · ETHIX BACKUPS'];
+    const M = D.mail || {}, sentDay = M.t ? isoOf((() => { const d = dxb(M.t); d.setHours(0, 0, 0, 0); return d; })()) : M.day || '';
+    const sentToday = sentDay === isoOf(t0), late = !M.off && !sentToday && (now.getHours() * 60 + now.getMinutes()) >= 9 * 60 + 30;
+    const part = M.n !== null && M.n !== undefined && M.of && M.n < M.of;
+    const big = M.t ? when913(M.t) : M.day ? (() => { const d = parseDate(M.day); const n = d ? days(d, t0) : 9; return n === 0 ? 'Today' : n === 1 ? 'Yesterday' : d ? DOW[d.getDay()] + ' ' + d.getDate() + ' ' + MON91[d.getMonth()] : 'Not yet'; })() : 'Not yet';
+    const sub = M.on === false ? 'not switched on' : late ? 'not sent yet today' : M.off && !sentToday ? 'none today · ' + (M.off === 'weekend' ? 'weekend' : M.off) :
+      M.n === null || M.n === undefined ? (M.day ? 'sent' : 'starts on the next working day') : 'sent to ' + (part ? M.n + ' of ' + M.of : M.n) + (M.of === 1 && !part ? ' person' : ' people');
+    const mail = [M.on === false || late || part ? 'warn' : 'ok', big, sub];
+    const p = D.problems || 0;
+    const probs = [p === 0 ? 'ok' : p < 10 ? 'warn' : 'bad', String(p), p === 0 ? 'nothing went wrong' : p === 1 ? 'in the log below' : p === 2 ? 'both in the log below' : 'all in the log below'];
+    return { size, backup, mail, probs };
+  }
+  function healthHead913(anim) {
+    return '<header class="hl913-head' + anim + '"><div><div class="hl913-kick">ADMIN</div><h1>System health</h1>' +
+      '<p class="hl913-sub">How EWS is doing today — checked every hour. All good unless something is amber or red.</p></div>' +
+      '<button type="button" class="btn-ghost hl913-ref" data-h913="refresh" aria-label="Check again"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Check again</span></button></header>';
+  }
+  function renderHealth913(first) {
+    const H = h913(), D = H.data, anim = first ? ' reveal' : '';
+    if (!D && !H.loading && !H.err) setTimeout(() => loadHealth913(false), 0);
+    else if (D && first && Date.now() - (H.got || 0) > 5 * 60000) setTimeout(() => loadHealth913(false), 0);
+    const view = $('#view');
+    if (!D) {
+      view.innerHTML = '<div class="hl913-pg">' + healthHead913(anim) + (H.err ? '<section class="hl913-card hl913-msg">' + empty('alert', H.err) + '<button type="button" class="btn-ghost" data-h913="refresh">Try again</button></section>'
+        : '<div class="hl913-row is-wait">' + [0, 1, 2, 3].map(() => '<div class="hl913-t is-wait"><small></small><b></b><span></span></div>').join('') + '</div>') + '</div>';
+      view.classList.toggle('is-busy913', !!H.loading);
+      return;
+    }
+    const T = tone913(D);
+    const tile = (k, x) => '<div class="hl913-t is-' + x[0] + '" role="group" aria-label="' + esc(k + ': ' + x[1] + ', ' + x[2]) + '"><small>' + k + '</small><b>' + esc(x[1]) + '</b><span>' + esc(x[2]) + '</span></div>';
+    // TABS: JOBS (live) first, then the biggest
+    const tabs = D.tabs || [], live = tabs.filter((t) => t.live), rest = tabs.filter((t) => !t.live && t.rows > 0).sort((a, b) => b.rows - a.rows);
+    const shown = live.concat(H.all ? rest : rest.slice(0, 5));
+    const bar = (t) => { const w = t.rows ? Math.max(2, Math.min(100, Math.round(t.rows / t.cap * 100))) : 0; return '<div class="hl913-bar' + (w >= 80 ? ' is-full' : '') + '" title="' + esc(n913(t.rows) + ' of a comfortable ' + n913(t.cap)) + '"><i style="width:' + w + '%"></i></div>'; };
+    const tabsCard = '<section class="hl913-card hl913-tabs"><div class="hl913-h"><b>TABS</b><span>rows used</span>' + (rest.length > 5 ? '<button type="button" class="hl913-link" data-h913="tabs">' + (H.all ? 'Fewer' : 'All ' + (rest.length + live.length) + ' tabs') + '</button>' : '') + '</div>' +
+      shown.map((t) => '<div class="hl913-tb"><span>' + esc(t.name) + '</span><em>' + n913(t.rows) + '</em>' + bar(t) + '</div>').join('') +
+      '<p class="hl913-note">Opening the app reads only the live tabs, so speed depends on JOBS and the last weeks of FOLLOWUPS — not on the archive.</p></section>';
+    // YEARLY ARCHIVE
+    const Y = D.year || { n: 0, files: [] }, R = H.run, mins = Math.max(1, Math.round((Y.n || 0) / 600));
+    const files = (Y.files || []).filter((f) => f.n > 0);
+    const filesLine = files.length ? '<div class="hl913-files">' + files.map((f) => '<a href="' + esc(f.url) + '" target="_blank" rel="noopener">' + icon('arch913', 14) + '<span>' + esc(f.name) + '</span><em>' + n913(f.n) + (f.n === 1 ? ' job' : ' jobs') + '</em></a>').join('') + '</div>' : '';
+    let act;
+    if (R) {
+      const pc = R.total ? Math.round(R.moved / R.total * 100) : 0;
+      act = '<div class="hl913-prog" role="status" aria-live="polite"><div class="hl913-pb"><i style="width:' + (R.phase === 'backup' ? 4 : Math.max(6, pc)) + '%"></i></div><span>' +
+        esc(R.phase === 'backup' ? 'Taking the backup first…' : 'Moving… ' + n913(R.moved) + ' of ' + n913(R.total)) + '</span></div>';
+    } else act = Y.n ? '<div class="hl913-act"><button type="button" class="hl913-btn" data-h913="arch">Move ' + n913(Y.n) + (Y.n === 1 ? ' job' : ' jobs') + ' to ' + esc(Y.name) + '</button><span>Every November · about ' + mins + (mins === 1 ? ' minute' : ' minutes') + '</span></div>'
+      : '<div class="hl913-act"><span>Every November</span></div>';
+    const archCard = '<section class="hl913-card hl913-arch"><div class="hl913-h"><b>YEARLY ARCHIVE</b><span>keeps EWS fast for years</span></div>' +
+      '<div class="hl913-ab"><span class="hl913-ai">' + icon('arch913', 18) + '</span><div><b>' + (Y.n ? n913(Y.n) + (Y.n === 1 ? ' closed job is' : ' closed jobs are') + ' older than 12 months' : 'No closed job is older than 12 months') + '</b>' +
+        '<span>closed before ' + esc(Y.cut || '') + (Y.n ? ' · with their follow-ups, notes and history' : ' — nothing to move') + '</span></div></div>' +
+      '<ul class="hl913-ul"><li>They move to a separate Google Sheet: <b>' + esc(Y.name || '') + '</b></li><li>Search still finds them — they open read-only, marked ' + esc(String(Y.name || '').replace(/^EWS /, '')) + '</li><li>A backup is taken first; nothing is deleted</li></ul>' +
+      filesLine + act + '</section>';
+    // PROBLEM LOG
+    const L = D.log || [], cut = H.more ? L : L.slice(0, 8);
+    const ph = !usePop();
+    const rows = cut.map((x, i) => ph
+      ? '<li class="hl913-lr"><div><b>' + esc(logWhen913(x.t)) + '</b><span>' + esc(x.who) + '</span></div><p>' + esc(x.doing) + '</p><p class="is-what">' + esc(x.what) + '</p><button type="button" class="hl913-link" data-h913="det" data-i="' + i + '">Details</button></li>'
+      : '<tr><td class="m">' + esc(logWhen913(x.t)) + '</td><td>' + esc(x.who) + '</td><td>' + esc(x.doing) + '</td><td>' + esc(x.what) + '</td><td><button type="button" class="hl913-link" data-h913="det" data-i="' + i + '">Details</button></td></tr>').join('');
+    const logCard = '<section class="hl913-card hl913-log"><div class="hl913-h"><b>PROBLEM LOG</b><span>the LOG tab · last 7 days</span>' + (L.length ? '<button type="button" class="hl913-link hl913-cp" data-h913="copy">' + icon('copy', 14) + 'Copy for Claude</button>' : '') + '</div>' +
+      (!L.length ? '<div class="hl913-none">' + icon('check', 18) + '<span>Nothing went wrong in the last 7 days.</span></div>'
+        : ph ? '<ul class="hl913-ll">' + rows + '</ul>'
+        : '<table class="hl913-tbl"><thead><tr><th>WHEN</th><th>WHO</th><th>DOING</th><th>WHAT HAPPENED</th><th><span class="sr-only">Details</span></th></tr></thead><tbody>' + rows + '</tbody></table>') +
+      (L.length > 8 && !H.more ? '<button type="button" class="hl913-link hl913-all" data-h913="more">Show all ' + L.length + '</button>' : '') + '</section>';
+    view.innerHTML = '<div class="hl913-pg">' + healthHead913(anim) +
+      '<div class="hl913-row' + anim + '" style="--d:40ms">' + tile('SHEET SIZE', T.size) + tile('LAST BACKUP', T.backup) + tile('MORNING EMAIL', T.mail) + tile('PROBLEMS · 7 DAYS', T.probs) + '</div>' +
+      '<div class="hl913-2' + anim + '" style="--d:80ms">' + tabsCard + archCard + '</div>' +
+      '<div class="' + anim.trim() + '" style="--d:120ms">' + logCard + '</div></div>';
+    view.classList.toggle('is-busy913', !!H.loading);
+  }
+  function copyText913() {   // the problem log for Claude: health in one line, then every problem with its details
+    const D = h913().data; if (!D) return '';
+    const T = tone913(D), d = dxb();
+    const head = 'EWS v2.9.13 — problem log, last 7 days (copied ' + DOW[d.getDay()] + ' ' + d.getDate() + ' ' + MON91[d.getMonth()] + ' ' + d.getFullYear() + ' ' + p2913(d.getHours()) + ':' + p2913(d.getMinutes()) + ' Dubai)';
+    const health = 'System health: sheet ' + T.size[1] + ' (' + T.size[2] + ') · last backup ' + T.backup[1] + ' (' + T.backup[2] + ') · morning email ' + T.mail[1] + ' (' + T.mail[2] + ') · ' + (D.problems || 0) + ' problems';
+    const lines = (D.log || []).map((x, i) => (i + 1) + '. ' + logWhen913(x.t) + ' · ' + x.who + ' · ' + x.from + ' · ' + x.doing + ' — ' + x.what + (x.details ? '\n   details: ' + x.details : ''));
+    return [head, health, ''].concat(lines).join('\n');
+  }
+  function detPop913(i) {
+    const x = ((h913().data || {}).log || [])[i]; if (!x) return '';
+    const d = dxb(x.t), full = DOW[d.getDay()] + ' ' + d.getDate() + ' ' + MON91[d.getMonth()] + ' ' + d.getFullYear() + ' · ' + p2913(d.getHours()) + ':' + p2913(d.getMinutes()) + ':' + p2913(d.getSeconds()) + ' Dubai';
+    const r = (k, v) => v ? '<div class="hl913-dr"><small>' + k + '</small><span>' + esc(v) + '</span></div>' : '';
+    return '<div class="hl913-det">' + r('WHEN', full) + r('WHO', x.who) + r('FROM', x.from) + r('DOING', x.doing) + r('WHAT HAPPENED', x.what) +
+      (x.details ? '<div class="hl913-dr"><small>DETAILS</small><pre>' + esc(x.details) + '</pre></div>' : '') + '</div>';
+  }
+  function archPop913() {
+    const Y = (h913().data || {}).year || {};
+    return '<div class="hl913-cf"><b>Move ' + n913(Y.n) + ' closed ' + (Y.n === 1 ? 'job' : 'jobs') + ' to ' + esc(Y.name) + '?</b>' +
+      '<p>Closed before ' + esc(Y.cut) + ', with their follow-ups, notes and history. A full backup of the tracker is taken first; EWS keeps working while they move.</p>' +
+      '<div class="hl913-cfb"><button type="button" class="btn-ghost" data-act="pop-close">Cancel</button><button type="button" class="hl913-btn" data-h913="arch-go">Move now</button></div></div>';
+  }
+  async function runArch913() {
+    const H = h913(), Y = (H.data || {}).year || {};
+    if (H.run || !Y.n) return;
+    closeOverlays(true);
+    H.run = { phase: 'backup', moved: 0, total: Y.n };
+    rerender();
+    try {
+      const b = await api.call('ethixAdminYearArchive', [{ phase: 'backup' }], { timeout: 300000 });
+      if (!b || b.ok === false) throw new Error((b && b.error) || 'The backup did not finish.');
+      H.run = { phase: 'move', moved: 0, total: b.left || Y.n, name: b.name };
+      if (state.route && state.route.name === 'health') rerender();
+      for (let k = 0; k < 400; k++) {
+        const r = await api.call('ethixAdminYearArchive', [{ phase: 'move' }], { timeout: 300000 });
+        if (!r || r.ok === false) throw new Error((r && r.error) || 'The move stopped.');
+        H.run.moved += r.moved || 0;
+        if (state.route && state.route.name === 'health') rerender();
+        if (!r.left || !r.moved) break;
+      }
+      const n = H.run.moved, name = H.run.name;
+      H.run = null;
+      toast(n913(n) + (n === 1 ? ' job' : ' jobs') + ' moved to ' + name);
+    } catch (e) {
+      const moved = H.run ? H.run.moved : 0;
+      H.run = null;
+      if (e.kind !== 'auth') toast((moved ? n913(moved) + ' moved, then: ' : '') + e.message + ' Nothing was lost.', { error: true });
+    }
+    loadHealth913(true);
+  }
+
+  // -------------------------------------------------------------------- 8 · customer names tidy-up (admin)
+  const nm913 = () => state.n913 || (state.n913 = { data: null, loading: false, err: '', tab: 'check', open: {}, pick: {}, keep: {}, busy: '' });
+  function loadNames913() {
+    const N = nm913(); if (N.loading) return;
+    N.loading = true; N.err = '';
+    api.call('ethixAdminNames', [], { timeout: 90000 }).then((d) => { N.data = d; N.got = Date.now(); })
+      .catch((e) => { N.err = /not available/i.test(e.message) ? 'Customer names needs the v2.9.13 Code.gs.' : e.message; })
+      .finally(() => { N.loading = false; if (state.route && state.route.name === 'names') rerender(); });
+  }
+  const keepOf913 = (g) => { const N = nm913(); return N.keep[g.key] !== undefined ? N.keep[g.key] : (N.pick[g.key] || g.names[0].name); };
+  function nameGroup913(g, i) {
+    const N = nm913(), open = N.open[g.key] !== undefined ? N.open[g.key] : i < 2, keep = keepOf913(g), busy = N.busy === g.key;
+    const head = '<div class="nm913-gh"><small>LOOKS LIKE ONE CUSTOMER</small><span>' + (open ? g.names.length + ' spellings · ' + n913(g.jobs) + (g.jobs === 1 ? ' job' : ' jobs')
+      : esc(g.names.slice(0, 2).map((x) => x.name).join(' · ')) + (g.names.length > 2 ? ' · ' + (g.names.length - 2) + ' more' : '')) + '</span>' +
+      (open ? '' : '<button type="button" class="hl913-link" data-n913-open="' + esc(g.key) + '">Open</button>') + '</div>';
+    if (!open) return '<section class="hl913-card nm913-g is-min">' + head + '</section>';
+    const rows = g.names.map((x, k) => '<button type="button" class="nm913-o' + (x.name === keep ? ' is-on' : '') + '" role="radio" aria-checked="' + (x.name === keep) + '" data-n913-pick="' + esc(g.key) + '" data-i="' + k + '">' +
+      '<span class="nm913-r" aria-hidden="true"></span><b>' + esc(x.name) + '</b><em>' + n913(x.jobs) + (x.jobs === 1 ? ' job' : ' jobs') + '</em></button>').join('');
+    return '<section class="hl913-card nm913-g' + (busy ? ' is-busy' : '') + '" data-n913-g="' + esc(g.key) + '">' + head +
+      '<div class="nm913-os" role="radiogroup" aria-label="The right spelling">' + rows + '</div>' +
+      '<div class="nm913-keep"><label for="nk913-' + i + '">Keep as</label><input id="nk913-' + i + '" type="text" autocomplete="off" spellcheck="false" maxlength="80" data-n913-keep="' + esc(g.key) + '" value="' + esc(keep) + '"' + (busy ? ' disabled' : '') + '>' +
+        '<button type="button" class="hl913-btn" data-n913-go="' + esc(g.key) + '"' + (busy ? ' disabled' : '') + '>' + (busy ? 'Making one name…' : 'Make all ' + n913(g.jobs) + (g.jobs === 1 ? ' job' : ' jobs') + ' one name') + '</button>' +
+        '<button type="button" class="hl913-link is-muted" data-n913-not="' + esc(g.key) + '"' + (busy ? ' disabled' : '') + '>Not the same</button></div></section>';
+  }
+  function renderNames913(first) {
+    const N = nm913(), D = N.data, anim = first ? ' reveal' : '';
+    if (!D && !N.loading && !N.err) setTimeout(loadNames913, 0);
+    else if (D && first && Date.now() - (N.got || 0) > 5 * 60000) setTimeout(loadNames913, 0);
+    const G = D ? D.groups : [], done = D ? D.done : [];
+    const head = '<header class="hl913-head' + anim + '"><div><div class="hl913-kick">ADMIN</div><h1>Customer names</h1>' +
+      '<p class="hl913-sub">EWS found names that look like the same customer. Pick the right spelling — every job, briefing and follow-up moves to it.</p></div></header>';
+    const tabs = '<div class="nm913-tabs' + anim + '" role="tablist">' + [['check', 'To check · ' + G.length], ['done', 'Done · ' + done.length]].map(([k, l]) =>
+      '<button type="button" role="tab" class="' + (N.tab === k ? 'is-on' : '') + '" aria-selected="' + (N.tab === k) + '" data-n913-tab="' + k + '">' + l + '</button>').join('') + '</div>';
+    let body;
+    if (!D) body = N.err ? '<section class="hl913-card hl913-msg">' + empty('alert', N.err) + '<button type="button" class="btn-ghost" data-n913-reload>Try again</button></section>'
+      : '<section class="hl913-card nm913-wait"><span class="spin">' + icon('refresh', 16) + '</span>Looking through every customer name…</section>';
+    else if (N.tab === 'done') body = done.length ? '<section class="hl913-card nm913-done"><ul>' + done.map((d) => '<li><div><b>' + esc(d.to) + '</b><span>was ' + esc(d.from.join(' · ')) + '</span></div><em>' + n913(d.n) + (d.n === 1 ? ' job' : ' jobs') + ' · ' + esc(d.by === 'MASTER' ? 'ADMIN' : d.by) + ' · ' + esc(logWhen913(d.t)) + '</em></li>').join('') + '</ul></section>'
+      : '<section class="hl913-card hl913-none">' + icon('check', 18) + '<span>Nothing tidied yet.</span></section>';
+    else body = G.length ? G.map(nameGroup913).join('') : '<section class="hl913-card hl913-none">' + icon('check', 18) + '<span>Every customer has one spelling.</span></section>';
+    $('#view').innerHTML = '<div class="hl913-pg nm913-pg">' + head + (D ? tabs : '') + '<div class="' + anim.trim() + '" style="--d:60ms">' + body + '</div>' +
+      '<p class="hl913-note nm913-foot">Only admin sees this page. Sales and CS keep working while it runs; a backup is taken first.</p></div>';
+  }
+  async function mergeNames913(key) {
+    const N = nm913(), g = N.data && N.data.groups.find((x) => x.key === key); if (!g || N.busy) return;
+    const to = String(keepOf913(g)).replace(/\s+/g, ' ').trim().toUpperCase();
+    if (to.length < 2) { toast('Type the name to keep.', { error: true }); const f = $('[data-n913-keep="' + key + '"]'); if (f) f.focus(); return; }
+    N.busy = key; rerender();
+    try {
+      const r = await api.call('ethixAdminNamesMerge', [g.names.map((x) => x.name), to], { timeout: 180000 });
+      if (!r || r.ok === false) throw new Error((r && r.error) || 'Not changed.');
+      N.data.groups = N.data.groups.filter((x) => x.key !== key);
+      N.data.done.unshift({ t: Date.now(), by: state.user, to: r.to, from: r.from, n: r.n });
+      delete N.keep[key]; delete N.pick[key];
+      toast(n913(r.n) + (r.n === 1 ? ' job is' : ' jobs are') + ' now ' + r.to);
+    } catch (e) { if (e.kind !== 'auth') toast(e.message, { error: true }); }
+    N.busy = ''; rerender();
+  }
+  async function notSame913(key) {
+    const N = nm913(), g = N.data && N.data.groups.find((x) => x.key === key); if (!g || N.busy) return;
+    const was = N.data.groups.slice();
+    N.data.groups = N.data.groups.filter((x) => x.key !== key); rerender();
+    try { const r = await api.call('ethixAdminNamesNot', [key, g.names.map((x) => x.name)]); if (r && r.ok === false) throw new Error(r.error); toast('Kept apart — not suggested again'); }
+    catch (e) { N.data.groups = was; rerender(); if (e.kind !== 'auth') toast(e.message, { error: true }); }
+  }
+
+  function initV2913() {
+    document.addEventListener('click', (e) => {
+      if (!isAdmin()) return;
+      const h = e.target.closest('[data-h913]');
+      if (h) {
+        const a = h.dataset.h913, H = h913();
+        if (a === 'refresh') loadHealth913(true);
+        else if (a === 'tabs') { H.all = !H.all; rerender(); }
+        else if (a === 'more') { H.more = true; rerender(); }
+        else if (a === 'copy') { const t = copyText913(); (async () => { let ok = false; try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(t); ok = true; } } catch (x) { ok = false; }
+          if (!ok) { const ta = document.createElement('textarea'); ta.value = t; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;'; document.body.appendChild(ta); ta.select(); try { ok = document.execCommand('copy'); } catch (x) { ok = false; } ta.remove(); }
+          toast(ok ? 'Copied — paste it to Claude' : 'Could not copy', ok ? {} : { error: true }); })(); }
+        else if (a === 'det') openPop(h, 'PROBLEM', () => detPop913(+h.dataset.i));
+        else if (a === 'arch') openPop(h, 'YEARLY ARCHIVE', archPop913);
+        else if (a === 'arch-go') runArch913();
+        return;
+      }
+      const N = nm913(), t = e.target;
+      const tab = t.closest('[data-n913-tab]'); if (tab) { N.tab = tab.dataset.n913Tab; rerender(); return; }
+      const op = t.closest('[data-n913-open]'); if (op) { N.open[op.dataset.n913Open] = true; rerender(); const i = $('[data-n913-g="' + op.dataset.n913Open + '"] .nm913-o'); if (i) i.focus(); return; }
+      const pk = t.closest('[data-n913-pick]');
+      if (pk && N.data) {
+        const g = N.data.groups.find((x) => x.key === pk.dataset.n913Pick); if (!g || N.busy) return;
+        N.pick[g.key] = g.names[+pk.dataset.i].name; delete N.keep[g.key]; rerender();
+        const b = $('[data-n913-g="' + g.key + '"] .nm913-o.is-on'); if (b) b.focus(); return;
+      }
+      const go = t.closest('[data-n913-go]'); if (go) { mergeNames913(go.dataset.n913Go); return; }
+      const no = t.closest('[data-n913-not]'); if (no) { notSame913(no.dataset.n913Not); return; }
+      if (t.closest('[data-n913-reload]')) { N.err = ''; loadNames913(); rerender(); }
+    });
+    document.addEventListener('input', (e) => {
+      const f = e.target.closest && e.target.closest('[data-n913-keep]'); if (!f || !isAdmin()) return;
+      const N = nm913(), k = f.dataset.n913Keep, v = f.value.toUpperCase();
+      if (f.value !== v) { const p = f.selectionStart; f.value = v; try { f.setSelectionRange(p, p); } catch (x) { /* ignore */ } }
+      N.keep[k] = v;
+      $$('[data-n913-g="' + k + '"] .nm913-o').forEach((o) => { const on = o.querySelector('b').textContent === v.replace(/\s+/g, ' ').trim(); o.classList.toggle('is-on', on); o.setAttribute('aria-checked', on); });
+    });
+    document.addEventListener('keydown', (e) => { const f = e.target.closest && e.target.closest('[data-n913-keep]'); if (f && e.key === 'Enter') { e.preventDefault(); mergeNames913(f.dataset.n913Keep); } });
+  }
+
+  // -------------------------------------------------------------------- 6 · a job in the yearly archive: read-only, marked
+  const arch913Tag = (j) => (j && j.closed && j.closed.arch ? '<span class="arch913" title="In the yearly archive — read-only">' + icon('arch913', 12) + esc(j.closed.arch) + '</span>' : '');
+  function closedActions(j) {
+    const c = j.closed || {};
+    if (c.arch) return '<div class="vh-actions is-ro is-closed"><span class="ro-chip closed-chip is-arch913">' + icon('arch913', 14) + '<span>' + esc(c.arch) + ' · CLOSED' + (c.at ? ' ' + esc(c.at) : '') + (c.by ? ' · ' + esc(c.by) : '') + '</span></span><span class="ro-note913">Read-only</span></div>';
+    return '<div class="vh-actions is-ro is-closed"><span class="ro-chip closed-chip">' + icon('lock', 14) + '<span>CLOSED' + (c.at ? ' ' + esc(c.at) : '') + (c.by ? ' · ' + esc(c.by) : '') + '</span></span>' +
+      (canEdit() && mayEdit911(j) ? '<button type="button" class="btn-brutal" data-act="reopen">REOPEN JOB</button>' : '') + '</div>';
+  }
+
+  // -------------------------------------------------------------------- 9 · calendar cutoffs: open (solid dot) and done (hollow ring)
+  // Every SI / ED / DG cutoff of your jobs (+ the colleague you cover): open = empty or PENDING; done = SUBMITTED / APPROVED /
+  // PASSED/PAID; NOT APPLICABLE is not shown. A job's open and done cutoffs on one day are two rows; open rows first.
+  function calEvents912() {
+    const map = new Map();
+    const add = (d, k, j, say, done) => {
+      if (!d) return;
+      const key = isoOf(d); let e = map.get(key); if (!e) map.set(key, e = { sail: [], arr: [], cut: [], free: [] });
+      const x = e[k].find((y) => y.j === j && !!y.done === !!done);
+      if (x) { if (say && !x.say.includes(say)) x.say.push(say); } else e[k].push({ j, say: say ? [say] : [], done: !!done });
+    };
+    const open = (v) => !v || v === 'PENDING';
+    const isDone = (v) => v === 'SUBMITTED' || v === 'APPROVED' || v === 'PASSED/PAID';
+    scoped().forEach((j) => {
+      if (!j.active || j.mode === 'misc') return;
+      add(j.etd, 'sail', j); add(j.eta, 'arr', j);
+      if ((j.cat === 'EXPORT' || j.cat === 'CROSS') && j.type !== 'CRR') {
+        const cut = (d, v, name, raw) => { if (open(v)) add(d, 'cut', j, name + cutTime912(raw)); else if (isDone(v)) add(d, 'cut', j, name + cutTime912(raw), true); };
+        cut(j.siCut, j.sido, 'SI cutoff', j.raw.siCut);
+        if (j.cat === 'EXPORT') cut(j.edCut, j.ed, 'ED cutoff', j.raw.edCut);
+        if (j.cat === 'EXPORT' && j.dg === 'DG') { if (j.mode !== 'sea') add(j.dgCut, 'cut', j, 'DG cutoff' + cutTime912(j.raw.dgCut)); else cut(j.dgCut, j.dgpc, 'DG cutoff', j.raw.dgCut); }
+      }
+      if (j.cat === 'IMPORT' && !j.delivery) { add(j.lineFreeEnd, 'free', j, 'Line free time'); add(j.portFreeEnd, 'free', j, 'Port free time'); }
+    });
+    map.forEach((e) => { e.cut.sort((a, b) => a.done - b.done); });
+    return map;
+  }
+  const cutN913 = (e) => (e ? { open: e.cut.filter((x) => !x.done).length, done: e.cut.filter((x) => x.done).length } : { open: 0, done: 0 });
+  function calDayList912(iso, e, f, t0) {
+    const d = parseDate(iso), n = d ? days(t0, d) : 0, past = n < 0;
+    const keys = f === 'all' ? KEYS912 : [f];
+    const row = (x, k) => {
+      const j = x.j, sub = k === 'cut' ? x.say.join(' · ') + ' · ' + nice(j.route) : k === 'free' ? x.say.join(' · ') + (x.say.length > 1 ? ' end' : ' ends') + ' · ' + nice(j.route) : nice(j.route);
+      const st = k !== 'cut' ? '' : x.done ? '<strong class="c913-st is-done">Done ✓</strong>' : past ? '<strong class="c913-st is-missed">Missed</strong>' : '<strong class="c913-st is-open">Open</strong>';
+      return '<button type="button" class="c912-r' + (k === 'cut' ? ' is-cut913' + (x.done ? ' is-done913' : '') : '') + '" data-c912-job="' + esc(j.jobNo) + '" title="' + esc('Open ' + j.jobNo) + '"><b>' + esc(j.jobNo) + '</b><i>' + esc(j.type) + '</i><span>' + esc(j.customer || '—') + '</span><em>' + esc(sub) + '</em>' + st + '</button>';
+    };
+    const head = (k, L) => {
+      const air = L.filter((x) => x.j.mode === 'air').length, all = air === L.length;
+      const w = k === 'sail' ? (past ? (all ? 'DEPARTED' : air ? 'SAILED · DEPARTED' : 'SAILED') : (all ? 'DEPARTS' : air ? 'SAILS · DEPARTS' : 'SAILS'))
+        : k === 'arr' ? (past ? 'ARRIVED' : 'ARRIVES') : k === 'cut' ? 'CUTOFFS' : (past ? 'FREE TIME ENDED' : 'FREE TIME ENDS');
+      return '<div class="c912-gh"><i class="k912-' + k + '"></i>' + w + '<span>' + L.length + '</span></div>';
+    };
+    const out = keys.filter((k) => e && e[k].length).map((k) => '<div class="c912-g" role="group">' + head(k, e[k]) + e[k].map((x) => row(x, k)).join('') + '</div>').join('');
+    if (out) return out;
+    const what = f === 'all' ? (past ? 'Nothing sailed, arrived or was due on this day.' : 'Nothing sails, arrives or is due on this day.')
+      : { sail: past ? 'Nothing sailed on this day.' : 'Nothing sails on this day.', arr: past ? 'Nothing arrived on this day.' : 'Nothing arrives on this day.', cut: 'No cutoffs on this day.', free: 'No free time ends on this day.' }[f];
+    return '<div class="c912-none">' + icon('cal912', 22) + '<span>' + esc(what) + '</span></div>';
+  }
+  function calHtml912() {
+    const C = cal912(), t0 = today0(), ph = isPh912(), f = C.f || 'all', ev = calEvents912();
+    const first = new Date(C.y, C.m, 1), start = addDays(first, -((first.getDay() + 6) % 7));
+    const keys = f === 'all' ? KEYS912 : [f];
+    const ring = '<i class="k912-cut is-ring913"></i>';
+    let cells = '';
+    for (let i = 0; i < 42; i++) {
+      const d = addDays(start, i), iso = isoOf(d), inM = d.getMonth() === C.m, e = ev.get(iso), cn = cutN913(e);
+      const c = keys.map((k) => [k, k === 'cut' ? cn.open : e ? e[k].length : 0]).filter((x) => x[1]), n = c.reduce((a, x) => a + x[1], 0);   // the tint counts open cutoffs only
+      const dn = keys.includes('cut') ? cn.done : 0;
+      const we = d.getDay() === 0 || d.getDay() === 6, hol = holAE912(iso), today = +d === +t0, sel = iso === C.sel;
+      const parts = c.map(([k, v]) => v + ' ' + (k === 'cut' ? (v === 1 ? 'cutoff open' : 'cutoffs open') : LEG912[k].toLowerCase())).concat(dn ? [dn + (dn === 1 ? ' cutoff done' : ' cutoffs done')] : []);
+      const say = DOW[d.getDay()] + ' ' + dm912(d) + (today ? ', today' : '') + (hol.length ? ', ' + hol.join(', ') : '') + ' — ' + (parts.length ? parts.join(', ') : 'nothing');
+      const inner = !inM ? '' : ph ? '<span class="c912-dots">' + c.map(([k]) => '<i class="k912-' + k + '"></i>').join('') + (dn ? ring : '') + '</span>'
+        : '<span class="c912-ks">' + c.map(([k, v]) => '<span class="c912-k"><i class="k912-' + k + '"></i>' + v + '</span>').join('') + (dn ? '<span class="c912-k is-done913">' + ring + dn + '</span>' : '') + '</span>';
+      cells += '<button type="button" class="c912-d' + (inM ? '' : ' is-out') + (we ? ' is-we' : '') + (hol.length && inM ? ' is-hol' : '') + (today ? ' is-today' : '') + (sel ? ' is-sel' : '') + '" data-c912-day="' + iso + '" style="--b:' + (inM ? Math.min(n, 9) : 0) + '" aria-pressed="' + sel + '" aria-label="' + esc(say) + '"' + (sel ? '' : ' tabindex="-1"') + (hol.length ? ' title="' + esc(hol.join(' · ') + ' — UAE public holiday') + '"' : '') + '>' +
+        '<b>' + d.getDate() + '</b>' + (hol.length && inM && !ph ? '<span class="c912-hol">' + esc(holShort912(hol[0])) + '</span>' : '') + inner + '</button>';
+    }
+    const wd = (ph ? ['M', 'T', 'W', 'T', 'F', 'S', 'S'] : ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']).map((x) => '<span aria-hidden="true">' + x + '</span>').join('');
+    const chips = '<div class="c912-chips" role="group" aria-label="Show">' + Object.keys(CHIP912).map((k) => '<button type="button" class="c912-chip' + (f === k ? ' is-on' : '') + '" data-c912-f="' + k + '" aria-pressed="' + (f === k) + '">' + (k === 'all' ? '' : '<i class="k912-' + k + '"></i>' + (k === 'cut' ? ring : '')) + CHIP912[k] + '</button>').join('') + '</div>';
+    const title = ph ? MONTHS912[C.m] + ' ' + C.y : MONTHS912[C.m].toUpperCase() + ' ' + C.y;
+    const sd = parseDate(C.sel) || t0, sn = days(t0, sd), se = ev.get(C.sel);
+    const jobsN = new Set(); if (se) keys.forEach((k) => se[k].forEach((x) => jobsN.add(x.j)));
+    const sHol = holAE912(C.sel);
+    const kick = DOW_UP[sd.getDay()] + ' ' + sd.getDate() + ' ' + MON91[sd.getMonth()].toUpperCase() + (sd.getFullYear() !== t0.getFullYear() ? ' ' + sd.getFullYear() : '') + (sn === 0 ? ' · TODAY' : sn === 1 ? ' · TOMORROW' : sn === -1 ? ' · YESTERDAY' : '');
+    const nb = (dir) => '<button type="button" class="c912-rb" data-c912-mo="' + dir + '" aria-label="' + (dir < 0 ? 'Previous month' : 'Next month') + '">' + icon(dir < 0 ? 'l912' : 'r912', 16) + '</button>';
+    const close = (cls) => '<button type="button" class="c912-rb' + (cls || '') + '" data-c912-close aria-label="Close">' + icon('x912', 16) + '</button>';
+    const legend = KEYS912.map((k) => k === 'cut' ? '<span><i class="k912-cut"></i>Cutoff open</span><span>' + ring + 'Cutoff done</span>' : '<span><i class="k912-' + k + '"></i>' + LEG912[k] + '</span>').join('');
+    return '<div class="c912-m">' + (ph ? '<div class="c912-grab" data-c912-grab aria-hidden="true"></div>' : '') +
+        '<div class="c912-mh"><h2 id="c912Title">' + title + '</h2>' + nb(-1) + nb(1) + '<button type="button" class="c912-pill" data-c912-today>Today</button>' + (ph ? close(' c912-xph') : '') + '</div>' + chips +
+        '<div class="c912-wd">' + wd + '</div><div class="c912-grid" role="group" aria-label="' + esc(MONTHS912[C.m] + ' ' + C.y) + '">' + cells + '</div>' +
+        (ph ? '' : '<div class="c912-lg">' + legend + '<span class="c912-lgh"><i></i>UAE holiday</span><em>Deeper colour = busier day</em></div>') +
+      '</div>' +
+      '<div class="c912-dp"><div class="c912-dph"><small>' + esc(kick) + '</small><h3>' + (jobsN.size ? jobsN.size + (jobsN.size === 1 ? ' job' : ' jobs') : 'No jobs') + '</h3>' +
+          (sHol.length ? '<span class="c912-holchip">' + icon('hol912', 13) + esc(sHol.map(holShort912).join(' · ')) + ' · UAE holiday</span>' : '') + (ph ? '' : close(' c912-x')) + '</div>' +
+        '<div class="c912-dl">' + calDayList912(C.sel, se, f, t0) + '</div></div>';
+  }
+
   // -------------------------------------------------------------------- start
   function start() {
     if (savedSession()) document.body.classList.add('is-resuming');
@@ -7878,6 +8215,7 @@
     initV2910();
     initV2911();
     initV2912();
+    initV2913();
     if (savedSession()) resumeSession();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
