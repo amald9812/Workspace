@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders, cover, system health — v2.9.13)
+   enquiries, follow-ups, delays, close & archive, costing, reminders, cover, system health, arrange Home, Face ID — v2.9.14)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -450,7 +450,7 @@
     if (!pw) { setLoginMsg(msg, 'Enter your password.', 'error'); $('#loginPass').focus(); return; }
     state.busy = true; loginBusy(true); setLoginMsg(msg, '');
     try {
-      const res = await api.call('ethixSignIn', [user, pw, true], { timeout: 60000 });
+      const res = await api.call('ethixSignIn', pkSignArgs914(user, pw), { timeout: 60000 });   // v2.9.14: + this device's Face ID
       if (res && res.success && res.token) {
         api.token = res.token;
         state.pendingUser = user;
@@ -458,6 +458,8 @@
         store.set(LAST_USER, user); keepSession(user, res && res.role);
         let boot = res.boot;
         if (!boot) boot = await api.call('ethixBootstrap');
+        pkAfter914(res, user);   // v2.9.14: 30 more days for this device's Face ID — or it is gone
+        if (await pkOffer914(user, boot, () => enterApp(boot, user, res.role))) return;   // v2.9.14: offer Face ID on this device
         $('#signinCard').classList.add('leaving');
         setTimeout(() => enterApp(boot, user, res.role), 280);
         return;
@@ -501,6 +503,7 @@
       const res = await api.call('ethixSetPassword', [pw], { timeout: 60000 });
       if (res && res.ok) {
         store.set(LAST_USER, user); keepSession(user, res && res.role);
+        if (await pkOffer914(user, res.boot, () => enterApp(res.boot, user))) return;   // v2.9.14
         $('#signinCard').classList.add('leaving');
         setTimeout(() => enterApp(res.boot, user), 280);
         return;
@@ -709,6 +712,7 @@
     applyBoot9(boot);   // v2.9: reminders, what changed, what you opened
     applyBoot911(boot);   // v2.9.11: holidays, briefings, waiting on, free time
     applyBoot912(boot);   // v2.9.12: every UAE holiday (the month calendar)
+    applyBoot914(boot);   // v2.9.14: this person's Home, Face ID
     if (boot.rate) state.rate = boot.rate;
     state.followHist = {};
     state.syncedAt = Date.now();
@@ -807,6 +811,7 @@
   // Re-draw the current page after data changed, without losing your place.
   function rerender() {
     if (!state.signedIn) return;
+    if (H914.drag) { H914.pend = true; return; }   // v2.9.14: not while a tile is being moved
     const view = $('#view');
     const keep = { y: view.scrollTop, inner: $$('#view .tile-body, #view .jobs-scroll').map((e) => e.scrollTop), focus: document.activeElement && document.activeElement.id, sel: null };
     const f = document.activeElement;
@@ -925,12 +930,10 @@
         '<h1 class="greeting">' + greeting() + ', ' + esc(state.user === 'MASTER' ? 'Admin' : nice(state.user)) + '</h1></div>' +
         '<div class="head-actions">' +
           '<div class="search-wrap"><label class="search">' + icon('search') + '<input id="searchInput" type="search" placeholder="Job no, customer, port…" aria-label="Search jobs" autocomplete="off" value="' + esc(searchVal) + '"><kbd>/</kbd></label><div class="search-results glass" id="searchResults" hidden></div></div>' +
-          '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' +
+          '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' + arrBtn914() +
         '</div>' +
       '</header>' + (canNote() ? portOffices(anim) : '') +
-      '<div class="bento">' +
-        kpiTiles91(m, anim) + watchTile91(m, anim) + weekTile91(m, anim) + (canNote() ? myDayTile(anim) : activityTile(anim)) +
-      '</div>' +
+      bento914(m, anim) +   // v2.9.14: in this person's order
       '</div>';
     requestAnimationFrame(markOverflow);
   }
@@ -1925,11 +1928,11 @@
   // ---------- my account ----------
   function accountPanel() {
     const go2 = (href, ic, label, n) => '<button type="button" class="acct-go" data-href="' + href + '">' + icon(ic, 18) + '<span>' + label + '</span>' + (n ? '<b>' + n + '</b>' : '') + '</button>';
-    const shortcuts = canEdit() ? go2('#/follow-ups', 'check', 'Follow-ups', roundRows(today0()).due.length + remDueCount()) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length) + go2('#/costing', 'costing', 'Costing', costRows().open) + go2('#/cover', 'swap', 'Cover', covIncoming98().length)
-      : isSales() ? go2('#/enquiries', 'enq', 'My enquiries', enqOpen().length) + go2('#/costing', 'costing', 'Costing', costRows().open)
+    const shortcuts = canEdit() ? go2('#/follow-ups', 'check', 'Follow-ups', roundRows(today0()).due.length + remDueCount()) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length) + go2('#/costing', 'costing', 'Costing', costRows().open) + go2('#/cover', 'swap', 'Cover', covIncoming98().length) + arrGo914()   // v2.9.14: Arrange Home (phone)
+      : isSales() ? go2('#/enquiries', 'enq', 'My enquiries', enqOpen().length) + go2('#/costing', 'costing', 'Costing', costRows().open) + arrGo914()
       : isAdmin() ? go2('#/health', 'health913', 'System health') + go2('#/names', 'names913', 'Customer names') : '';   // v2.9.13
     return (shortcuts ? '<div class="acct-shortcuts">' + shortcuts + '</div>' : '') + '<div class="acct"><span class="avatar">' + esc(initials(state.user)) + '</span><div><div class="acct-name" id="drawerTitle">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(ROLE_NAMES[state.role] || state.role) + '</div></div></div>' +
-      '<form class="tile pw-form" id="pwForm" novalidate><h3 class="tile-title">CHANGE PASSWORD</h3>' +
+      pkAcct914() + '<form class="tile pw-form" id="pwForm" novalidate><h3 class="tile-title">CHANGE PASSWORD</h3>' +
         '<input type="text" name="username" autocomplete="username" value="' + esc(state.user) + '" class="sr-only" tabindex="-1" aria-hidden="true" readonly>' +
         '<label class="pop-label" for="pwCurrent">Current password</label><div class="pw-wrap is-plain"><input id="pwCurrent" type="password" autocomplete="current-password"><button type="button" class="pw-eye" data-eye="pwCurrent" aria-label="Show password">' + EYE + '</button></div>' +
         '<label class="pop-label" for="pwNew">New password</label><div class="pw-wrap is-plain"><input id="pwNew" type="password" autocomplete="new-password"><button type="button" class="pw-eye" data-eye="pwNew" aria-label="Show password">' + EYE + '</button></div>' +
@@ -1955,7 +1958,7 @@
     if (pw !== pw2) { setLoginMsg(msg, 'The two new passwords don’t match.', 'error'); return; }
     const btn = $('#pwSave', form); btn.disabled = true; btn.textContent = 'SAVING…';
     try {
-      const res = await api.call('ethixChangePassword', [cur, pw]);
+      const res = await api.call('ethixChangePassword', [cur, pw, pkMine914()]);   // v2.9.14: this device keeps its Face ID
       if (res && res.ok) { closeOverlays(); toast('Password changed. Your other devices were signed out.'); return; }
       setLoginMsg(msg, (res && res.error) || 'Not changed.', 'error');
     } catch (e) { if (e.kind !== 'auth') setLoginMsg(msg, /not available/i.test(e.message) ? 'Needs the Phase 3 Code.gs update.' : e.message, 'error'); }
@@ -1995,7 +1998,7 @@
             '<span class="ur-name"><span class="avatar' + (u.role === 'SALES' ? ' is-other' : '') + '">' + esc(initials(u.name)) + '</span><span class="ur-who"><span><b>' + esc(u.name) + '</b>' + (u.name === state.user ? ' <span class="you">YOU</span>' : '') + '</span>' + (u.email ? '<small class="ur-mail">' + icon('mail', 12) + esc(u.email) + '</small>' : u.role === 'CS' ? '<small class="ur-mail is-none">No work email</small>' : '') + '</span></span>' +
             '<span class="ur-role"><span class="chip ' + rc[1] + '">' + rc[0] + '</span></span>' +
             '<span class="ur-status">' + (u.locked ? '<span class="chip chip-urgent">' + icon('alert', 13) + 'Locked · ' + u.locked + ' min</span>' : u.online ? '<span class="online"><i class="dot is-on"></i>Online' + (u.sessions > 1 ? ' · ' + u.sessions + ' devices' : '') + '</span>' : '<span class="online"><i class="dot"></i>' + (u.sessions ? 'Signed in · idle' : 'Offline') + '</span>') + '</span>' +
-            '<span class="ur-pw">' + esc(PW_TEXT[u.password] || u.password) + '</span>' +
+            '<span class="ur-pw">' + esc(PW_TEXT[u.password] || u.password) + pkChip914(u) + '</span>' +   // v2.9.14: Face ID devices
             '<span class="ur-act">' + (u.locked ? '<button type="button" class="btn-ghost btn-sm" data-adm="unlock" data-user="' + esc(u.name) + '">Unlock</button>' : '') +
               (u.name !== state.user && !(u.name === 'MASTER' && state.user !== 'MASTER') ? '<button type="button" class="icon-btn" data-adm="menu" data-user="' + esc(u.name) + '" aria-label="Manage ' + esc(u.name) + '">' + icon('more', 18) + '</button>' : '') + '</span>' +
           '</li>';
@@ -2007,6 +2010,8 @@
   function peopleAction(a) {
     a = String(a || '');
     const M = [
+      [/^SIGNED IN WITH (.+)$/, (m) => 'signed in with ' + pkWords914(m[1])], [/^TURNED (ON|OFF) (.+ · .+)$/, (m) => 'turned ' + m[1].toLowerCase() + ' ' + pkWords914(m[2])],   // v2.9.14
+      [/^REMOVED (.+ · .+) OF (.+)$/, (m) => 'removed ' + pkWords914(m[1]) + ' of ' + m[2]], [/^FACE ID REFUSED — (.+)$/, (m) => 'was refused by Face ID · ' + m[1].toLowerCase()],
       [/^LOGGED IN$/, () => 'signed in'], [/^LOGGED OUT$/, () => 'signed out'],
       [/^SET A NEW PASSWORD$/, () => 'set their own password'], [/^CHANGED PASSWORD$/, () => 'changed their password'],
       [/^CREATED USER (.+) \((.+)\)$/, (m) => 'created an account for ' + m[1] + ' · ' + nice(m[2])],
@@ -3114,7 +3119,7 @@
       state.resuming = false;
       api.token = null;
       document.body.classList.remove('is-resuming');
-      if (e.kind === 'auth' || /new password/i.test(e.message)) dropSession();
+      if (e.kind === 'auth' || /new password/i.test(e.message)) { dropSession(); pkStartUnlock914(); }   // v2.9.14: Face ID instead of the password
       else { const n = $('#cardNote'); if (n) { n.hidden = false; n.textContent = 'Could not reach ETHIX just now — reload to try again, or sign in.'; } }
       return false;
     }
@@ -4929,19 +4934,7 @@
   }
 
   // ================================================================ v2.9.1 — Home: five counters (each opens the side panel)
-  function kpiTiles91(m, anim) {
-    const t0 = today0(), wk = addDays(t0, 6);
-    const k = (id, label, n, sub, urgent, d) => '<button type="button" class="kpi' + (urgent ? ' is-urgent' : '') + anim + '" style="--d:' + d + 'ms" data-list="' + id + '">' +
-      '<span class="kpi-label">' + label + '</span><span class="kpi-num">' + n + '</span><span class="kpi-sub">' + esc(sub) + '</span></button>';
-    const holdSoon = m.hold.filter((j) => j.etd && j.etd >= t0 && j.etd <= wk).length;
-    return '<div class="kpis is-5">' +
-      k('active', 'ACTIVE JOBS', m.active.length, m.atSea.length + ' at sea now', false, 100) +
-      k('costing', 'COSTING DUE', m.costingDue.length, m.costing.length ? 'of ' + m.costing.length + ' pending' : 'nothing pending', false, 130) +   // v2.9.9: what is due now
-      k('sied', 'SI / ED DUE', m.siedDue.length, m.sied.length ? 'of ' + m.sied.length + ' pending' : 'nothing pending', false, 160) +
-      k('free', 'FREE TIME', m.freeJobs.length, m.freeJobs.length ? 'ending in ≤ 2 days' : 'all clear', m.freeJobs.length > 0, 190) +
-      k('hold', 'ON HOLD', m.hold.length, !m.hold.length ? 'all jobs moving' : holdSoon ? holdSoon + ' due to sail this week' : 'none due to sail this week', false, 220) +
-      '</div>';
-  }
+  // kpiTiles91 — v2.9.14 version further down (in this person's order; Arrange mode)
 
   // ================================================================ v2.9.1 — Home: four tall tiles, each made for its job
   // watchTile91 — v2.9.10 version (one row per job) further down
@@ -5690,7 +5683,7 @@
 
   function confirmLogout() {
     closeOverlays(true);
-    $('#confirmTitle').textContent = 'Log out?'; $('#confirmText').textContent = 'You’ll need your password to come back in.'; $('#confirmYes').textContent = 'Log out';
+    $('#confirmTitle').textContent = 'Log out?'; $('#confirmText').textContent = pkLogoutText914();   // v2.9.14: Face ID next time $('#confirmYes').textContent = 'Log out';
     const wrap = $('#confirmWrap'); wrap.hidden = false; $('#confirmNo').focus();
     const close = () => { wrap.hidden = true; };
     $('#confirmNo').onclick = close;
@@ -8198,6 +8191,486 @@
         '<div class="c912-dl">' + calDayList912(C.sel, se, f, t0) + '</div></div>';
   }
 
+  // ==================================================================================================================== v2.9.14
+  // 10 · Arrange Home: each person's order of the five counters and the three tiles, and which are hidden (kept on the server,
+  //      so the laptop and the phone show the same Home). Arrange mode: dashed outlines, ⋮⋮ to drag (or the arrow keys), the
+  //      eye hides a tile, Reset / Done.
+  // 11 · Face ID / fingerprint unlock (passkeys): the password once on a device, then 30 days with the device's own check.
+  // ====================================================================================================================
+  I.grip914 = '<g fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></g>';
+  I.eye914 = '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>';
+  I.arrange914 = '<rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2" stroke-dasharray="2.4 2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/>';
+  I.face914 = '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M9 9v1.5M15 9v1.5M12 9v4h-1M9.5 16a3.5 3.5 0 0 0 5 0"/>';
+  I.finger914 = '<path d="M7.5 11a4.5 4.5 0 0 1 9 0v1.5c0 2.5-.6 4.6-1.6 6.5"/><path d="M12 11v2c0 3-.8 5.3-2.2 7"/><path d="M4.5 9.5A8 8 0 0 1 19.6 9"/><path d="M5 14c.3 2-.2 4-1 5.5M19.5 13.5c0 1.5-.2 3-.6 4.3"/>';
+  I.phone914 = '<rect x="6.5" y="2.5" width="11" height="19" rx="2.6"/><path d="M10.5 18.5h3"/>';
+  I.laptop914 = '<rect x="4.5" y="5" width="15" height="10" rx="1.6"/><path d="M2.5 18.5h19"/>';
+
+  // ------------------------------------------------------------------------------------------------ 10 · Arrange Home
+  const HK914 = ['active', 'costing', 'sied', 'free', 'hold'], HT914 = ['watch', 'week', 'day'];
+  const H914 = { home: null, on: false, drag: null, timer: 0, savedKey: '', pend: false, scroll: 0 };
+  const hName914 = (id) => ({ active: 'Active jobs', costing: 'Costing due', sied: 'SI / ED due', free: 'Free time', hold: 'On hold', watch: 'Today’s watch', week: 'This week', day: canNote() ? 'My day' : 'Recent activity' }[id] || id);
+  function home914() {
+    const h = H914.home || {};
+    const fix = (a, all) => { const o = (Array.isArray(a) ? a : []).filter((x, i, s) => all.includes(x) && s.indexOf(x) === i); all.forEach((x) => { if (!o.includes(x)) o.push(x); }); return o; };
+    return { k: fix(h.k, HK914), t: fix(h.t, HT914), h: (Array.isArray(h.h) ? h.h : []).filter((x, i, s) => (HK914.includes(x) || HT914.includes(x)) && s.indexOf(x) === i) };
+  }
+  const homeKey914 = (H) => JSON.stringify({ k: H.k, t: H.t, h: H.h });
+  function applyBoot914(boot) {
+    if (!H914.on && !H914.timer) { H914.home = boot.home914 || null; H914.savedKey = homeKey914(home914()); }
+    S914.server = !!(boot.pk914 && boot.pk914.on);
+    if (S914.server) pkCan914();
+  }
+  const ctl914 = (id, hid) => '<span class="a914-ctl"><button type="button" class="a914-eye' + (hid ? ' is-on' : '') + '" data-a914-eye="' + id + '" aria-pressed="' + hid + '" aria-label="' + (hid ? 'Show ' : 'Hide ') + esc(hName914(id)) + '" title="' + (hid ? 'Hidden — show it' : 'Hide') + '">' + icon('eye914', 15) + '</button>' +
+    '<button type="button" class="a914-grip" data-a914-grip="' + id + '" aria-label="Move ' + esc(hName914(id)) + ' — drag it, or use the arrow keys" title="Drag to move">' + icon('grip914', 16) + '</button></span>';
+  // the five counters (v2.9.1) in this person's order; hidden ones only in Arrange mode
+  function kpiTiles91(m, anim) {
+    const t0 = today0(), wk = addDays(t0, 6), H = home914(), on = H914.on;
+    const holdSoon = m.hold.filter((j) => j.etd && j.etd >= t0 && j.etd <= wk).length;
+    const D = {
+      active: ['ACTIVE JOBS', m.active.length, m.atSea.length + ' at sea now', false],
+      costing: ['COSTING DUE', m.costingDue.length, m.costing.length ? 'of ' + m.costing.length + ' pending' : 'nothing pending', false],   // v2.9.9: what is due now
+      sied: ['SI / ED DUE', m.siedDue.length, m.sied.length ? 'of ' + m.sied.length + ' pending' : 'nothing pending', false],
+      free: ['FREE TIME', m.freeJobs.length, m.freeJobs.length ? 'ending in ≤ 2 days' : 'all clear', m.freeJobs.length > 0],
+      hold: ['ON HOLD', m.hold.length, !m.hold.length ? 'all jobs moving' : holdSoon ? holdSoon + ' due to sail this week' : 'none due to sail this week', false]
+    };
+    const ids = H.k.filter((id) => on || !H.h.includes(id));
+    const k = (id, i) => {
+      const x = D[id], hid = H.h.includes(id), inner = '<span class="kpi-label">' + x[0] + '</span><span class="kpi-num">' + x[1] + '</span><span class="kpi-sub">' + esc(x[2]) + '</span>';
+      if (!on) return '<button type="button" class="kpi' + (x[3] ? ' is-urgent' : '') + anim + '" style="--d:' + (100 + i * 30) + 'ms" data-list="' + id + '">' + inner + '</button>';
+      return '<div class="kpi is-a914' + (x[3] ? ' is-urgent' : '') + (hid ? ' is-hid914' : '') + anim + '" style="--d:' + (100 + i * 30) + 'ms" data-h914="' + id + '">' + inner + ctl914(id, hid) + '</div>';
+    };
+    return '<div class="kpis is-5' + (ids.length !== 5 ? ' h914-k' + ids.length : '') + '">' + ids.map(k).join('') + '</div>';
+  }
+  const AREA914 = { watch: 'watch', week: 'week', day: 'act' };
+  function vars914(t, hasK) {   // the grid for this order: wide (counters across, tiles side by side) and narrow (one column)
+    const n = t.length;
+    const w = (hasK ? '"' + (n ? t.map(() => 'kpis').join(' ') : 'kpis') + '"' : '') + (hasK && n ? ' ' : '') + (n ? '"' + t.map((id) => AREA914[id]).join(' ') + '"' : '');
+    return {
+      '--h914-w': w || 'none',
+      '--h914-c': n ? t.map((id) => (id === 'watch' ? 'minmax(0, 1.12fr)' : 'minmax(0, 1fr)')).join(' ') : 'minmax(0, 1fr)',
+      '--h914-r': (hasK ? 'auto' : '') + (hasK && n ? ' ' : '') + (n ? 'minmax(0, 1fr)' : '') || 'auto',
+      '--h914-n': ((hasK ? '"kpis" ' : '') + t.map((id) => '"' + AREA914[id] + '"').join(' ')).trim() || 'none'
+    };
+  }
+  const bentoVars914 = (t, hasK) => { const v = vars914(t, hasK); return " style='" + Object.keys(v).map((k) => k + ': ' + v[k]).join('; ') + "'"; };
+  // Home's tiles in this person's order (Arrange mode: every tile, with its handles)
+  function bento914(m, anim) {
+    const H = home914(), on = H914.on;
+    const make = { watch: () => watchTile91(m, anim), week: () => weekTile91(m, anim), day: () => (canNote() ? myDayTile(anim) : activityTile(anim)) };
+    const shown = H.t.filter((id) => on || !H.h.includes(id)), hasK = H.k.some((id) => on || !H.h.includes(id));
+    const custom = on || H.t.join() !== HT914.join() || H.h.length > 0;
+    const html = (hasK ? kpiTiles91(m, anim) : '') + shown.map((id) => {
+      const s = make[id]();
+      if (!on) return s;
+      const hid = H.h.includes(id);
+      return s.replace(/^<section class="tile/, '<section data-h914="' + id + '" class="tile is-a914' + (hid ? ' is-hid914' : '')).replace(/^(<section[^>]*>)/, '$1' + ctl914(id, hid));
+    }).join('');
+    return '<div class="bento' + (custom ? ' is-h914' : '') + (on ? ' is-arr914' : '') + '"' + (custom ? bentoVars914(shown, hasK) : '') + '>' + html + '</div>';
+  }
+  const arrBtn914 = () => (canNote() || isSales() ? '<button type="button" class="btn-ghost a914-btn" data-a914="on" aria-label="Arrange Home" title="Arrange Home">' + icon('arrange914', 16) + '</button>' : '');
+  const arrGo914 = () => '<button type="button" class="acct-go" data-a914="on">' + icon('arrange914', 18) + '<span>Arrange Home</span></button>';
+
+  function arrange914(on) {
+    if (on === H914.on) return;
+    H914.on = on;
+    document.body.classList.toggle('is-arranging914', on);
+    const old = $('#a914Bar'); if (old) old.remove();
+    if (on) {
+      closeOverlays(true);
+      document.body.insertAdjacentHTML('beforeend', '<div class="a914-bar" id="a914Bar" role="toolbar" aria-label="Arrange your Home"><span class="a914-txt"><b>ARRANGE YOUR HOME</b><span class="a914-hint"><span class="is-l914">Drag a tile to move it · the eye hides it</span><span class="is-s914">Drag a tile · the eye hides it</span></span></span>' +
+        '<button type="button" class="a914-reset" data-a914="reset">Reset</button><button type="button" class="a914-done" data-a914="done">Done</button></div>');
+      if (!state.route || state.route.name !== 'home') { go('#/home'); } else rerender();
+      const v = $('#view'); if (v && v.scrollTop) v.scrollTop = 0; window.scrollTo(0, 0);
+      setTimeout(() => { const g = $('#view .a914-grip'); if (g && !isTouch()) g.focus({ preventScroll: true }); }, 60);
+    } else {
+      a914Save();
+      if (state.route && state.route.name === 'home') rerender();
+      const b = $('#view [data-a914="on"]'); if (b) b.focus({ preventScroll: true });
+    }
+  }
+  function a914Dirty() { clearTimeout(H914.timer); H914.timer = setTimeout(a914Save, 900); }
+  async function a914Save() {
+    clearTimeout(H914.timer); H914.timer = 0;
+    const H = home914(), key = homeKey914(H);
+    if (key === H914.savedKey) return;
+    H914.savedKey = key;
+    try { await api.call('ethixHomeSave', [{ k: H.k, t: H.t, h: H.h }], { timeout: 30000 }); }
+    catch (e) { H914.savedKey = ''; if (e.kind !== 'auth') toast('Your Home layout was not saved — ' + e.message, { error: true }); }
+  }
+  const items914 = (grp) => $$(grp === 'k' ? '#view .home .kpis > [data-h914]' : '#view .home .bento > [data-h914]');
+  // put the group in the new order: counters by moving the others around the one held (it keeps its pointer), tiles by grid areas
+  function a914Apply(grp, held) {
+    const H = home914();
+    if (grp === 'k') {
+      const box = $('#view .home .kpis'); if (!box) return;
+      const els = {}; items914('k').forEach((x) => { els[x.dataset.h914] = x; });
+      const order = H.k.filter((id) => els[id]), at = held ? order.indexOf(held.dataset.h914) : -1;
+      if (at < 0) { order.forEach((id) => box.appendChild(els[id])); return; }
+      order.slice(0, at).forEach((id) => box.insertBefore(els[id], held));
+      order.slice(at + 1).forEach((id) => box.appendChild(els[id]));
+    } else {
+      const b = $('#view .home .bento'); if (!b) return;
+      const v = vars914(H.t, !!$('#view .home .kpis'));
+      Object.keys(v).forEach((k) => b.style.setProperty(k, v[k]));
+    }
+  }
+  function a914Move(id, to, held) {   // move one tile to a place in its group; the others glide to theirs
+    const grp = HK914.includes(id) ? 'k' : 't', H = home914(), arr = grp === 'k' ? H.k : H.t, from = arr.indexOf(id);
+    to = Math.max(0, Math.min(arr.length - 1, to));
+    if (from < 0 || from === to) return false;
+    const others = items914(grp).filter((x) => x !== held), before = new Map(others.map((x) => [x, x.getBoundingClientRect()]));
+    arr.splice(from, 1); arr.splice(to, 0, id);
+    H914.home = H;
+    a914Apply(grp, held || items914(grp).find((x) => x.dataset.h914 === id));
+    before.forEach((r0, x) => {
+      const r1 = x.getBoundingClientRect(), dx = r0.left - r1.left, dy = r0.top - r1.top;
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+      x.style.transition = 'none'; x.style.transform = 'translate(' + dx + 'px, ' + dy + 'px)';
+      void x.offsetWidth;
+      x.style.transition = ''; x.style.transform = '';
+    });
+    a914Dirty();
+    return true;
+  }
+  function a914Place(D) {   // the lifted tile follows the finger — and always stays on the board, whole
+    const el = D.el; el.style.transform = 'none';
+    const r = el.getBoundingClientRect(), v = $('#view').getBoundingClientRect();
+    let x = D.px - D.ox, y = D.py - D.oy;
+    x = Math.max(v.left + 8, Math.min(v.right - r.width - 8, x));
+    const bar = $('#a914Bar'), top = Math.max(v.top, bar ? bar.getBoundingClientRect().bottom : 0) + 18;
+    if (r.height < v.bottom - top - 20) y = Math.max(top, Math.min(v.bottom - r.height - 10, y));
+    el.style.transform = 'translate(' + Math.round(x - r.left) + 'px, ' + Math.round(y - r.top) + 'px) rotate(-1.4deg)';
+  }
+  function a914Hit(D) {
+    const over = items914(D.grp).find((x) => { if (x === D.el) return false; const r = x.getBoundingClientRect(); return D.px >= r.left && D.px <= r.right && D.py >= r.top && D.py <= r.bottom; });
+    if (over && over !== D.last) {
+      D.last = over;
+      const H = home914(), arr = D.grp === 'k' ? H.k : H.t;
+      if (a914Move(D.id, arr.indexOf(over.dataset.h914), D.el)) a914Place(D);
+    } else if (!over) D.last = null;
+  }
+  function a914Edge(D) {   // near the top or bottom of the screen: the page scrolls while a tile is held
+    cancelAnimationFrame(H914.scroll);
+    const vh = window.innerHeight, dy = D.py < 90 ? -Math.ceil((90 - D.py) / 6) : D.py > vh - 110 ? Math.ceil((D.py - vh + 110) / 6) : 0;
+    if (!dy || !H914.drag) return;
+    H914.scroll = requestAnimationFrame(() => {
+      if (!H914.drag) return;
+      const v = $('#view'), sc = v && v.scrollHeight > v.clientHeight + 4 && /(auto|scroll)/.test(getComputedStyle(v).overflowY) ? v : document.scrollingElement;
+      const y = sc.scrollTop; sc.scrollTop = y + dy;
+      if (sc.scrollTop !== y) { a914Place(D); a914Hit(D); }
+      a914Edge(D);
+    });
+  }
+  function a914End(e) {
+    const D = H914.drag; if (!D || (e && e.pointerId !== D.pid)) return;
+    H914.drag = null; cancelAnimationFrame(H914.scroll);
+    document.body.classList.remove('is-drag914');
+    window.removeEventListener('pointermove', a914PMove); window.removeEventListener('pointerup', a914End); window.removeEventListener('pointercancel', a914End);
+    if (D.live) {
+      const el = D.el;
+      el.classList.add('is-drop914'); el.classList.remove('is-lift914'); void el.offsetWidth; el.style.transform = '';
+      setTimeout(() => el.classList.remove('is-drop914'), 360);
+      const g = el.querySelector('.a914-grip'); if (g && !isTouch()) g.focus({ preventScroll: true });
+    }
+    if (H914.pend) { H914.pend = false; setTimeout(rerender, 380); }
+  }
+  function a914PMove(e) {
+    const D = H914.drag; if (!D || e.pointerId !== D.pid) return;
+    D.px = e.clientX; D.py = e.clientY;
+    if (!D.live) {
+      if (Math.hypot(D.px - D.x0, D.py - D.y0) < 5) return;
+      D.live = true; D.el.classList.add('is-lift914'); document.body.classList.add('is-drag914');
+    }
+    e.preventDefault();
+    a914Place(D); a914Hit(D); a914Edge(D);
+  }
+  function initArrange914() {
+    document.addEventListener('pointerdown', (e) => {
+      const g = e.target.closest && e.target.closest('[data-a914-grip]');
+      if (!g || !H914.on || H914.drag || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      const el = g.closest('[data-h914]'); if (!el) return;
+      e.preventDefault();
+      const r = el.getBoundingClientRect();
+      H914.drag = { id: el.dataset.h914, el, grp: HK914.includes(el.dataset.h914) ? 'k' : 't', pid: e.pointerId, x0: e.clientX, y0: e.clientY, px: e.clientX, py: e.clientY, ox: e.clientX - r.left, oy: e.clientY - r.top, live: false, last: null };
+      window.addEventListener('pointermove', a914PMove, { passive: false }); window.addEventListener('pointerup', a914End); window.addEventListener('pointercancel', a914End);
+    });
+    document.addEventListener('click', (e) => {
+      const a = e.target.closest && e.target.closest('[data-a914]');
+      if (a) {
+        const k = a.dataset.a914;
+        if (k === 'on') { arrange914(true); return; }
+        if (k === 'done') { arrange914(false); return; }
+        if (k === 'reset') {
+          const was = H914.home;
+          H914.home = null; rerender(); a914Dirty();
+          toast('Home is back to the standard layout', { action: { label: 'Undo', fn: () => { H914.home = was; rerender(); a914Dirty(); } } });
+        }
+        return;
+      }
+      const eye = e.target.closest && e.target.closest('[data-a914-eye]');
+      if (eye && H914.on) {
+        const id = eye.dataset.a914Eye, H = home914(), i = H.h.indexOf(id), hid = i < 0;
+        if (hid) H.h.push(id); else H.h.splice(i, 1);
+        H914.home = H;
+        const el = eye.closest('[data-h914]'); if (el) el.classList.toggle('is-hid914', hid);
+        eye.classList.toggle('is-on', hid); eye.setAttribute('aria-pressed', hid);
+        eye.setAttribute('aria-label', (hid ? 'Show ' : 'Hide ') + hName914(id)); eye.title = hid ? 'Hidden — show it' : 'Hide';
+        a914Dirty();
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (!H914.on) return;
+      const g = e.target.closest && e.target.closest('[data-a914-grip]');
+      if (g && /^Arrow(Left|Right|Up|Down)$/.test(e.key)) {
+        e.preventDefault();
+        const id = g.dataset.a914Grip, H = home914(), arr = HK914.includes(id) ? H.k : H.t;
+        a914Move(id, arr.indexOf(id) + (/Left|Up/.test(e.key) ? -1 : 1));
+        g.focus({ preventScroll: true });
+        return;
+      }
+      if (e.key === 'Escape' && !H914.drag && !state.overlay) { e.preventDefault(); arrange914(false); }
+    });
+    window.addEventListener('hashchange', () => { if (H914.on && !/^#\/(home)?$/.test(location.hash || '#/')) arrange914(false); });
+  }
+
+  // ------------------------------------------------------------------------------------------------ 11 · Face ID / fingerprint
+  const PK914 = 'ethix.v2.pk914', PKNO914 = 'ethix.v2.pk914no';
+  const S914 = { server: false, can: null, canP: null, busy: false, pw: false };
+  const b64e914 = (buf) => { const b = new Uint8Array(buf); let s = ''; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+  const b64d914 = (s) => { s = String(s || '').replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; const t = atob(s), b = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) b[i] = t.charCodeAt(i); return b; };
+  function pkDev914() {
+    const ua = navigator.userAgent || '', touchMac = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
+    if (/iPhone|iPod/.test(ua)) return { dev: 'iPhone', place: 'iPhone', word: 'Face ID', ic: 'face914', note: 'Your face never leaves the iPhone — it checks you and tells EWS only “yes, it’s {n}”.' };
+    if (/iPad/.test(ua) || touchMac) return { dev: 'iPad', place: 'iPad', word: 'Face ID / Touch ID', ic: 'face914', note: 'Your face or finger never leaves the iPad — it checks you and tells EWS only “yes, it’s {n}”.' };
+    if (/Android/.test(ua)) return { dev: 'Android phone', place: 'phone', word: 'fingerprint', ic: 'finger914', note: 'Your fingerprint never leaves the phone — it checks you and tells EWS only “yes, it’s {n}”.' };
+    if (/Windows/.test(ua)) return { dev: 'Windows laptop', place: 'laptop', word: 'Windows Hello', ic: 'finger914', note: 'Windows Hello checks your face or finger on this laptop — EWS never sees it.' };
+    if (/Macintosh/.test(ua)) return { dev: 'Mac', place: 'laptop', word: 'Touch ID', ic: 'finger914', note: 'Touch ID checks your finger on this laptop — EWS never sees it.' };
+    return { dev: 'Device', place: 'device', word: 'screen lock', ic: 'finger914', note: 'Your screen lock checks you on this device — EWS never sees it.' };
+  }
+  const pkWordUp914 = (w) => (/^[a-z]/.test(w) ? w[0].toUpperCase() + w.slice(1) : w);
+  function pkCan914() {   // this device has Face ID / a fingerprint / Windows Hello / a screen lock that websites may use
+    if (!S914.canP) S914.canP = (async () => { try { return !!(window.isSecureContext && window.PublicKeyCredential && PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch (e) { return false; } })().then((v) => (S914.can = v));
+    return S914.canP;
+  }
+  function pkRec914(user) {
+    const r = store.get(PK914, null);
+    if (!r || typeof r.id !== 'string' || !r.u) return null;
+    return !user || r.u === user ? r : null;
+  }
+  const pkLive914 = (r) => !!r && r.exp > Date.now() && !!window.PublicKeyCredential;
+  function pkKeep914(user, x) { if (x && x.id) store.set(PK914, { u: user, id: x.id, exp: +x.exp || 0, dev: x.dev || '', word: x.word || pkDev914().word }); }
+  function pkDrop914() { try { localStorage.removeItem(PK914); } catch (e) { /* private mode */ } }
+  const pkMine914 = () => { const r = pkRec914(state.user); return r ? r.id : ''; };
+  function pkSignArgs914(user, pw) { const r = pkRec914(user); return r ? [user, pw, true, APP_URL98, r.id] : [user, pw, true]; }
+  function pkAfter914(res, user) {   // a password sign-in renews this device's 30 days, or says it is gone
+    const x = res && res.pk914; if (!x) return;
+    if (x.gone) { if (pkRec914(user)) pkDrop914(); } else pkKeep914(user, x);
+  }
+
+  function pkCard914(kind, rec) {   // the sign-in card: unlock, or the offer after a password sign-in
+    const d = pkDev914(), n = nice(rec.u), word = rec.word || d.word;
+    const unlock = kind === 'unlock';
+    return '<div class="pk914 is-' + kind + '" id="pkStep914">' +
+      '<span class="pk914-av" aria-hidden="true">' + esc(String(rec.u).slice(0, 1).toUpperCase()) + '</span>' +
+      '<div class="kicker pk914-k">' + (unlock ? 'WELCOME BACK' : 'FASTER SIGN-IN') + '</div>' +
+      '<h2 class="pk914-name' + (unlock ? '' : ' is-q') + '" id="pkTitle914">' + (unlock ? esc(n) : 'Use ' + esc(word) + ' next time?') + '</h2>' +
+      '<div class="pk914-dev">' + (unlock ? 'This ' + esc(d.place) + ' · remembered 30 days' : 'This ' + esc(d.place) + ' · for 30 days') + '</div>' +
+      '<button type="button" class="pk914-go" id="pkGo914" data-pk914="' + (unlock ? 'go' : 'add') + '">' + icon(d.ic, 22) + '<span>' + (unlock ? 'Unlock with ' : 'Turn on ') + esc(word) + '</span></button>' +
+      '<div class="pk914-msg" id="pkMsg914" role="alert"></div>' +
+      '<button type="button" class="pk914-pw" data-pk914="' + (unlock ? 'pw' : 'later') + '">' + (unlock ? 'Use password instead' : 'Not now') + '</button>' +
+      '<p class="pk914-note">' + esc(d.note.replace('{n}', n)) + '</p></div>';
+  }
+  function pkShow914(kind, rec, after) {
+    const card = $('#signinCard'), old = $('#pkStep914'); if (old) old.remove();
+    S914.after = after || null;
+    card.classList.toggle('is-pk914', !!kind);
+    if (!kind) return;
+    card.insertAdjacentHTML('beforeend', pkCard914(kind, rec));
+    card.classList.remove('shake');
+    if (document.activeElement && card.contains(document.activeElement)) document.activeElement.blur();
+  }
+  function pkMsg914(text) { const m = $('#pkMsg914'); if (m) { m.textContent = text || ''; m.classList.toggle('is-on', !!text); } }
+  function pkBusy914(on, label) {
+    const b = $('#pkGo914'); if (!b) return;
+    if (on) { b.dataset.label = b.querySelector('span').textContent; b.querySelector('span').textContent = label; } else if (b.dataset.label) b.querySelector('span').textContent = b.dataset.label;
+    b.disabled = on; b.classList.toggle('is-busy914', on);
+  }
+  function pkToPassword914(message) {
+    pkShow914(null);
+    S914.pw = true;
+    showKnown();
+    $('#stepLogin').hidden = false;
+    if (message) setLoginMsg($('#loginMsg'), message, 'locked');
+    setTimeout(() => { const f = $('#userField').hidden ? $('#loginPass') : $('#loginUser'); if (f) f.focus(); }, 40);
+  }
+  function pkStartUnlock914() {   // the sign-in screen shows the unlock when this device has a live passkey
+    const r = pkRec914();
+    if (!pkLive914(r) || S914.pw || !api.connected) return false;
+    pkShow914('unlock', r);
+    return true;
+  }
+  async function pkUnlock914() {
+    const rec = pkRec914(); if (!rec || S914.busy) return;
+    const word = rec.word || pkDev914().word;
+    S914.busy = true; pkMsg914(''); pkBusy914(true, 'Checking…');
+    let leaving = false;
+    try {
+      const ch = await api.call('ethixPkChallenge', [], { timeout: 30000 });
+      if (!ch || !ch.c) { pkToPassword914('Face ID sign-in is not available just now — use your password.'); return; }
+      let cred;
+      try {
+        cred = await navigator.credentials.get({ publicKey: { challenge: b64d914(ch.c), allowCredentials: [{ type: 'public-key', id: b64d914(rec.id), transports: ['internal', 'hybrid'] }], userVerification: 'required', timeout: 60000 } });
+      } catch (x) {
+        pkMsg914(x && x.name === 'NotAllowedError' ? pkWordUp914(word) + ' did not go through — try again, or use your password.' : 'This device could not use ' + word + ' just now — use your password.');
+        return;
+      }
+      const r = cred.response;
+      const res = await api.call('ethixPkUnlock', [rec.u, { id: b64e914(cred.rawId), cd: b64e914(r.clientDataJSON), ad: b64e914(r.authenticatorData), sig: b64e914(r.signature) }, true, APP_URL98], { timeout: 60000 });
+      if (res && res.success && res.token) {
+        api.token = res.token;
+        state.pendingUser = rec.u;
+        pkKeep914(rec.u, res.pk914);
+        store.set(LAST_USER, rec.u); keepSession(rec.u, res.role);
+        let boot = res.boot;
+        if (!boot) boot = await api.call('ethixBootstrap');
+        leaving = true;
+        $('#signinCard').classList.add('leaving');
+        setTimeout(() => { pkShow914(null); enterApp(boot, rec.u, res.role); }, 280);
+        return;
+      }
+      if (res && res.gone) { pkDrop914(); pkToPassword914(res.message); return; }
+      $('#signinCard').classList.remove('shake'); void $('#signinCard').offsetWidth; $('#signinCard').classList.add('shake');
+      pkMsg914((res && res.message) || 'Face ID could not sign you in — try again, or use your password.');
+    } catch (err) {
+      pkMsg914(err.message);
+    } finally { S914.busy = false; if (!leaving) pkBusy914(false); }
+  }
+  // after a password sign-in: offer Face ID on a device that has it (not again for a week after "Not now")
+  async function pkOffer914(user, boot, enter) {
+    if (!boot || !boot.pk914 || !boot.pk914.on) return false;
+    if (pkLive914(pkRec914(user))) return false;
+    const no = store.get(PKNO914, null);
+    if (no && no.u === user && Date.now() - no.t < 7 * 864e5) return false;
+    if (!(await pkCan914())) return false;
+    $('#stepLogin').hidden = true; $('#stepNewPw').hidden = true;
+    pkShow914('offer', { u: user }, enter);
+    return true;
+  }
+  function pkLeave914() {
+    const go = S914.after; S914.after = null;
+    if (!go) return;
+    $('#signinCard').classList.add('leaving');
+    setTimeout(() => { pkShow914(null); go(); }, 280);
+  }
+  // turning it on: the device makes a new key (its check first), EWS keeps the public half
+  async function pkCreate914(user) {
+    const d = pkDev914();
+    const b = await api.call('ethixPkBegin', [], { timeout: 30000 });
+    const uid = new Uint8Array(16); window.crypto.getRandomValues(uid);
+    let cred;
+    try {
+      cred = await navigator.credentials.create({ publicKey: {
+        rp: { name: 'Ethix Workspace' }, user: { id: uid, name: b.user, displayName: nice(b.user) }, challenge: b64d914(b.c),
+        pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+        authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred', requireResidentKey: false },
+        timeout: 60000, attestation: 'none' } });
+    } catch (x) {
+      throw new ApiError(x && x.name === 'NotAllowedError' ? pkWordUp914(d.word) + ' did not go through — try again.' : x && x.name === 'InvalidStateError' ? 'This device is already set up — sign out and unlock with ' + d.word + '.' : 'This device could not turn on ' + d.word + ' just now.', 'device');
+    }
+    const r = cred.response;
+    const res = await api.call('ethixPkAdd', [{ id: b64e914(cred.rawId), cd: b64e914(r.clientDataJSON), ao: b64e914(r.attestationObject), dev: d.dev, word: d.word }], { timeout: 60000 });
+    if (!res || !res.ok) throw new ApiError((res && res.error) || 'Not turned on.', 'server');
+    pkKeep914(user, res);
+    try { localStorage.removeItem(PKNO914); } catch (e) { /* private mode */ }
+    return res;
+  }
+  async function pkAdd914() {
+    if (S914.busy) return;
+    const user = state.pendingUser || store.get(LAST_USER, ''), d = pkDev914();
+    S914.busy = true; pkMsg914(''); pkBusy914(true, 'Waiting for ' + d.word + '…');
+    let ok = false;
+    try { await pkCreate914(user); ok = true; }
+    catch (e) { pkMsg914(e.message); }
+    finally { S914.busy = false; if (!ok) pkBusy914(false); }
+    if (ok) { pkBusy914(true, pkWordUp914(d.word) + ' is on'); $('#pkGo914').classList.add('is-ok914'); setTimeout(pkLeave914, 650); }
+  }
+
+  // My account: Face ID on this device — on (until when) / off, and the button that changes it
+  function pkAcct914() {
+    if (!S914.server || !S914.can || !state.user) return '';
+    const d = pkDev914(), r = pkRec914(state.user), on = pkLive914(r);
+    const until = on ? dxb(r.exp) : null;
+    return '<div class="tile pk914-acct" id="pkAcct914"><span class="pk914-acct-ic">' + icon(d.ic, 20) + '</span>' +
+      '<div class="pk914-acct-t"><h3 class="tile-title">' + esc(d.word.toUpperCase()) + ' ON THIS ' + esc(d.place.toUpperCase()) + '</h3>' +
+      '<p>' + (on ? '<b class="pk914-on">On</b> · your password again after ' + until.getDate() + ' ' + nice(MON_UP[until.getMonth()]) : 'Unlock EWS with ' + esc(d.word) + ' instead of typing your password.') + '</p><p class="pk914-acct-msg" id="pkAcctMsg914" role="alert"></p></div>' +
+      '<button type="button" class="' + (on ? 'btn-ghost' : 'btn-brutal') + ' btn-sm" data-pk914="' + (on ? 'off' : 'on') + '">' + (on ? 'Turn off' : 'Turn on') + '</button></div>';
+  }
+  async function pkAcctToggle914(btn) {
+    if (S914.busy) return;
+    const on = btn.dataset.pk914 === 'off', d = pkDev914(), msg = $('#pkAcctMsg914');
+    S914.busy = true; btn.disabled = true;
+    try {
+      if (on) { const id = pkMine914(); if (id) await api.call('ethixPkRemove', [id]); pkDrop914(); toast(pkWordUp914(d.word) + ' is off on this ' + d.place + ' — the password next time'); }
+      else { await pkCreate914(state.user); toast(pkWordUp914(d.word) + ' is on for this ' + d.place); }
+      const t = $('#pkAcct914'); if (t) t.outerHTML = pkAcct914();
+    } catch (e) { if (msg) msg.textContent = e.message; btn.disabled = false; }
+    finally { S914.busy = false; }
+  }
+
+  // Admin · People: each person's devices, and Remove
+  const pkDay914 = (t) => { const d = dxb(t), t0 = today0(), d0 = new Date(d); d0.setHours(0, 0, 0, 0); const n = Math.round((t0 - d0) / 864e5); return n === 0 ? 'today' : n === 1 ? 'yesterday' : d.getDate() + ' ' + nice(MON_UP[d.getMonth()]); };
+  const pkDate914 = (t) => { const d = dxb(t); return d.getDate() + ' ' + nice(MON_UP[d.getMonth()]); };
+  const pkDevIc914 = (dev) => (/iPhone|phone/i.test(dev) ? 'phone914' : /iPad/i.test(dev) ? 'phone914' : 'laptop914');
+  function pkChip914(u) {
+    const L = u.devices || []; if (!L.length) return '';
+    const names = L.map((x) => x.dev), txt = names.length > 2 ? names[0] + ' + ' + (names.length - 1) + ' more' : names.join(' · ');
+    return '<button type="button" class="pk914-chip" data-pk914="devs" data-user="' + esc(u.name) + '" aria-label="Face ID and fingerprint devices of ' + esc(u.name) + ': ' + esc(names.join(', ')) + '">' + icon('finger914', 13) + '<span>' + esc(txt) + '</span></button>';
+  }
+  function pkDevPop914(name) {
+    return () => {
+      const u = adminData().users.find((x) => x.name === name), L = (u && u.devices) || [];
+      return '<div class="pop-title">' + esc(name) + '</div>' +
+        (L.length ? '<ul class="pk914-list">' + L.map((x) => '<li><span class="pk914-li-ic">' + icon(pkDevIc914(x.dev), 18) + '</span><span class="pk914-li-t"><b>' + esc(x.dev) + '</b><small>' + esc(x.word) + ' · added ' + pkDate914(x.added) + ' · ' + (x.used ? 'last used ' + pkDay914(x.used) : 'not used yet') + (x.exp && x.exp < Date.now() ? ' · <i>password due</i>' : '') + '</small></span>' +
+          '<button type="button" class="btn-ghost btn-sm is-danger" data-pk914="rm" data-user="' + esc(name) + '" data-id="' + esc(x.id) + '">Remove</button></li>').join('') + '</ul>' : '<p class="pop-text">No devices.</p>') +
+        '<p class="pop-hint">A removed device asks for the password next time.</p>';
+    };
+  }
+  async function pkAdminRemove914(btn) {
+    const name = btn.dataset.user, id = btn.dataset.id, u = adminData().users.find((x) => x.name === name), x = u && (u.devices || []).find((y) => y.id === id);
+    btn.disabled = true;
+    try {
+      const res = await api.call('ethixAdminDeviceRemove', [name, id]);
+      if (res && res.list) { state.admin = res.list; }
+      if (name === state.user && pkMine914() === id) pkDrop914();
+      rerender(); refreshOverlay();
+      if (!((adminData().users.find((y) => y.name === name) || {}).devices || []).length) closeOverlays();
+      toast((x ? x.dev : 'Device') + ' removed — it asks for the password next time');
+    } catch (e) { btn.disabled = false; toast(e.message, { error: true }); }
+  }
+  const pkWords914 = (s) => String(s || '').toLowerCase().replace(/face id \/ touch id|face id|touch id|windows hello|iphone|ipad|android|windows|mac\b/g, (w) => ({ 'face id / touch id': 'Face ID / Touch ID', 'face id': 'Face ID', 'touch id': 'Touch ID', 'windows hello': 'Windows Hello', iphone: 'iPhone', ipad: 'iPad', android: 'Android', windows: 'Windows', mac: 'Mac' }[w]));
+
+  const pkLogoutText914 = () => { const r = pkRec914(state.user); return pkLive914(r) ? 'Next time ' + (r.word || pkDev914().word) + ' unlocks it — or your password.' : 'You’ll need your password to come back in.'; };
+  function initV2914() {
+    initArrange914();
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest && e.target.closest('[data-pk914]'); if (!b) return;
+      const k = b.dataset.pk914;
+      if (k === 'go') pkUnlock914();
+      else if (k === 'pw') pkToPassword914('');
+      else if (k === 'add') pkAdd914();
+      else if (k === 'later') { store.set(PKNO914, { u: state.pendingUser || store.get(LAST_USER, ''), t: Date.now() }); pkLeave914(); }
+      else if (k === 'on' || k === 'off') pkAcctToggle914(b);
+      else if (k === 'devs' && isAdmin()) openPop(b, 'FACE ID / FINGERPRINT', pkDevPop914(b.dataset.user));
+      else if (k === 'rm' && isAdmin()) pkAdminRemove914(b);
+    });
+    document.addEventListener('keydown', (e) => {   // the sign-in card: Enter unlocks (or turns it on)
+      if (e.key !== 'Enter' || !$('#signinCard.is-pk914') || state.signedIn) return;
+      if (e.target.closest && e.target.closest('button, a, input')) return;
+      const g = $('#pkGo914'); if (g && !g.disabled) { e.preventDefault(); g.click(); }
+    });
+    if (!savedSession()) pkStartUnlock914();
+  }
+
   // -------------------------------------------------------------------- start
   function start() {
     if (savedSession()) document.body.classList.add('is-resuming');
@@ -8216,6 +8689,7 @@
     initV2911();
     initV2912();
     initV2913();
+    initV2914();
     if (savedSession()) resumeSession();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
