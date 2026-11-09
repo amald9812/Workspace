@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders, cover, system health, arrange Home, Face ID — v2.9.14)
+   enquiries, follow-ups, delays, close & archive, costing, reminders, cover, system health, arrange Home, Face ID, document reader — v2.9.15)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -769,11 +769,11 @@
     const h = decodeURIComponent(location.hash || '');
     const m = h.match(/^#\/job\/(.+)$/);
     const mc = h.match(/^#\/costing\/(.+)$/);
-    let r = m ? { name: 'job', jobNo: m[1].trim() } : mc ? { name: 'costjob', jobNo: mc[1].trim() } : h === '#/costing' ? { name: 'costing' } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/health' ? { name: 'health' } : h === '#/names' ? { name: 'names' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : h === '#/notifications' ? { name: 'notif' } : h === '#/cover' ? { name: 'cover' } : { name: 'home' };
+    let r = m ? { name: 'job', jobNo: m[1].trim() } : mc ? { name: 'costjob', jobNo: mc[1].trim() } : h === '#/costing' ? { name: 'costing' } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/health' ? { name: 'health' } : h === '#/names' ? { name: 'names' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : h === '#/notifications' ? { name: 'notif' } : h === '#/cover' ? { name: 'cover' } : h === '#/reader' ? { name: 'reader' } : { name: 'home' };   // v2.9.15: + the Document reader
     const mh911 = h.match(/^#\/handover(?:\/(.+))?$/); if (mh911) r = { name: 'handover', jobNo: (mh911[1] || '').trim().toUpperCase() };   // v2.9.11: the leave hand-over
     if (isAdmin()) { if (!['activity', 'health', 'names'].includes(r.name)) r = { name: 'admin' }; }      // admin works with people, not jobs (v2.9.13: + System health, Customer names)
-    else if (r.name === 'admin' || r.name === 'activity' || r.name === 'health' || r.name === 'names' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote()) || ((r.name === 'costing' || r.name === 'costjob') && !canNote()) || ((r.name === 'cover' || r.name === 'handover') && !canEdit())) r = { name: 'home' };
-    const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity|health|names|round|follow-ups|enquiries|costing)$/.test(h) ? '#/home' : r.name === 'round' && h === '#/round' ? '#/follow-ups' : null;
+    else if (r.name === 'admin' || r.name === 'activity' || r.name === 'health' || r.name === 'names' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote()) || ((r.name === 'costing' || r.name === 'costjob') && !canNote()) || ((r.name === 'cover' || r.name === 'handover' || r.name === 'reader') && !canEdit())) r = { name: 'home' };
+    const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity|health|names|round|follow-ups|enquiries|costing|reader)$/.test(h) ? '#/home' : r.name === 'round' && h === '#/round' ? '#/follow-ups' : null;
     if (want && h !== want) history.replaceState(null, '', want);
     return r;
   }
@@ -802,6 +802,7 @@
     else if (r.name === 'notif') renderNotifPage(changed || first);
     else if (r.name === 'cover') renderCover98(changed || first);
     else if (r.name === 'handover') renderHandover911(r.jobNo, changed || first);
+    else if (r.name === 'reader') renderReader915(changed || first);   // v2.9.15
     else if (r.name === 'job') { if (changed || first) { seenOpen9(r.jobNo); costAheadSoon98(r.jobNo); } renderVoyage(r.jobNo, changed || first); fitNames(); remarksFit93(); }
     else { renderHome(changed || first); fitNames(); fitPorts91(); moreBars93(); }
     if (changed && !back99Restore(back99, view)) view.scrollTop = 0;
@@ -842,7 +843,8 @@
       { id: 'round', label: 'Follow-ups', icon: 'check', href: '#/follow-ups', count: roundRows(today0()).due.length + remDueCount() },
       { id: 'enquiries', label: 'Enquiries', icon: 'enq', href: '#/enquiries', count: enqNew().length },
       { id: 'costing', label: 'Costing', icon: 'costing', href: '#/costing', count: costRows().open },
-      { id: 'cover', label: 'Cover', icon: 'swap', href: '#/cover', count: covIncoming98().length });   // v2.9.10: requests waiting for you
+      { id: 'cover', label: 'Cover', icon: 'swap', href: '#/cover', count: covIncoming98().length },   // v2.9.10: requests waiting for you
+      { id: 'reader', label: 'Document reader', icon: 'reader915', href: '#/reader' });   // v2.9.15
     if (isSales()) items.splice(items.length - 1, 0, { id: 'costing', label: 'Costing', icon: 'costing', href: '#/costing', count: costRows().open });
     return items;
   }
@@ -1928,7 +1930,7 @@
   // ---------- my account ----------
   function accountPanel() {
     const go2 = (href, ic, label, n) => '<button type="button" class="acct-go" data-href="' + href + '">' + icon(ic, 18) + '<span>' + label + '</span>' + (n ? '<b>' + n + '</b>' : '') + '</button>';
-    const shortcuts = canEdit() ? go2('#/follow-ups', 'check', 'Follow-ups', roundRows(today0()).due.length + remDueCount()) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length) + go2('#/costing', 'costing', 'Costing', costRows().open) + go2('#/cover', 'swap', 'Cover', covIncoming98().length) + arrGo914()   // v2.9.14: Arrange Home (phone)
+    const shortcuts = canEdit() ? go2('#/follow-ups', 'check', 'Follow-ups', roundRows(today0()).due.length + remDueCount()) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length) + go2('#/costing', 'costing', 'Costing', costRows().open) + go2('#/cover', 'swap', 'Cover', covIncoming98().length) + go2('#/reader', 'reader915', 'Document reader') + arrGo914()   // v2.9.14: Arrange Home (phone) · v2.9.15: Document reader
       : isSales() ? go2('#/enquiries', 'enq', 'My enquiries', enqOpen().length) + go2('#/costing', 'costing', 'Costing', costRows().open) + arrGo914()
       : isAdmin() ? go2('#/health', 'health913', 'System health') + go2('#/names', 'names913', 'Customer names') : '';   // v2.9.13
     return (shortcuts ? '<div class="acct-shortcuts">' + shortcuts + '</div>' : '') + '<div class="acct"><span class="avatar">' + esc(initials(state.user)) + '</span><div><div class="acct-name" id="drawerTitle">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(ROLE_NAMES[state.role] || state.role) + '</div></div></div>' +
@@ -3101,7 +3103,7 @@
   // It still ends after 4 hours unused or 16 hours in all, on Log out, or when the password changes.
   const SESSION = 'ethix.v2.session';
   function keepSession(user, role) { if (api.token) store.set(SESSION, { t: api.token, u: user, r: role || '' }); }
-  function dropSession() { try { localStorage.removeItem(SESSION); } catch (e) { /* private mode */ } }
+  function dropSession() { rd915Clear(); try { localStorage.removeItem(SESSION); } catch (e) { /* private mode */ } }
   function savedSession() { const s = store.get(SESSION, null); return s && typeof s.t === 'string' && /^[a-f0-9]{64}$/.test(s.t) && s.u ? s : null; }
   async function resumeSession() {
     const s = savedSession();
@@ -8709,6 +8711,549 @@
     if (!savedSession()) pkStartUnlock914();
   }
 
+  // ==================================================================== v2.9.15 — Document reader (Customer Service)
+  // Drop invoices / packing lists (PDF, scan, phone photo, several at once). Pages become pictures here (pdf.js, on this
+  // device); PDFs that already have text send their text instead (fewer Groq tokens, exact). Read with Groq: Code.gs calls
+  // Groq with the key from Script Properties. Nothing is saved — the results live in this page's memory until Start again,
+  // Log out or closing the page. Tabs: FOR THE SI · FOR THE BOE · DUBAI TRADE · ALL TEXT.
+  I.reader915 = '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M8.5 13h7M8.5 16.5h4.5"/>';
+  I.doc915 = '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>';
+  I.scan915 = '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M7.5 12h9"/>';
+  I.ok915 = '<path d="M5 12.5l4.5 4.5L19 7.5"/>';
+  const PDFJS915 = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/';
+  const RD_MAXP915 = 30, RD_MAXF915 = 12;
+  const RD = { user: null, files: [], tab: 'si', busy: false, stop: false, msg: null, n: 0, until: 0, tick: null, tries: 0,
+    tpm: 8000, rem: null, at: 0, q: Promise.resolve(), lib: null, done: 0 };
+  try { const g = JSON.parse(localStorage.getItem('ethix.v2.groq915') || 'null'); if (g && g.tpm > 1000) RD.tpm = g.tpm; } catch (e) { /* private mode */ }
+  const RD_KIND915 = { 'invoice': 'Invoice', 'packing list': 'Packing list', 'bill of lading': 'BL', 'certificate of origin': 'Certificate of origin' };
+  const rdPl915 = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+  function rd915Clear() {   // Log out / another person / Start again: everything read is forgotten
+    RD.stop = true; RD.files = []; RD.msg = null; RD.tab = 'si'; RD.user = state.user || null; RD.until = 0; RD.done = 0;
+    clearInterval(RD.tick); RD.tick = null;
+  }
+
+  // ---------- files → pages (on this device) ----------
+  function rdLib915() {
+    if (RD.lib) return RD.lib;
+    RD.lib = new Promise((ok, no) => {
+      if (window.pdfjsLib) return ok(window.pdfjsLib);
+      const s = document.createElement('script'); s.src = PDFJS915 + 'pdf.min.js'; s.async = true;
+      s.onload = () => { if (!window.pdfjsLib) return no(new Error('pdf')); window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS915 + 'pdf.worker.min.js'; ok(window.pdfjsLib); };
+      s.onerror = () => { RD.lib = null; no(new Error('The PDF reader could not load — check the internet and add the file again.')); };
+      document.head.appendChild(s);
+    });
+    return RD.lib;
+  }
+  const rdPages915 = () => RD.files.reduce((n, f) => n + f.pages.length, 0);
+  function rdAdd915(list) {
+    const files = [...(list || [])].filter((f) => f && f.size !== 0);
+    if (!files.length) return;
+    let skipped = 0;
+    files.forEach((file) => {
+      if (RD.files.length >= RD_MAXF915) { skipped++; return; }
+      const f = { id: ++RD.n, name: file.name || 'Pasted picture', st: 'prep', pages: [], meta: '', thumb: '', err: '', total: 0 };
+      RD.files.push(f);
+      RD.q = RD.q.then(() => rdPrep915(f, file));
+    });
+    RD.msg = null;
+    if (skipped) toast('Twelve files at a time — read these first, or Start again.');
+    rdDraw915();
+  }
+  async function rdPrep915(f, file) {
+    if (!RD.files.includes(f)) return;
+    try {
+      const isPdf = /pdf/i.test(file.type) || /\.pdf$/i.test(f.name);
+      const isImg = /^image\//i.test(file.type) || /\.(jpe?g|png|webp|heic|heif|gif|bmp|tiff?)$/i.test(f.name);
+      if (!isPdf && !isImg) throw new Error('Only PDFs and photos can be read.');
+      if (rdPages915() >= RD_MAXP915) throw new Error('Thirty pages at a time — read these first, or Start again.');
+      if (isPdf) await rdPdf915(f, file); else await rdImg915(f, file);
+      f.st = 'ready';
+    } catch (e) {
+      f.st = 'err'; f.pages = [];
+      const m = String(e && (e.message || e.name) || '');
+      f.err = /password/i.test(m + (e && e.name)) ? 'This PDF has a password — open it, save it without one, and add it again.'
+        : /Invalid PDF|corrupt|bad XRef|Missing PDF/i.test(m) ? 'This PDF could not be opened — it may be damaged.'
+        : /photo type|decode|load|image/i.test(m) && !/PDF reader/.test(m) ? 'This photo type cannot be opened here — save it as JPG and add it again.'
+        : m.length < 140 && /[a-z]/.test(m) && !/^(TypeError|Error)\b/.test(m) ? m : 'This file could not be opened.';
+    }
+    rdDraw915();
+  }
+  async function rdPdf915(f, file) {
+    const lib = await rdLib915();
+    const buf = new Uint8Array(await file.arrayBuffer());
+    const doc = await lib.getDocument({ data: buf, isEvalSupported: false, disableAutoFetch: true, disableStream: true }).promise;
+    try {
+      const room = Math.max(0, RD_MAXP915 - rdPages915());
+      const n = Math.min(doc.numPages, room);
+      f.total = doc.numPages; f.more = doc.numPages - n;
+      let scans = 0;
+      for (let i = 1; i <= n; i++) {
+        if (!RD.files.includes(f)) return;
+        const pg = await doc.getPage(i);
+        const p = { id: f.id + '.' + i, f, n: i, img: null, text: null, st: 'new', res: null };
+        p.text = await rdText915(pg);
+        if (!p.text) { p.img = await rdRender915(pg, 1500, 0.82); scans++; }
+        if (i === 1) f.thumb = await rdRender915(pg, 132, 0.72);
+        f.pages.push(p);
+        pg.cleanup();
+        if (n > 2) rdDraw915();
+      }
+      f.meta = (scans === 0 ? 'text PDF' : scans === n ? 'scanned' : 'PDF') + ' · ' + rdPl915(doc.numPages, 'page');
+    } finally { doc.destroy(); }
+  }
+  async function rdText915(pg) {   // the PDF's own text, laid out line by line (null when it is a scan)
+    let tc; try { tc = await pg.getTextContent(); } catch (e) { return null; }
+    const items = tc.items.filter((it) => it.str && it.str.trim());
+    const flat = items.map((it) => it.str).join('').replace(/\s/g, '');
+    if (flat.length < 40 || (flat.match(/[A-Za-z0-9]/g) || []).length / flat.length < 0.55) return null;
+    const rows = [];
+    items.forEach((it) => {
+      const x = it.transform[4], y = it.transform[5], h = Math.abs(it.transform[3]) || it.height || 10;
+      let r = rows.find((q) => Math.abs(q.y - y) < Math.max(2, Math.min(q.h, h) * 0.5));
+      if (!r) rows.push(r = { y, h, items: [] });
+      r.items.push({ x, w: it.width || 0, s: it.str });
+    });
+    rows.sort((a, b) => b.y - a.y);
+    return rows.map((r) => {
+      r.items.sort((a, b) => a.x - b.x);
+      let out = '', end = null;
+      r.items.forEach((it) => { if (end !== null) { const gap = it.x - end; out += gap > r.h * 1.1 ? '   ' : gap > r.h * 0.12 && !/\s$/.test(out) && !/^\s/.test(it.s) ? ' ' : ''; } out += it.s; end = it.x + it.w; });
+      return out.replace(/\s+$/, '');
+    }).filter(Boolean).join('\n').slice(0, 20000);
+  }
+  async function rdRender915(pg, long, q) {
+    const v1 = pg.getViewport({ scale: 1 }), sc = long / Math.max(v1.width, v1.height), vp = pg.getViewport({ scale: sc });
+    const c = document.createElement('canvas'); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+    const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+    await pg.render({ canvasContext: x, viewport: vp }).promise;
+    let u = c.toDataURL('image/jpeg', q); if (u.length > 1250000) u = c.toDataURL('image/jpeg', 0.66);
+    c.width = c.height = 0;
+    return u;
+  }
+  function rdImgEl915(file) {
+    return new Promise((ok, no) => {
+      const u = URL.createObjectURL(file), im = new Image();
+      im.onload = () => { ok(im); setTimeout(() => URL.revokeObjectURL(u), 2000); };
+      im.onerror = () => { URL.revokeObjectURL(u); no(new Error('This photo type cannot be opened here — save it as JPG and add it again.')); };
+      im.src = u;
+    });
+  }
+  function rdDraw915Img(src, w0, h0, long, q, cover) {
+    const c = document.createElement('canvas');
+    if (cover) { c.width = 76; c.height = 96; } else { const sc = Math.min(1, long / Math.max(w0, h0)); c.width = Math.round(w0 * sc); c.height = Math.round(h0 * sc); }
+    const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+    if (cover) { const sc = Math.max(c.width / w0, c.height / h0), w = w0 * sc, h = h0 * sc; x.drawImage(src, (c.width - w) / 2, (c.height - h) / 2, w, h); }
+    else x.drawImage(src, 0, 0, c.width, c.height);
+    let u = c.toDataURL('image/jpeg', q); if (!cover && u.length > 1250000) u = c.toDataURL('image/jpeg', 0.66);
+    c.width = c.height = 0;
+    return u;
+  }
+  async function rdImg915(f, file) {
+    const im = await rdImgEl915(file);
+    const w = im.naturalWidth, h = im.naturalHeight;
+    if (!w || !h) throw new Error('This photo type cannot be opened here — save it as JPG and add it again.');
+    f.pages.push({ id: f.id + '.1', f, n: 1, img: rdDraw915Img(im, w, h, 1600, 0.84), text: null, st: 'new', res: null });
+    f.thumb = rdDraw915Img(im, w, h, 0, 0.72, true);
+    f.total = 1; f.meta = 'photo · 1 page';
+  }
+
+  // ---------- Read with Groq: one to three pages a call, paced to the plan's tokens a minute ----------
+  const rdTodo915 = () => RD.files.filter((f) => f.st === 'ready').flatMap((f) => f.pages.filter((p) => p.st === 'new' || p.st === 'wait'));
+  function rdCost915(p) { return p.img ? { in: 2100, out: p.short ? 1500 : 1900 } : { in: Math.ceil(p.text.length / 3.2) + 40, out: 700 }; }
+  function rdNeed915(b) {
+    let i = 1000, o = 300; b.forEach((p) => { const c = rdCost915(p); i += c.in; o += c.out; });
+    o = Math.min(o, 6000); return { in: i, out: o, total: i + o, likely: i + Math.round(o * 0.7) };
+  }
+  function rdBatch915() {
+    const todo = rdTodo915(); if (!todo.length) return [];
+    const b = [todo[0]], cap = RD.tpm * 0.9;
+    if (!todo[0].solo) for (const p of todo.slice(1)) { if (b.length >= 3 || p.solo || rdNeed915(b.concat(p)).total > cap) break; b.push(p); }
+    return b;
+  }
+  function rdLim915(l) {
+    if (!l) return;
+    if (l.tpm > 1000) { RD.tpm = l.tpm; try { localStorage.setItem('ethix.v2.groq915', JSON.stringify({ tpm: l.tpm })); } catch (e) { /* private mode */ } }
+    if (typeof l.rem === 'number') { RD.rem = l.rem; RD.at = Date.now(); }
+  }
+  function rdWaitFor915(need) {
+    if (RD.rem === null) return 0;
+    const have = Math.min(RD.tpm, RD.rem + (Date.now() - RD.at) / 60000 * RD.tpm);
+    return have >= need ? 0 : Math.min(65, Math.ceil((need - have) / RD.tpm * 60) + 1);
+  }
+  function rdSleep915(sec) {
+    RD.until = Date.now() + sec * 1000; rdDraw915();
+    return new Promise((ok) => {
+      clearInterval(RD.tick);
+      RD.tick = setInterval(() => {
+        if (RD.stop) { clearInterval(RD.tick); RD.until = 0; return ok(false); }
+        if (Date.now() >= RD.until) { clearInterval(RD.tick); RD.until = 0; return ok(true); }
+        $$('[data-rd915-left]').forEach((e) => { e.textContent = rdLeft915(); });
+      }, 500);
+    });
+  }
+  const rdLeft915 = () => { const s = Math.max(0, Math.ceil((RD.until - Date.now()) / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+  function rdEta915(pages) {   // the whole read, in words
+    const tok = pages.reduce((n, p) => { const c = rdCost915(p); return n + c.in + c.out * 0.7 + 350; }, 0);
+    const min = tok / RD.tpm, calls = Math.ceil(pages.filter((p) => p.img).length + pages.filter((p) => !p.img).length / 3);
+    const sec = Math.max(min * 60, calls * 7);
+    return sec < 50 ? 'under a minute' : sec < 90 ? 'about a minute' : 'about ' + Math.round(sec / 60) + ' minutes';
+  }
+  async function rdRead915() {
+    if (RD.busy) { RD.stop = true; rdDraw915(); return; }
+    await RD.q;
+    if (!rdTodo915().length) return;
+    RD.busy = true; RD.stop = false; RD.msg = null; RD.tries = 0; RD.user = state.user;
+    rdDraw915();
+    let fail = null, read = 0;
+    try {
+      while (!RD.stop) {
+        const batch = rdBatch915(); if (!batch.length) break;
+        const need = rdNeed915(batch), wait = rdWaitFor915(need.likely);
+        if (wait > 0) { batch.forEach((p) => { p.st = 'wait'; }); if (!(await rdSleep915(wait))) { batch.forEach((p) => { p.st = 'new'; }); break; } }
+        batch.forEach((p) => { p.st = 'read'; }); rdDraw915();
+        let res;
+        try {
+          res = await api.call('ethixReadGroq', [{ pages: batch.map((p) => (p.img ? { img: p.img } : { text: p.text })), out: need.out, short: batch.some((p) => p.short) }], { timeout: 150000 });
+        } catch (e) { batch.forEach((p) => { p.st = 'new'; }); if (e && e.kind === 'auth') return; fail = { err: (e && e.message) || 'Could not reach EWS — try again.' }; break; }
+        if (!RD.files.some((f) => batch.some((p) => p.f === f))) continue;   // Start again while it was reading
+        res = res || {};
+        rdLim915(res.lim);
+        if (res.error) { batch.forEach((p) => { p.st = 'new'; }); fail = { err: res.error }; break; }
+        if (res.busy) {
+          batch.forEach((p) => { p.st = 'new'; });
+          if (res.wait && res.wait <= 65 && RD.tries < 3) {
+            RD.tries++; batch.forEach((p) => { p.st = 'wait'; });
+            const go = await rdSleep915(res.wait + 1); batch.forEach((p) => { p.st = 'new'; }); if (!go) break; continue;
+          }
+          fail = { busy: true, why: res.why }; break;
+        }
+        if (res.big || res.cut) {
+          if (batch.length > 1) { batch.forEach((p) => { p.solo = true; p.st = 'new'; }); continue; }
+          const p = batch[0];
+          if (!p.short) { p.short = true; p.st = 'new'; continue; }
+          p.st = 'err'; p.why = 'Too much on this page for one read — try a clearer scan or photo.'; continue;
+        }
+        RD.tries = 0;
+        batch.forEach((p, i) => {
+          const x = (res.pages || [])[i] || { kind: 'other', text: '' };
+          p.res = { kind: x.kind || 'other', text: p.text ? '' : String(x.text || ''), fields: x.fields || {}, lines: [], totals: [] };
+          p.st = 'done'; read++;
+        });
+        (res.lines || []).forEach((l) => { const p = batch[(l.p || 1) - 1]; if (p) p.res.lines.push(l); });
+        (res.totals || []).forEach((t) => { const p = batch[(t.p || 1) - 1]; if (p) p.res.totals.push(t); });
+        if (RD.files.some((f) => f.pages.some((p) => p.st === 'done')) && !RD.done) RD.done = 1;
+        rdDraw915();
+      }
+    } finally {
+      RD.busy = false; RD.until = 0; clearInterval(RD.tick);
+      RD.files.forEach((f) => f.pages.forEach((p) => { if (p.st === 'read' || p.st === 'wait') p.st = 'new'; }));
+    }
+    if (fail && fail.busy) {
+      RD.msg = { kind: 'busy', text: fail.why === 'day' ? 'Groq’s free plan is used up for today — try again tomorrow.' : fail.why === 'hour' ? 'You have read a lot this hour — try again in a little while.' : 'Groq is busy — try again in a minute.' };
+      rdNote915(RD.msg.text);
+    } else if (fail) { RD.msg = { kind: 'err', text: fail.err }; toast(fail.err, { error: true }); }
+    else if (read && !RD.stop && !(state.route && state.route.name === 'reader')) toast('Document reader — ' + rdPl915(read, 'page') + ' read');
+    RD.stop = false;
+    rdDraw915();
+  }
+  function rdNote915(text) {   // the capsule with an amber hourglass (a wait, not a success)
+    note99(text, {});
+    const pill = $('#savePill'), t = $('#savePillText'); if (!pill || !t) return;
+    pill.classList.add('is-wait915');
+    const off = () => { pill.classList.remove('is-wait915'); mo.disconnect(); };
+    const mo = new MutationObserver(() => { if (t.textContent !== text) off(); });
+    mo.observe(t, { childList: true, characterData: true, subtree: true });
+    setTimeout(off, 4000);
+  }
+  function rdDraw915() { if (state.signedIn && state.route && state.route.name === 'reader') rerender(); }
+
+  // ---------- what was read → the SI, the BOE, all text ----------
+  const rdDone915 = () => RD.files.flatMap((f) => f.pages.filter((p) => p.st === 'done' && p.res));
+  const rdNum915 = (n, d) => (n === null || n === undefined || !isFinite(n) ? '' : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }));
+  function rdKg915(n, u) {
+    if (n === null || n === undefined || !isFinite(n)) return null;
+    const t = String(u || '').toUpperCase().replace(/[^A-Z]/g, '');
+    const k = /^(MT|MTS|MTON|TON|TONS|TONNE|TONNES|TNE|T)$/.test(t) ? 1000 : /^(LB|LBS|POUNDS?)$/.test(t) ? 0.45359237 : /^(G|GM|GMS|GRAMS?)$/.test(t) ? 0.001 : 1;
+    return Math.round(n * k * 1000) / 1000;
+  }
+  function rdSrc915(p, total) {
+    const k = RD_KIND915[p.res.kind];
+    if (total) return (k || p.f.name.replace(/\.[a-z0-9]+$/i, '').slice(0, 22)) + ' total';
+    return (k || p.f.name.replace(/\.[a-z0-9]+$/i, '').slice(0, 22)) + ' p' + p.n;
+  }
+  const RD_PARTY915 = ['invoice', 'packing list', 'bill of lading', 'certificate of origin', 'other'];
+  const RD_PACK915 = ['packing list', 'invoice', 'bill of lading', 'certificate of origin', 'other'];
+  function rdRank915(list, order) { return list.map((x, i) => [x, i]).sort((a, b) => (order.indexOf(a[0].p.res.kind) - order.indexOf(b[0].p.res.kind)) || a[1] - b[1]).map((x) => x[0]); }
+  function rdCands915(key) { return rdDone915().filter((p) => p.res.fields[key] && p.res.fields[key].v).map((p) => ({ p, v: String(p.res.fields[key].v), sure: p.res.fields[key].sure !== false })); }
+  const rdKey915 = (v) => String(v || '').toUpperCase().split('\n')[0].replace(/\b(LLC|L\.L\.C|FZE|FZCO|FZC|FZ|LTD|LIMITED|PVT|CO|INC)\b\.?/g, '').replace(/[^A-Z0-9]/g, '').slice(0, 24);
+  function rdPick915(key, order, same) {
+    const c = rdRank915(rdCands915(key), order); if (!c.length) return null;
+    const top = c[0], cmp = same || ((v) => String(v).toUpperCase().replace(/[^A-Z0-9]/g, ''));
+    const other = c.find((x) => (x.p.res.kind !== top.p.res.kind || x.p.f !== top.p.f) && cmp(x.v) && cmp(x.v) !== cmp(top.v));   // another document, or another file
+    return { v: top.v, src: rdSrc915(top.p), f: top.p.f, chk: !top.sure || !!other, why: other ? rdSrc915(other.p) + ' says ' + String(other.v).split('\n')[0] : '' };
+  }
+  function rdTot915(field, order) {   // a total weight / volume: the packing list first; another document that disagrees → CHECK
+    const c = [];
+    rdDone915().forEach((p) => p.res.totals.forEach((t) => { const v = field === 'cbm' ? t.cbm : rdKg915(t[field], t.wu); if (v) c.push({ p, v }); }));
+    const r = rdRank915(c, order); if (!r.length) return null;
+    const top = r[0], other = r.find((x) => (x.p.res.kind !== top.p.res.kind || x.p.f !== top.p.f) && Math.abs(x.v - top.v) > Math.max(0.0015, top.v * 0.0005));
+    return { v: top.v, src: rdSrc915(top.p, true), chk: !!other, why: other ? rdSrc915(other.p, true) + ' says ' + rdNum915(other.v, 3) + (field === 'cbm' ? ' CBM' : ' KGS') : '' };
+  }
+  const RD_ISO915 = { INDIA: 'IN', CHINA: 'CN', 'PEOPLES REPUBLIC OF CHINA': 'CN', PRC: 'CN', TAIWAN: 'TW', 'UNITED ARAB EMIRATES': 'AE', UAE: 'AE', 'U.A.E': 'AE', 'U.A.E.': 'AE', PAKISTAN: 'PK', BANGLADESH: 'BD', 'SRI LANKA': 'LK', TURKEY: 'TR', TURKIYE: 'TR', ITALY: 'IT', GERMANY: 'DE', SPAIN: 'ES', FRANCE: 'FR', 'UNITED KINGDOM': 'GB', UK: 'GB', 'UNITED STATES': 'US', USA: 'US', JAPAN: 'JP', KOREA: 'KR', 'SOUTH KOREA': 'KR', VIETNAM: 'VN', 'VIET NAM': 'VN', THAILAND: 'TH', MALAYSIA: 'MY', INDONESIA: 'ID', SINGAPORE: 'SG', 'SAUDI ARABIA': 'SA', OMAN: 'OM', EGYPT: 'EG', AFGHANISTAN: 'AF', IRAN: 'IR', BRAZIL: 'BR' };
+  const rdIso915 = (v) => { const t = String(v || '').toUpperCase().replace(/^MADE IN\s+/, '').trim(); return /^[A-Z]{2}$/.test(t) ? t : RD_ISO915[t] || RD_ISO915[t.replace(/\./g, '')] || t; };
+  function rdDate915(v) { const m = String(v || '').match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? m[3] + '-' + m[2] + '-' + m[1] : String(v || ''); }
+  function rdPkg915(v) { return String(v || '').toUpperCase().replace(/\d{4,}(\.\d+)?/g, (n) => Number(n).toLocaleString('en-US', { maximumFractionDigits: 3 })); }
+  function rdMerge915() {
+    const done = rdDone915(), F = {};
+    const field = (k, label, v, extra) => { F[k] = Object.assign({ k, label, v: v ? v.v : '', src: v ? v.src : '', chk: !!(v && v.chk), why: v ? v.why || '' : '' }, extra || {}); };
+    const party = (k, alt) => rdPick915(k, RD_PARTY915, rdKey915) || (alt ? rdPick915(alt, RD_PARTY915, rdKey915) : null);
+    const up = (x) => (x ? Object.assign({}, x, { v: String(x.v).toUpperCase() }) : x);
+    field('shipper', 'SHIPPER', up(party('shipper', 'exporter')));
+    field('consignee', 'CONSIGNEE', up(party('consignee', 'importer')));
+    field('notify', 'NOTIFY PARTY', up(party('notify')));
+    field('marks', 'MARKS & NUMBERS', up(rdPick915('marks', RD_PACK915)));
+    // lines (the BOE) — the invoice's own lines; weights from the packing list when the invoice has none and the lines match
+    const inv = done.filter((p) => p.res.kind === 'invoice').flatMap((p) => p.res.lines.map((l) => Object.assign({ pg: p }, l)));
+    const pl = done.filter((p) => p.res.kind === 'packing list').flatMap((p) => p.res.lines.map((l) => Object.assign({ pg: p }, l)));
+    const other = done.filter((p) => p.res.kind !== 'invoice' && p.res.kind !== 'packing list').flatMap((p) => p.res.lines.map((l) => Object.assign({ pg: p }, l)));
+    const base = inv.length ? inv : pl.length ? pl : other;
+    const origAll = rdCands915('origin'), origOne = [...new Set(origAll.map((x) => rdIso915(x.v)))];
+    const origOf = (f) => { const x = origAll.find((o) => o.p.f === f); return x ? x.v : origOne.length === 1 ? origOne[0] : ''; };   // the same file's origin; another file's only when all agree
+    let wFrom = '';
+    const lines = base.map((l) => ({ hs: String(l.hs || '').replace(/[^0-9]/g, ''), hsRaw: l.hs || '', desc: l.desc || '', origin: rdIso915(l.origin || origOf(l.pg.f)), qty: l.qty, unit: String(l.unit || '').toUpperCase(),
+      gross: rdKg915(l.gross, l.wu), net: rdKg915(l.net, l.wu), value: base === inv ? l.value : null, sure: l.sure !== false, src: rdSrc915(l.pg), pf: l.pg.f }));
+    if (base === inv && pl.length === inv.length && lines.every((l) => l.gross === null && l.net === null)) {
+      lines.forEach((l, i) => { l.gross = rdKg915(pl[i].gross, pl[i].wu); l.net = rdKg915(pl[i].net, pl[i].wu); }); wFrom = 'pl';
+    }
+    // description: the invoice's words + its HS codes
+    const desc = rdPick915('description', RD_PARTY915);
+    if (desc) {
+      const hs = [...new Set(lines.filter((l) => l.pf === desc.f).map((l) => String(l.hsRaw || '').trim()).filter((x) => /\d{4}/.test(x)))];
+      const have = desc.v.replace(/[^0-9]/g, '');
+      const add = hs.filter((x) => have.indexOf(x.replace(/[^0-9]/g, '')) < 0);
+      desc.v = desc.v.toUpperCase() + (add.length ? '\nHS CODE ' + add.join(', ') : '');
+      const kinds = [...new Set(rdCands915('description').map((x) => x.p.res.kind))].filter((k) => RD_KIND915[k] && desc.src.indexOf(RD_KIND915[k]) !== 0);
+      if (kinds.length) desc.src += ' · ' + kinds.map((k) => RD_KIND915[k]).join(' · ');
+    }
+    field('description', 'DESCRIPTION OF GOODS', desc, { wide: true });
+    // packages, weights, volume — the packing list's totals first
+    let pk = rdPick915('packages', RD_PACK915);
+    if (!pk) { const c = []; done.forEach((p) => p.res.totals.forEach((t) => { if (t.packages) c.push({ p, v: t.packages }); })); const r = rdRank915(c, RD_PACK915); if (r.length) pk = { v: r[0].v, src: rdSrc915(r[0].p, true), chk: false }; }
+    if (pk) pk.v = rdPkg915(pk.v);
+    field('packages', 'PACKAGES', pk);
+    const sum = (k) => (lines.length && lines.every((l) => typeof l[k] === 'number') ? Math.round(lines.reduce((n, l) => n + l[k], 0) * 1000) / 1000 : null);
+    const kg = (k) => { const t = rdTot915(k, RD_PACK915); if (t) return Object.assign(t, { v: rdNum915(t.v, 3) + ' KGS', n: t.v }); const s = sum(k); return s ? { v: rdNum915(s, 3) + ' KGS', n: s, src: 'Lines added up', chk: false, why: '' } : null; };
+    const g = kg('gross'), n = kg('net');
+    if (g && n && n.n > g.n + 0.0005) { n.chk = true; n.why = n.why || 'Net is more than gross'; }
+    field('gross', 'GROSS WEIGHT', g); field('net', 'NET WEIGHT', n);
+    const vol = rdTot915('cbm', RD_PACK915); if (vol) vol.v = rdNum915(vol.v, 3) + ' CBM';
+    field('volume', 'VOLUME', vol);
+    const ino = rdPick915('invoice_no', RD_PARTY915), idt = rdPick915('invoice_date', RD_PARTY915);
+    field('invoice', 'INVOICE NO. / DATE', ino || idt ? { v: [ino ? ino.v.toUpperCase() : '', idt ? rdDate915(idt.v) : ''].filter(Boolean).join(' · '), src: (ino || idt).src, chk: !!((ino && ino.chk) || (idt && idt.chk)), why: (ino && ino.why) || (idt && idt.why) || '' } : null);
+    const inc = rdPick915('incoterm', RD_PARTY915), plc = rdPick915('place', RD_PARTY915), fr = rdPick915('freight', RD_PARTY915);
+    const incT = inc ? inc.v.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3) : '';
+    const frT = fr ? fr.v.toUpperCase().replace(/^FREIGHT\s+/, '') : /^(C|D)/.test(incT) ? 'PREPAID' : /^(E|F)/.test(incT) ? 'COLLECT' : '';
+    field('freight', 'FREIGHT TERMS', inc || fr ? { v: [incT + (plc ? ' ' + plc.v.toUpperCase() : ''), frT ? 'FREIGHT ' + frT : ''].filter((x) => x.trim()).join(' · '), src: (inc || fr).src, chk: !!((inc && inc.chk) || (fr && fr.chk)), why: (inc && inc.why) || '' } : null);
+    // the BOE: lines, totals checked against the invoice
+    const cur = rdPick915('currency', RD_PARTY915);
+    const tots = done.filter((p) => p.res.kind === 'invoice').flatMap((p) => p.res.totals);
+    const curT = (cur ? cur.v : (tots.find((t) => t.cur) || {}).cur || '').toUpperCase().slice(0, 3);
+    const qtyUnits = [...new Set(lines.map((l) => l.unit))];
+    const T = { qty: qtyUnits.length === 1 && lines.every((l) => typeof l.qty === 'number') ? lines.reduce((s, l) => s + l.qty, 0) : null, unit: qtyUnits.length === 1 ? qtyUnits[0] : '',
+      gross: sum('gross'), net: sum('net'), value: lines.length && lines.every((l) => typeof l.value === 'number') ? Math.round(lines.reduce((s, l) => s + l.value, 0) * 100) / 100 : null };
+    let wTot = false;
+    if (T.gross === null && g) { T.gross = g.n; wTot = true; }
+    if (T.net === null && n) { T.net = n.n; wTot = true; }
+    const money = (x) => (curT ? curT + ' ' : '') + rdNum915(x, 2);
+    const t0 = tots.find((t) => t.goods !== null || t.total !== null) || null;
+    let check = { ok: null, text: '' };
+    if (T.value !== null && t0) {
+      const ch = t0.charges || [], chSum = ch.reduce((s, c) => s + (c.n || 0), 0), goods = t0.goods !== null ? t0.goods : t0.total !== null && !ch.length ? t0.total : null;
+      const eq = (a, b) => Math.abs(a - b) < 0.015;
+      if (goods !== null && eq(T.value, goods)) {
+        check = ch.length && t0.total !== null && eq(goods + chSum, t0.total)
+          ? { ok: true, text: 'Totals checked: the lines add up to ' + money(T.value) + '; with ' + ch.map((c) => (c.what || 'charges').toLowerCase() + ' ' + money(c.n)).join(' and ') + ' that is the invoice total, ' + money(t0.total) + '.' }
+          : { ok: true, text: 'Totals checked: the lines add up to the invoice total.' };
+      } else if (goods !== null) check = { ok: false, text: 'Check the lines: they add up to ' + money(T.value) + ' — the invoice says ' + money(goods) + '.' };
+      else if (t0.total !== null) check = { ok: false, text: 'Check the lines: they add up to ' + money(T.value) + ' — the invoice total is ' + money(t0.total) + (ch.length ? ' with ' + ch.map((c) => (c.what || 'charges').toLowerCase()).join(', ') : '') + '.' };
+    } else if (T.value !== null && lines.length) check = { ok: null, text: 'The invoice total was not found — the lines add up to ' + money(T.value) + '.' };
+    const plG = rdTot915('gross', ['packing list']);
+    if (!wTot && T.gross !== null && plG && Math.abs(plG.v - T.gross) > Math.max(0.0015, T.gross * 0.0005)) check = { ok: false, text: (check.text ? check.text + ' ' : '') + 'Gross weights add up to ' + rdNum915(T.gross, 3) + ' KGS — the packing list says ' + rdNum915(plG.v, 3) + ' KGS.' };
+    const nameOf = (x) => (x ? Object.assign({}, x, { v: String(x.v).split('\n')[0].toUpperCase(), chk: !!x.chk }) : null);
+    const cards = [
+      Object.assign({ k: 'importer', label: 'IMPORTER' }, rdCard915(nameOf(rdPick915('importer', RD_PARTY915, rdKey915) || party('consignee')))),
+      Object.assign({ k: 'exporter', label: 'EXPORTER' }, rdCard915(nameOf(rdPick915('exporter', RD_PARTY915, rdKey915) || party('shipper')))),
+      Object.assign({ k: 'incoterm', label: 'INCOTERMS' }, rdCard915(inc ? Object.assign({}, inc, { v: incT }) : null)),
+      Object.assign({ k: 'currency', label: 'INVOICE CURRENCY' }, rdCard915(curT ? { v: curT, src: cur ? cur.src : t0 ? 'Invoice total' : '', chk: !!(cur && cur.chk) } : null))];
+    const text = RD.files.flatMap((f) => f.pages.filter((p) => p.st === 'done' || (p.text && p.st !== 'err')).map((p) => ({ p, kind: p.res ? (RD_KIND915[p.res.kind] || 'Other') : 'Text', text: p.text || (p.res && p.res.text) || '' }))).filter((x) => x.text);
+    return { any: done.length > 0, F, lines, T, wFrom, wTot, check, cards, cur: curT, ino: ino ? ino.v.toUpperCase() : '', inc: incT, text };
+  }
+  function rdCard915(x) { return x ? { v: x.v, src: x.src || '', chk: !!x.chk, why: x.why || '' } : { v: '', src: '', chk: false, why: '' }; }
+  const RD_SI915 = ['shipper', 'consignee', 'notify', 'marks', 'description', 'packages', 'gross', 'net', 'volume', 'invoice', 'freight'];
+  function rdSiText915(M) { return RD_SI915.map((k) => M.F[k]).filter((f) => f.v).map((f) => f.label + ':\n' + f.v).join('\n\n'); }
+  function rdLineText915(l, cur) { return [l.hs, l.desc, l.origin, l.qty === null || l.qty === undefined ? '' : l.qty, l.unit, l.gross === null ? '' : l.gross.toFixed(3), l.net === null ? '' : l.net.toFixed(3), l.value === null || l.value === undefined ? '' : Number(l.value).toFixed(2), l.value === null || l.value === undefined ? '' : cur].join('\t'); }
+
+  // ---------- the page ----------
+  function rdFileSt915(f) {
+    if (f.st === 'prep') return ['is-prep', 'OPENING…'];
+    if (f.st === 'err') return ['is-err', 'CAN’T OPEN'];
+    const P = f.pages, d = P.filter((p) => p.st === 'done').length;
+    if (P.some((p) => p.st === 'read')) return ['is-read', 'READING' + (P.length > 1 ? ' P' + P.find((p) => p.st === 'read').n : '')];
+    if (P.some((p) => p.st === 'wait') && RD.until) return ['is-wait', 'WAITING <span data-rd915-left>' + rdLeft915() + '</span>'];
+    if (P.length && d === P.length) return ['is-done', 'READ ' + icon('ok915', 11)];
+    if (P.some((p) => p.st === 'err') && d + P.filter((p) => p.st === 'err').length === P.length) return ['is-err', d ? d + ' OF ' + P.length + ' READ' : 'NOT READ'];
+    if (d) return ['is-part', d + ' OF ' + P.length + ' READ'];
+    return ['is-new', 'READY'];
+  }
+  function rdFileRow915(f) {
+    const st = rdFileSt915(f), P = f.pages, d = P.filter((p) => p.st === 'done').length;
+    const meta = f.st === 'err' ? f.err : f.st === 'prep' ? 'getting the pages ready' : f.meta + (f.more ? ' · first ' + P.length + ' read' : '');
+    const bar = RD.busy && P.length > 1 && d < P.length && f.st === 'ready' ? '<i class="rd915-bar"><b style="width:' + Math.round(d / P.length * 100) + '%"></b></i>' : '';
+    return '<div class="rd915-file ' + st[0] + '" data-f="' + f.id + '">' +
+      '<span class="rd915-th">' + (f.thumb ? '<img src="' + f.thumb + '" alt="">' : '') + '</span>' +
+      '<div class="rd915-fn"><b title="' + esc(f.name) + '">' + esc(f.name) + '</b><small>' + esc(meta) + '</small>' + bar + '</div>' +
+      '<span class="rd915-st">' + st[1] + '</span>' +
+      (RD.busy && f.pages.some((p) => p.st === 'read') ? '' : '<button type="button" class="rd915-x" data-rd915="rm" data-f="' + f.id + '" aria-label="Remove ' + esc(f.name) + '">' + icon('close', 13) + '</button>') + '</div>';
+  }
+  function rdLeftCard915() {
+    const todo = rdTodo915(), prep = RD.files.some((f) => f.st === 'prep'), total = RD.files.reduce((n, f) => n + f.pages.length, 0);
+    const done = RD.files.reduce((n, f) => n + f.pages.filter((p) => p.st === 'done').length, 0), anyDone = done > 0;
+    const ph = isTouch();
+    let act = '';
+    if (RD.busy) {
+      const cur = RD.files.flatMap((f) => f.pages).filter((p) => p.st === 'read');
+      act = '<div class="rd915-run" role="status">' + (RD.until ? '<span class="rd915-dot is-wait"></span>Waiting for Groq’s free plan · <b data-rd915-left>' + rdLeft915() + '</b>'
+        : '<span class="rd915-dot"></span>Groq is reading ' + (cur.length > 1 ? 'pages ' : 'page ') + (done + 1) + (cur.length > 1 ? '–' + (done + cur.length) : '') + ' of ' + total + '…') + '</div>' +
+        '<button type="button" class="btn-ghost rd915-stop" data-rd915="read">Stop</button>';
+    } else if (RD.files.length) {
+      const label = prep ? 'Getting the pages ready…' : RD.msg && todo.length ? 'Try again' : todo.length && anyDone ? 'Read ' + rdPl915(todo.length, 'new page') + ' with Groq' : 'Read with Groq';
+      act = (RD.msg ? '<div class="rd915-msg is-' + RD.msg.kind + '" role="alert">' + esc(RD.msg.text) + '</div>' : '') +
+        (todo.length || prep ? '<button type="button" class="rd915-go" data-rd915="read"' + (prep ? ' disabled' : '') + '>' + icon('scan915', 17) + '<span>' + label + '</span></button>' +
+          (!prep && todo.length && !RD.msg ? '<div class="rd915-eta">' + rdPl915(todo.length, 'page') + ' · ' + rdEta915(todo) + (RD.tpm <= 12000 ? ' on Groq’s free plan' : '') + '</div>' : '')
+        : anyDone ? '<div class="rd915-all-done">' + icon('ok915', 14) + '<span>' + (done === total && total > 1 ? 'All ' + total + ' pages read' : rdPl915(done, 'page') + ' read') + '</span></div>' : '');
+    }
+    return '<section class="rd915-card">' +
+      '<button type="button" class="rd915-drop" data-rd915="pick" aria-label="Add invoices or packing lists"><span class="rd915-dic">' + icon('doc915', 19) + '</span>' +
+        '<b>' + (ph ? 'Add invoice, packing list…' : 'Drop invoice, packing list…') + '</b><small>' + (ph ? 'PDF, scan or take a photo · several at once' : 'PDF, scan or phone photo · several at once') + '</small></button>' +
+      (RD.files.length ? '<div class="rd915-files">' + RD.files.map(rdFileRow915).join('') + '</div>' : '') +
+      (act ? '<div class="rd915-act">' + act + '</div>' : '') +
+      '<div class="rd915-safe">' + icon('lock', 14) + '<span>Nothing is saved — close the page and it is gone. Read with Groq sends these pages to Groq to be read.</span></div>' +
+      (RD.files.length && !RD.busy ? '<button type="button" class="rd915-again" data-rd915="clear">Start again</button>' : '') +
+    '</section>';
+  }
+  function rdField915(f, ghost) {
+    const empty = !f.v;
+    if (empty && RD.busy) ghost = true;   // still reading: it may be on a page not read yet
+    return '<div class="rd915-f' + (f.wide ? ' is-wide' : '') + (f.chk ? ' is-chk' : '') + (empty ? ' is-empty' : '') + '" data-k="' + f.k + '">' +
+      '<small><span>' + f.label + '</span>' + (f.src ? '<em>' + esc(f.src) + '</em>' : '') + (f.chk ? '<span class="rd915-chk" title="' + esc(f.why || 'Groq was not sure — check it on the document') + '">CHECK</span>' : '') + '</small>' +
+      (ghost ? '<span class="rd915-sk"></span>' + (f.wide ? '<span class="rd915-sk is-s"></span>' : '') : empty ? '<pre class="is-none">' + (rdDone915().length ? 'Not on these documents' : '—') + '</pre>' : '<pre>' + esc(f.v) + '</pre>') +
+      (f.chk && f.why ? '<div class="rd915-why">' + esc(f.why) + '</div>' : '') +
+      (empty || ghost ? '' : '<button type="button" class="rd915-cp" data-rd915="cp" data-k="' + f.k + '" aria-label="Copy ' + esc(f.label.toLowerCase()) + '">' + icon('copy', 15) + '</button>') + '</div>';
+  }
+  function rdSiHtml915(M) {
+    const ghost = !M.any && RD.busy;
+    return '<div class="rd915-fl">' + RD_SI915.map((k) => rdField915(M.F[k], ghost)).join('') + '</div>';
+  }
+  function rdBoeHtml915(M) {
+    const L = M.lines, ghost = !M.any && RD.busy;
+    const td = (k, v, cls) => '<td data-k="' + k + '"' + (cls ? ' class="' + cls + '"' : '') + '>' + v + '</td>';
+    const dash = '<span class="is-none">—</span>';
+    const rows = L.length ? L.map((l, i) => '<tr class="' + (l.sure ? '' : 'is-chk') + '">' + td('#', i + 1, 'rd915-n') +
+      td('HS CODE', l.hs ? esc(l.hs) + (l.hs.length < 8 ? '<span class="rd915-chk" title="Dubai Trade asks for 8 digits">CHECK</span>' : '') : '<span class="rd915-nohs" title="No HS code on the invoice for this line">—</span>', 'm' + (l.hs && l.hs.length < 8 ? ' is-chk' : '')) +
+      td('GOODS DESCRIPTION', esc(l.desc) || dash, 'rd915-d') + td('ORIGIN', esc(l.origin) || dash) + td('QTY', l.qty === null || l.qty === undefined ? dash : rdNum915(l.qty, l.qty % 1 ? 3 : 0), 'm') + td('UNIT', esc(l.unit) || dash) +
+      td('GROSS KG', l.gross === null ? dash : rdNum915(l.gross, 3), 'm') + td('NET KG', l.net === null ? dash : rdNum915(l.net, 3), 'm') +
+      td('VALUE', l.value === null || l.value === undefined ? dash : (M.cur ? '<span class="rd915-cur">' + esc(M.cur) + '</span>' : '') + rdNum915(l.value, 2), 'm rd915-v') +
+      '<td class="rd915-lc"><button type="button" class="rd915-cp is-line" data-rd915="line" data-i="' + i + '" aria-label="Copy line ' + (i + 1) + '">' + icon('copy', 14) + '</button></td></tr>').join('')
+      : ghost ? [0, 1, 2].map(() => '<tr class="is-sk"><td colspan="10"><span class="rd915-sk"></span></td></tr>').join('')
+      : '<tr class="is-empty"><td colspan="10">' + (M.any ? 'No goods lines on these documents.' : 'The invoice’s goods lines appear here, in the order Dubai Trade asks for them.') + '</td></tr>';
+    const T = M.T;
+    const foot = L.length ? '<tfoot><tr><td></td><td colspan="3">TOTAL' + (M.ino ? ' · invoice ' + esc(M.ino) : '') + (M.inc ? ' · ' + esc(M.inc) : '') + '</td>' +
+      td('QTY', T.qty === null ? dash : rdNum915(T.qty, T.qty % 1 ? 3 : 0), 'm') + td('UNIT', esc(T.unit) || '') +
+      td('GROSS KG', T.gross === null ? dash : rdNum915(T.gross, 3), 'm') + td('NET KG', T.net === null ? dash : rdNum915(T.net, 3), 'm') +
+      td('VALUE', T.value === null ? dash : (M.cur ? '<span class="rd915-cur">' + esc(M.cur) + '</span>' : '') + rdNum915(T.value, 2), 'm rd915-v') + '<td></td></tr></tfoot>' : '';
+    const card = (c) => rdField915({ k: c.k, label: c.label, v: c.v, src: c.src, chk: c.chk, why: c.why }, ghost);
+    const notes = [];
+    if (L.length) notes.push('Each line copies in the order Dubai Trade asks for it.');
+    const noHs = L.filter((l) => !l.hs).length;
+    const hsNote = noHs ? (noHs === L.length ? 'No HS codes on the invoice — add them in Dubai Trade.' : rdPl915(noHs, 'line') + ' without an HS code — add ' + (noHs === 1 ? 'it' : 'them') + ' in Dubai Trade.') : '';
+    if (M.wFrom === 'pl') notes.push('Weights per line from the packing list.');
+    else if (M.wTot) notes.push('Weights per line are not on the invoice — the totals are the packing list’s.');
+    return '<div class="rd915-tw"><table class="rd915-tb"><thead><tr><th>#</th><th>HS CODE</th><th>GOODS<br>DESCRIPTION</th><th>ORIGIN</th><th>QTY</th><th>UNIT</th><th>GROSS KG</th><th>NET KG</th><th>VALUE</th><th></th></tr></thead><tbody>' + rows + '</tbody>' + foot + '</table></div>' +
+      '<div class="rd915-fl is-boe">' + M.cards.map(card).join('') + '</div>' +
+      (notes.length || M.check.text || hsNote ? '<div class="rd915-note' + (M.check.ok === false ? ' is-chk' : '') + '">' + esc(notes.join(' ')) + (M.check.text ? ' <span>' + esc(M.check.text) + '</span>' : '') + (hsNote ? ' <b class="rd915-hsn">' + esc(hsNote) + '</b>' : '') + '</div>' : '');
+  }
+  function rdTextHtml915(M) {
+    if (!M.text.length) return '<div class="rd915-empty">' + icon('reader915', 22) + '<span>' + (RD.busy ? 'The text of each page appears here as Groq reads it.' : 'The text of every page appears here once it is read — ready to copy.') + '</span></div>';
+    return '<div class="rd915-pages">' + M.text.map((x, i) => '<article class="rd915-pgx"><header><b>' + esc(x.kind.toUpperCase()) + '</b><em>' + esc(x.p.f.name) + ' · p' + x.p.n + '</em>' +
+      '<button type="button" class="rd915-cp" data-rd915="page" data-i="' + i + '" aria-label="Copy the text of this page">' + icon('copy', 15) + '</button></header><pre>' + esc(x.text) + '</pre></article>').join('') + '</div>';
+  }
+  function renderReader915(first) {
+    if (RD.user !== state.user && !RD.busy) rd915Clear();
+    const M = rdMerge915(); RD.M = M;
+    const anim = first ? ' reveal' : '';
+    const tab = (id, label) => '<button type="button" role="tab" class="rd915-tab' + (RD.tab === id ? ' is-on' : '') + '" aria-selected="' + (RD.tab === id) + '" data-rd915="tab" data-t="' + id + '">' + label + '</button>';
+    const allLabel = RD.tab === 'boe' ? 'Copy all lines' : RD.tab === 'text' ? 'Copy all text' : 'Copy all for the SI';
+    const can = RD.tab === 'boe' ? M.lines.length > 0 : RD.tab === 'text' ? M.text.length > 0 : RD_SI915.some((k) => M.F[k].v);
+    $('#view').innerHTML = '<div class="rd915-pg">' +
+      '<header class="rd915-head' + anim + '"><div class="rd915-kick">TOOLS · SI AND BOE HELPER</div><h1>Document reader</h1>' +
+        '<p class="rd915-sub">Drop the invoice and packing list — even scanned. Groq reads them and EWS lays the details out ready to copy.</p></header>' +
+      '<div class="rd915-g' + anim + '">' + rdLeftCard915() +
+        '<div class="rd915-r"><div class="rd915-tabs"><div class="rd915-tl" role="tablist" aria-label="Document reader">' + tab('si', 'FOR THE SI') + tab('boe', 'FOR THE BOE · DUBAI TRADE') + tab('text', 'ALL TEXT') + '</div>' +
+          '<button type="button" class="rd915-all" data-rd915="all"' + (can ? '' : ' disabled') + '>' + icon('copy', 16) + '<span>' + allLabel + '</span></button></div>' +
+          '<div class="rd915-body' + (RD.busy && !M.any ? ' is-wait' : '') + '" role="tabpanel">' + (RD.tab === 'boe' ? rdBoeHtml915(M) : RD.tab === 'text' ? rdTextHtml915(M) : rdSiHtml915(M)) + '</div></div>' +
+      '</div></div>';
+  }
+
+  // ---------- copy ----------
+  async function rdCopy915(text, btn) {
+    let ok = false;
+    try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); ok = true; } } catch (e) { ok = false; }
+    if (!ok) { const ta = document.createElement('textarea'); ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;'; document.body.appendChild(ta); ta.select(); try { ok = document.execCommand('copy'); } catch (e) { ok = false; } ta.remove(); }
+    if (ok && btn) { btn.classList.add('is-copied'); const k = btn.innerHTML; btn.innerHTML = icon('ok915', btn.classList.contains('rd915-all') ? 16 : 15) + (btn.classList.contains('rd915-all') ? '<span>Copied</span>' : ''); setTimeout(() => { btn.classList.remove('is-copied'); btn.innerHTML = k; }, 1400); }
+    toast(ok ? 'Copied' : 'Could not copy — select the text and copy it', ok ? {} : { error: true });
+  }
+
+  function initV2915() {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.multiple = true; inp.accept = 'application/pdf,.pdf,image/*'; inp.id = 'rd915In'; inp.hidden = true; inp.setAttribute('aria-hidden', 'true');
+    inp.addEventListener('change', () => { rdAdd915(inp.files); inp.value = ''; });
+    document.body.appendChild(inp);
+    const onPage = () => state.signedIn && state.route && state.route.name === 'reader';
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest && e.target.closest('[data-rd915]'); if (!b || !onPage()) return;
+      const a = b.dataset.rd915, M = RD.M || rdMerge915();
+      if (a === 'pick') inp.click();
+      else if (a === 'read') rdRead915();
+      else if (a === 'tab') { RD.tab = b.dataset.t; rerender(); const t = $('.rd915-tab.is-on'); if (t) t.focus({ preventScroll: true }); }
+      else if (a === 'rm') { RD.files = RD.files.filter((f) => String(f.id) !== b.dataset.f); RD.msg = null; rerender(); }
+      else if (a === 'clear') { rd915Clear(); rerender(); }
+      else if (a === 'cp') { const f = M.F[b.dataset.k] || M.cards.find((c) => c.k === b.dataset.k); if (f && f.v) rdCopy915(f.v, b); }
+      else if (a === 'line') { const l = M.lines[+b.dataset.i]; if (l) rdCopy915(rdLineText915(l, M.cur), b); }
+      else if (a === 'page') { const x = M.text[+b.dataset.i]; if (x) rdCopy915(x.text, b); }
+      else if (a === 'all') {
+        const t = RD.tab === 'boe' ? M.lines.map((l) => rdLineText915(l, M.cur)).join('\n') : RD.tab === 'text' ? M.text.map((x) => '— ' + x.kind.toUpperCase() + ' · ' + x.p.f.name + ' · p' + x.p.n + ' —\n' + x.text).join('\n\n') : rdSiText915(M);
+        if (t) rdCopy915(t, b);
+      }
+    });
+    document.addEventListener('keydown', (e) => {   // the tabs: arrow keys move between them
+      if (!onPage() || !e.target.classList || !e.target.classList.contains('rd915-tab') || (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft')) return;
+      const ids = ['si', 'boe', 'text'], i = ids.indexOf(RD.tab);
+      RD.tab = ids[(i + (e.key === 'ArrowRight' ? 1 : 2)) % 3]; rerender(); e.preventDefault();
+      const t = $('.rd915-tab.is-on'); if (t) t.focus({ preventScroll: true });
+    });
+    let over = 0;
+    const hasFiles = (e) => e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
+    window.addEventListener('dragenter', (e) => { if (!onPage() || !hasFiles(e)) return; over++; document.body.classList.add('rd915-over'); });
+    window.addEventListener('dragleave', () => { if (over > 0 && --over === 0) document.body.classList.remove('rd915-over'); });
+    window.addEventListener('dragover', (e) => { if (onPage() && hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+    window.addEventListener('drop', (e) => { over = 0; document.body.classList.remove('rd915-over'); if (!onPage() || !hasFiles(e)) return; e.preventDefault(); rdAdd915(e.dataTransfer.files); });
+    document.addEventListener('paste', (e) => {
+      if (!onPage() || !e.clipboardData) return;
+      const fs = [...(e.clipboardData.files || [])]; if (!fs.length) return;
+      e.preventDefault(); rdAdd915(fs);
+    });
+  }
+
   // -------------------------------------------------------------------- start
   function start() {
     if (savedSession()) document.body.classList.add('is-resuming');
@@ -8728,6 +9273,7 @@
     initV2912();
     initV2913();
     initV2914();
+    initV2915();
     if (savedSession()) resumeSession();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
