@@ -5687,7 +5687,7 @@
     const wrap = $('#confirmWrap'); wrap.hidden = false; $('#confirmNo').focus();
     const close = () => { wrap.hidden = true; };
     $('#confirmNo').onclick = close;
-    $('#confirmYes').onclick = () => { api.logout(); dropSession(); document.body.style.opacity = '0.6'; history.replaceState(null, '', location.pathname + location.search); setTimeout(() => window.location.reload(), 250); };
+    $('#confirmYes').onclick = () => { api.logout(); dropSession(); pkOut914(); document.body.style.opacity = '0.6'; history.replaceState(null, '', location.pathname + location.search); setTimeout(() => window.location.reload(), 250); };
     wrap.onclick = (e) => { if (e.target === wrap) close(); };
   }
 
@@ -8496,6 +8496,7 @@
     b.disabled = on; b.classList.toggle('is-busy914', on);
   }
   function pkToPassword914(message) {
+    clearInterval(PKC914.timer);
     pkShow914(null);
     S914.pw = true;
     showKnown();
@@ -8503,30 +8504,66 @@
     if (message) setLoginMsg($('#loginMsg'), message, 'locked');
     setTimeout(() => { const f = $('#userField').hidden ? $('#loginPass') : $('#loginUser'); if (f) f.focus(); }, 40);
   }
+  // v2.9.14.1 — the one-time code is fetched the moment the card shows (that also wakes the server), kept fresh, and
+  // Face ID starts by itself once per opening (not after a Log out). A tap on the button calls Face ID in the same tap
+  // (Safari needs that), so on iPhone only Apple's own "Use Passkey" sheet remains.
+  const PKC914 = { c: '', at: 0, p: null, timer: 0, auto: false };
+  function pkFetch914() {
+    if (!PKC914.p) PKC914.p = api.call('ethixPkChallenge', [], { timeout: 30000 })
+      .then((r) => { PKC914.c = (r && r.c) || ''; PKC914.at = Date.now(); return PKC914.c; })
+      .catch(() => '').then((c) => { PKC914.p = null; return c; });
+    return PKC914.p;
+  }
+  const pkFresh914 = () => !!PKC914.c && Date.now() - PKC914.at < 150e3;   // each code lasts 3 minutes on the server
+  function pkKeepFresh914() {
+    clearInterval(PKC914.timer);
+    PKC914.timer = setInterval(() => {
+      if (!$('#pkStep914.is-unlock') || state.signedIn) { clearInterval(PKC914.timer); return; }
+      if (!document.hidden && !S914.busy && !pkFresh914()) pkFetch914();
+    }, 30e3);
+  }
+  const pkOut914 = () => { try { sessionStorage.setItem('ethix.pk914out', '1'); } catch (e) { /* private mode */ } };
   function pkStartUnlock914() {   // the sign-in screen shows the unlock when this device has a live passkey
     const r = pkRec914();
     if (!pkLive914(r) || S914.pw || !api.connected) return false;
     pkShow914('unlock', r);
+    PKC914.c = '';
+    const ready = pkFetch914();
+    pkKeepFresh914();
+    let out = false;
+    try { out = sessionStorage.getItem('ethix.pk914out') === '1'; sessionStorage.removeItem('ethix.pk914out'); } catch (e) { /* private mode */ }
+    if (!out) ready.then((c) => { if (c) pkAuto914(); });
     return true;
   }
-  async function pkUnlock914() {
+  function pkAuto914() {   // once per opening, when the page is in front
+    const go = () => { if (PKC914.auto || S914.busy || state.signedIn || !$('#pkStep914.is-unlock')) return; PKC914.auto = true; pkUnlock914(true); };
+    if (document.visibilityState === 'visible' && document.hasFocus()) { go(); return; }
+    const f = () => { window.removeEventListener('focus', f); document.removeEventListener('visibilitychange', v); go(); };
+    const v = () => { if (document.visibilityState === 'visible') f(); };
+    window.addEventListener('focus', f); document.addEventListener('visibilitychange', v);
+  }
+  async function pkUnlock914(auto) {
     const rec = pkRec914(); if (!rec || S914.busy) return;
     const word = rec.word || pkDev914().word;
     S914.busy = true; pkMsg914(''); pkBusy914(true, 'Checking…');
     let leaving = false;
     try {
-      const ch = await api.call('ethixPkChallenge', [], { timeout: 30000 });
-      if (!ch || !ch.c) { pkToPassword914('Face ID sign-in is not available just now — use your password.'); return; }
+      let c = pkFresh914() ? PKC914.c : '';
+      if (!c) c = await pkFetch914();   // only when the code is missing or old (the card was open a long time)
+      if (!c) { if (!auto) pkMsg914('EWS could not be reached — check the connection, or use your password.'); return; }
       let cred;
       try {
-        cred = await navigator.credentials.get({ publicKey: { challenge: b64d914(ch.c), allowCredentials: [{ type: 'public-key', id: b64d914(rec.id), transports: ['internal', 'hybrid'] }], userVerification: 'required', timeout: 60000 } });
+        // no await before this line when the code is ready: Face ID starts within the tap itself
+        cred = await navigator.credentials.get({ publicKey: { challenge: b64d914(c), allowCredentials: [{ type: 'public-key', id: b64d914(rec.id), transports: ['internal', 'hybrid'] }], userVerification: 'required', timeout: 60000 } });
       } catch (x) {
-        pkMsg914(x && x.name === 'NotAllowedError' ? pkWordUp914(word) + ' did not go through — try again, or use your password.' : 'This device could not use ' + word + ' just now — use your password.');
-        return;
+        if (!auto) pkMsg914(x && x.name === 'NotAllowedError' ? pkWordUp914(word) + ' did not go through — try again, or use your password.' : 'This device could not use ' + word + ' just now — use your password.');
+        return;   // the code was not used: the next tap reuses it (the timer renews it before it ages out)
       }
+      PKC914.c = '';   // signed now: this code is spent
       const r = cred.response;
       const res = await api.call('ethixPkUnlock', [rec.u, { id: b64e914(cred.rawId), cd: b64e914(r.clientDataJSON), ad: b64e914(r.authenticatorData), sig: b64e914(r.signature) }, true, APP_URL98], { timeout: 60000 });
       if (res && res.success && res.token) {
+        clearInterval(PKC914.timer);
         api.token = res.token;
         state.pendingUser = rec.u;
         pkKeep914(rec.u, res.pk914);
@@ -8541,8 +8578,9 @@
       if (res && res.gone) { pkDrop914(); pkToPassword914(res.message); return; }
       $('#signinCard').classList.remove('shake'); void $('#signinCard').offsetWidth; $('#signinCard').classList.add('shake');
       pkMsg914((res && res.message) || 'Face ID could not sign you in — try again, or use your password.');
+      pkFetch914();
     } catch (err) {
-      pkMsg914(err.message);
+      pkMsg914(err.message); pkFetch914();
     } finally { S914.busy = false; if (!leaving) pkBusy914(false); }
   }
   // after a password sign-in: offer Face ID on a device that has it (not again for a week after "Not now")
@@ -8655,7 +8693,7 @@
     document.addEventListener('click', (e) => {
       const b = e.target.closest && e.target.closest('[data-pk914]'); if (!b) return;
       const k = b.dataset.pk914;
-      if (k === 'go') pkUnlock914();
+      if (k === 'go') pkUnlock914(false);
       else if (k === 'pw') pkToPassword914('');
       else if (k === 'add') pkAdd914();
       else if (k === 'later') { store.set(PKNO914, { u: state.pendingUser || store.get(LAST_USER, ''), t: Date.now() }); pkLeave914(); }
