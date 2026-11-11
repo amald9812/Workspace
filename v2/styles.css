@@ -3352,19 +3352,16 @@ body.rd915-over .rd915-drop { background: rgba(43,179,172,.16); border-color: #0
   .rd915-tb td.m { font-size: 11.5px; }
   .rd915-tb td.rd915-lc { padding-right: 8px; }
 }
-/* ==================================================================== v2.9.17 — FOR DUBAI TRADE (BOE / ED)
+/* ==================================================================== v2.9.17 / v2.9.18 — FOR DUBAI TRADE (BOE / ED)
    Dubai Trade's "Customs Declaration" boxes — its order and box numbers — every value copies with one tap. */
 .dt917 { display: grid; gap: 16px; }
-.dt917-type { display: flex; gap: 4px; padding: 4px; border-radius: 14px; background: rgba(11,27,43,.045); border: 1px solid rgba(11,27,43,.06); width: max-content; max-width: 100%; }
-.dt917-tp { height: 32px; padding: 0 14px; border: 0; border-radius: 10px; background: transparent; font: 600 12.5px var(--f-body); color: #3A4B5C; cursor: pointer; white-space: nowrap; transition: background .15s, color .15s, box-shadow .15s; }
-.dt917-tp:hover { background: rgba(255,255,255,.7); color: #0B1B2B; }
-.dt917-tp.is-on { background: #fff; color: #0B1B2B; box-shadow: 0 1px 2px rgba(11,27,43,.08), 0 6px 14px -8px rgba(11,27,43,.25); }
-.dt917-tp:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(72,190,191,.4); }
 .dt917-s h3 { display: flex; align-items: baseline; gap: 10px; margin: 0 0 8px 2px; font: 700 10.5px var(--f-mono); letter-spacing: .16em; color: #0B1B2B; }
 .dt917-s h3::before { content: ''; width: 3px; height: 11px; border-radius: 2px; background: #48BEBF; align-self: center; }
 .dt917-s h3 em { font-style: normal; font-weight: 500; letter-spacing: .08em; color: #9AA5B0; }
 .dt917-g { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); background: rgba(255,255,255,.96); border: 1px solid #E3E8ED; border-radius: 14px; overflow: hidden; position: relative; z-index: 0; }
 .dt917-g.is-1 { grid-template-columns: minmax(0, 1fr); }
+.dt917-g.is-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }   /* v2.9.18: 6 · 7 / 20 · 21 · 23 */
+.dt917-g.is-6 .dt917-b.is-2 { grid-column: span 2; } .dt917-g.is-6 .dt917-b.is-3 { grid-column: span 3; }
 .dt917-b { position: relative; background: rgba(255,255,255,.96); padding: 9px 11px 10px; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .dt917-b.is-2 { grid-column: span 2; } .dt917-b.is-3 { grid-column: span 3; } .dt917-b.is-5 { grid-column: 1 / -1; }
 .dt917-b small { padding-right: 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; font: 600 9px/1.35 var(--f-mono); letter-spacing: .12em; color: #6A7885; }
@@ -3383,8 +3380,6 @@ body.rd915-over .rd915-drop { background: rgba(43,179,172,.16); border-color: #0
 .dt917-v.is-copied svg { opacity: 1; color: #0E7C7B; }
 .dt917-v.is-none { cursor: default; color: #C3CBD3; font-weight: 500; }
 .dt917-b .rd915-sk { margin-top: 2px; width: 64%; }
-.dt917-mk { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.dt917-job { font: 700 9px var(--f-mono); font-style: normal; letter-spacing: .12em; color: #9AA5B0; border: 1px dashed rgba(11,27,43,.22); border-radius: 6px; padding: 3px 7px; }
 .dt917-tb th { white-space: nowrap; }
 .dt917-tb.is-l th, .dt917-tb.is-i th { white-space: normal; }
 .dt917-tb td { padding: 8px 8px; }
@@ -3398,10 +3393,7 @@ body.rd915-over .rd915-drop { background: rgba(43,179,172,.16); border-color: #0
 .dt917-tb .dt917-gh b { color: #0B1B2B; letter-spacing: .04em; margin-left: 4px; }
 .dt917-from { display: block; font: 600 8.5px var(--f-mono); font-style: normal; letter-spacing: .04em; color: #0E7C7B; margin-top: 2px; white-space: nowrap; }
 .dt917-tb tfoot .dt917-v { font-weight: 700; }
-.dt917-tb .dt917-v svg, .dt917-doc .dt917-v svg { display: none; }
-.dt917-doc { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; padding: 9px 12px; border-radius: 12px; background: rgba(255,255,255,.7); border: 1px solid rgba(11,27,43,.05); }
-.dt917-doc small { font: 600 9px var(--f-mono); letter-spacing: .12em; color: #6A7885; }
-.dt917-doc .dt917-v { margin: -3px 8px -3px -2px; font: 600 12px/1.4 var(--f-body); }
+.dt917-tb .dt917-v svg { display: none; }
 .dt917 .rd915-note { margin-top: 10px; }
 @media (hover: none) { .dt917-v svg { opacity: .45; } }
 @media (max-width: 1279px) {
@@ -3410,11 +3402,12 @@ body.rd915-over .rd915-drop { background: rgba(43,179,172,.16); border-color: #0
 }
 @media (max-width: 759px) {
   .dt917 { gap: 14px; }
-  .dt917-type { width: 100%; flex-wrap: wrap; }
-  .dt917-tp { flex: 1 1 auto; padding: 0 12px; font-size: 12px; }
   .dt917-g { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dt917-b.is-2, .dt917-b.is-3 { grid-column: 1 / -1; }
   .dt917-b { padding: 9px 11px; }
+  .dt917-g.is-6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dt917-g.is-6 .dt917-b.is-3, .dt917-g.is-6 .dt917-b[data-k="b23"] { grid-column: 1 / -1; }
+  .dt917-g.is-6 .dt917-b.is-2:not([data-k="b23"]) { grid-column: auto; }
   /* containers: one card, a row each */
   .dt917-tw.is-c { background: rgba(255,255,255,.94); border: 1px solid rgba(11,27,43,.07); border-radius: 14px; overflow: hidden; }
   .dt917-tb.is-c tr { display: grid; grid-template-columns: 22px minmax(0, 1fr) 44px minmax(0, 1.5fr); align-items: center; gap: 8px; margin: 0; padding: 10px 14px; border: 0; border-top: 1px solid rgba(11,27,43,.06); border-radius: 0; background: none; }
