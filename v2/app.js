@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders, cover, system health, arrange Home, document reader — v2.9.16)
+   enquiries, follow-ups, delays, close & archive, costing, reminders, cover, system health, arrange Home, document reader, for Dubai Trade — v2.9.17)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -8437,7 +8437,7 @@
   // EWS's own rules (rdRules916); EWS checks itself and only invoice / packing-list pages with gaps go to Groq, as text.
   // The page picker: every page a thumbnail with a tick. Read with Groq stays (everything with Groq, as in v2.9.15).
   // Nothing is saved — the results live in this page's memory until Start again, Log out or closing the page.
-  // Tabs: FOR THE SI · FOR THE BOE · DUBAI TRADE · ALL TEXT.
+  // Tabs: FOR THE SI · FOR DUBAI TRADE (v2.9.17: Dubai Trade's declaration boxes) · ALL TEXT.
   I.reader915 = '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M8.5 13h7M8.5 16.5h4.5"/>';
   I.doc915 = '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>';
   I.scan915 = '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M7.5 12h9"/>';
@@ -8450,7 +8450,7 @@
   const RD_KIND915 = { 'invoice': 'Invoice', 'packing list': 'Packing list', 'bill of lading': 'BL', 'certificate of origin': 'Certificate of origin' };
   const rdPl915 = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
   function rd915Clear() {   // Log out / another person / Start again: everything read is forgotten
-    RD.stop = true; RD.files = []; RD.msg = null; RD.tab = 'si'; RD.user = state.user || null; RD.until = 0; RD.done = 0; RD.how = null; RD.stage = ''; RD.gapOnly = false;
+    RD.stop = true; RD.files = []; RD.msg = null; RD.tab = 'si'; RD.dt = null; RD.D = null; RD.user = state.user || null; RD.until = 0; RD.done = 0; RD.how = null; RD.stage = ''; RD.gapOnly = false;
     clearInterval(RD.tick); RD.tick = null;
   }
 
@@ -9141,7 +9141,7 @@
       else if (t0.total !== null) check = { ok: false, text: 'Check the lines: they add up to ' + money(T.value) + ' — the invoice total is ' + money(t0.total) + (ch.length ? ' with ' + ch.map((c) => (c.what || 'charges').toLowerCase()).join(', ') : '') + '.' };
     } else if (T.value !== null && lines.length) check = { ok: null, text: 'The invoice total was not found — the lines add up to ' + money(T.value) + '.' };
     const plG = rdTot915('gross', ['packing list']);
-    if (!wTot && T.gross !== null && plG && Math.abs(plG.v - T.gross) > Math.max(0.0015, T.gross * 0.0005)) check = { ok: false, text: (check.text ? check.text + ' ' : '') + 'Gross weights add up to ' + rdNum915(T.gross, 3) + ' KGS — the packing list says ' + rdNum915(plG.v, 3) + ' KGS.' };
+    if (!wTot && invF.length <= 1 && T.gross !== null && plG && Math.abs(plG.v - T.gross) > Math.max(0.0015, T.gross * 0.0005)) check = { ok: false, text: (check.text ? check.text + ' ' : '') + 'Gross weights add up to ' + rdNum915(T.gross, 3) + ' KGS — the packing list says ' + rdNum915(plG.v, 3) + ' KGS.' };
     const nameOf = (x) => (x ? Object.assign({}, x, { v: String(x.v).split('\n')[0].toUpperCase(), chk: !!x.chk }) : null);
     const cards = [
       Object.assign({ k: 'importer', label: 'IMPORTER' }, rdCard915(nameOf(rdPick915('importer', RD_PARTY915, rdKey915) || party('consignee')))),
@@ -9227,33 +9227,240 @@
     const ghost = !M.any && RD.busy;
     return '<div class="rd915-fl">' + RD_SI915.map((k) => rdField915(M.F[k], ghost)).join('') + '</div>';
   }
-  function rdBoeHtml915(M) {
-    const L = M.lines, ghost = !M.any && RD.busy;
-    const td = (k, v, cls) => '<td data-k="' + k + '"' + (cls ? ' class="' + cls + '"' : '') + '>' + v + '</td>';
-    const dash = '<span class="is-none">—</span>';
-    const rows = L.length ? L.map((l, i) => '<tr class="' + (l.sure ? '' : 'is-chk') + '">' + td('#', i + 1, 'rd915-n') +
-      td('HS CODE', l.hs ? esc(l.hs) + (l.hs.length < 8 ? '<span class="rd915-chk" title="Dubai Trade asks for 8 digits">CHECK</span>' : '') : '<span class="rd915-nohs" title="No HS code on the invoice for this line">—</span>', 'm' + (l.hs && l.hs.length < 8 ? ' is-chk' : '')) +
-      td('GOODS DESCRIPTION', esc(l.desc) || dash, 'rd915-d') + td('ORIGIN', esc(l.origin) || dash) + td('QTY', l.qty === null || l.qty === undefined ? dash : rdNum915(l.qty, l.qty % 1 ? 3 : 0), 'm') + td('UNIT', esc(l.unit) || dash) +
-      td('GROSS KG', l.gross === null ? dash : rdNum915(l.gross, 3), 'm') + td('NET KG', l.net === null ? dash : rdNum915(l.net, 3), 'm') +
-      td('VALUE', l.value === null || l.value === undefined ? dash : (M.cur ? '<span class="rd915-cur">' + esc(M.cur) + '</span>' : '') + rdNum915(l.value, 2), 'm rd915-v') +
-      '<td class="rd915-lc"><button type="button" class="rd915-cp is-line" data-rd915="line" data-i="' + i + '" aria-label="Copy line ' + (i + 1) + '">' + icon('copy', 14) + '</button></td></tr>').join('')
-      : ghost ? [0, 1, 2].map(() => '<tr class="is-sk"><td colspan="10"><span class="rd915-sk"></span></td></tr>').join('')
-      : '<tr class="is-empty"><td colspan="10">' + (M.any ? 'No goods lines on these documents.' : 'The invoice’s goods lines appear here, in the order Dubai Trade asks for them.') + '</td></tr>';
-    const T = M.T;
-    const foot = L.length ? '<tfoot><tr><td></td><td colspan="3">TOTAL' + (M.nInv > 1 ? ' · ' + M.nInv + ' invoices' : M.ino ? ' · invoice ' + esc(M.ino) : '') + (M.inc ? ' · ' + esc(M.inc) : '') + '</td>' +
-      td('QTY', T.qty === null ? dash : rdNum915(T.qty, T.qty % 1 ? 3 : 0), 'm') + td('UNIT', esc(T.unit) || '') +
-      td('GROSS KG', T.gross === null ? dash : rdNum915(T.gross, 3), 'm') + td('NET KG', T.net === null ? dash : rdNum915(T.net, 3), 'm') +
-      td('VALUE', T.value === null ? dash : (M.cur ? '<span class="rd915-cur">' + esc(M.cur) + '</span>' : '') + rdNum915(T.value, 2), 'm rd915-v') + '<td></td></tr></tfoot>' : '';
-    const card = (c) => rdField915({ k: c.k, label: c.label, v: c.v, src: c.src, chk: c.chk, why: c.why }, ghost);
-    const notes = [];
-    if (L.length) notes.push('Each line copies in the order Dubai Trade asks for it.');
-    const noHs = L.filter((l) => !l.hs).length;
+  // ==================================================================== v2.9.17 — FOR DUBAI TRADE (BOE / ED)
+  // What was read, laid out like Dubai Trade's "Customs Declaration": its boxes, in its order, with its box numbers — every
+  // value ready to copy. Amal's answers (10 Nov 2026): every box comes from the documents only (no job link); the broker is
+  // always Ethix; AE codes, the client's reference and the job number are typed on Dubai Trade; seals come by themselves
+  // there; values and currency exactly as on the invoice (no rate, no AED). Lines with the same 8-digit HS code, description
+  // and origin become one declaration line — per invoice, never across invoices.
+  const DT_TYPES917 = [['row', 'Export from Local to ROW', 'Export'], ['fz', 'Export from Local to FZ', 'Export'], ['fzt', 'FZ Transit Out', 'Transit']];
+  const DT_TERMS917 = { EXW: 'Ex Works', FCA: 'Free Carrier', FAS: 'Free Alongside Ship', FOB: 'Free on Board', CFR: 'Cost and Freight', CNF: 'Cost and Freight', CIF: 'Cost, Insurance & Freight',
+    CPT: 'Carriage Paid To', CIP: 'Carriage and Insurance Paid To', DAP: 'Delivered at Place', DPU: 'Delivered at Place Unloaded', DDP: 'Delivered Duty Paid' };
+  const DT_CTRY917 = { AE: 'UNITED ARAB EMIRATES', IN: 'INDIA', CN: 'CHINA', TW: 'TAIWAN', PK: 'PAKISTAN', BD: 'BANGLADESH', LK: 'SRI LANKA', TR: 'TURKEY', IT: 'ITALY', DE: 'GERMANY',
+    ES: 'SPAIN', FR: 'FRANCE', GB: 'UNITED KINGDOM', US: 'UNITED STATES', JP: 'JAPAN', KR: 'KOREA', VN: 'VIETNAM', TH: 'THAILAND', MY: 'MALAYSIA', ID: 'INDONESIA', SG: 'SINGAPORE',
+    SA: 'SAUDI ARABIA', OM: 'OMAN', EG: 'EGYPT', AF: 'AFGHANISTAN', IR: 'IRAN', BR: 'BRAZIL' };
+  const DT_PORT917 = [[/JEBEL\s*ALI|JABEL\s*ALI|JAFZA/, 'Jebel Ali'], [/KHOR\s*FAKKAN/, 'Khor Fakkan'], [/NHAVA\s*SHEVA|JNPT|JAWAHARLAL\s*NEHRU/, 'Jawaharlal Nehru (Nhava Sheva)']];
+  const DT_FZ917 = /FREE\s*ZONE|FREEZONE|\bFZE\b|\bFZCO\b|\bFZ-?LLC\b|\bJAFZA\b/;
+  const DT_PKU917 = [[/^(?:BAGS?|SACKS?)$/, 'BAGS'], [/^(?:DRUMS?|DURMS)$/, 'DRUMS'], [/^(?:CARTONS?|CTNS?)$/, 'CARTONS'], [/^(?:PALLETS?|PLTS?)$/, 'PALLETS'], [/^(?:PKGS?|PACKAGES?)$/, 'PACKAGES'],
+    [/^BOX(?:ES)?$/, 'BOXES'], [/^ROLLS?$/, 'ROLLS'], [/^BALES?$/, 'BALES'], [/^CASES?$/, 'CASES'], [/^CRATES?$/, 'CRATES'], [/^BUNDLES?$/, 'BUNDLES'], [/^COILS?$/, 'COILS'], [/^IBCS?$/, 'IBCS'],
+    [/^(?:PIECES|PCS)$/, 'PIECES'], [/^CANS?$/, 'CANS'], [/^BARRELS?$/, 'BARRELS'], [/^REELS?$/, 'REELS'], [/^TINS?$/, 'TINS']];
+  const DT_BOX917 = [['b1', '1', 'REGIME TYPE'], ['b26', '26', 'TRADE TYPE'], ['b1a', '1a', 'TRANSACTION TYPE'], ['b2', '2', 'CARGO CHANNEL'], ['b3', '3', 'DECLARATION TYPE'],
+    ['b6', '6', 'CONSIGNEE / IMPORTER / BUYER / TRANSFEREE'], ['b7', '7', 'CONSIGNOR / EXPORTER / SELLER / TRANSFEROR'], ['b8', '8', 'BROKER'], ['b9', '9', 'AGENT'], ['b10', '10', 'NOTIFY PARTY'],
+    ['b11', '11', 'MAWB/MBOL'], ['b12', '12', 'HAWB/HBOL'], ['b13', '13', 'CARRIER NUMBER'], ['b14', '14', 'CARRIER NAME'], ['b15', '15', 'SCHEDULED DATE'],
+    ['b16', '16', 'ORIGINAL LOAD PORT'], ['b17', '17', 'PORT OF LOAD'], ['b18', '18', 'PORT OF DISCHARGE'], ['b19', '19', 'DESTINATION COUNTRY'], ['b19A', '19A', 'GOODS LOCATION'], ['b19B', '19B', 'CARGO HANDLER'],
+    ['b20', '20', 'NET WEIGHT'], ['b21', '21', 'GROSS WEIGHT'], ['b22', '22', 'MEASUREMENT'], ['b23', '23', 'NUMBER OF PACKAGES'], ['b24', '24', 'CARGO TYPE'], ['b25', '25', 'MARKS & NUMBER']];
+  RD.dt = null;   // the declaration type picked here (null = EWS's own pick from the parties)
+  const dtN917 = (n, d) => (n === null || n === undefined || !isFinite(n) ? '' : String(Math.round(n * Math.pow(10, d || 2)) / Math.pow(10, d || 2)));   // Dubai Trade style: 327600 · 164525.94
+  const dtKg917 = (n) => (n === null || n === undefined || !isFinite(n) ? '' : dtN917(n, 3) + ' kg');
+  const dtIno917 = (v) => String(v || '').toUpperCase().replace(/\s*([-/])\s*/g, '$1').trim();
+  const dtKey917 = (p) => { const f = p.res.fields.invoice_no; const v = f && f.v ? dtIno917(f.v).replace(/[^A-Z0-9]/g, '') : ''; return v || 'f' + p.f.id; };
+  function dtTexts917() {   // each page's text, the invoice first
+    return rdRank915(rdDone915().map((p) => ({ p, t: String(p.text || (typeof p.ocr === 'string' ? p.ocr : '') || (p.res && p.res.text) || '') })).filter((x) => x.t), RD_PARTY915);
+  }
+  const DT_LABEL917 = /^(PORT\b|POL\b|POD\b|VESSEL|B\s*\/?\s*L\b|BILL OF|FINAL|PLACE OF|DESTINATION|COUNTRY|MODE|CONTAINER|SHIPMENT|DATE|INVOICE|DISPATCH|TERMS|PAYMENT|CURRENCY|DELIVERY|SALES|BANK|FOR,?\s)/i;
+  function dtLab917(re, ok) {   // a label's value: on its own line ("POL   JEBEL ALI", "MODE : SEA") or under it in the same column
+    const R = new RegExp('^(?:' + re + ')\\s*[:.#-]?\\s*(.*)$', 'i');
+    for (const x of dtTexts917()) {
+      const L = x.t.split('\n');
+      for (let i = 0; i < L.length; i++) {
+        const cells = L[i].trim().split(/\s{3,}/).filter(Boolean);
+        for (let c = 0; c < cells.length; c++) {
+          const m = cells[c].match(R); if (!m) continue;
+          let v = m[1].trim();
+          if (!v && cells[c + 1] && !DT_LABEL917.test(cells[c + 1])) v = cells[c + 1];
+          if (!v) {
+            const nx = String(L[i + 1] || '').trim().split(/\s{3,}/).filter(Boolean);
+            const cand = nx.length === cells.length ? nx[c] : cells.length === 1 && nx.length ? nx[0] : '';
+            const cand2 = cand || (c === 0 && nx.length && !/^\s{3,}/.test(L[i + 1]) ? nx[0] : '');   // the left column's value under it
+            if (cand2 && !DT_LABEL917.test(cand2)) v = cand2;
+          }
+          v = String(v || '').replace(/^[\s:.,-]+|[\s:,;]+$/g, '').slice(0, 80);
+          if (v && /[A-Za-z0-9]{2}/.test(v) && (!ok || ok(v))) return { v, src: rdSrc915(x.p) };
+        }
+      }
+    }
+    return null;
+  }
+  function dtPort917(v) { if (!v) return ''; const u = v.toUpperCase(); for (const [re, n] of DT_PORT917) if (re.test(u)) return n; return v.split(',')[0].trim().toLowerCase().replace(/(^|[\s(/-])[a-z]/g, (c) => c.toUpperCase()); }
+  function dtCtry917(v) {   // a country named in a port / destination text → its full name
+    const parts = String(v || '').toUpperCase().split(/[,–]|\s-\s/).map((s) => s.replace(/[^A-Z .]/g, '').replace(/\.$/, '').trim()).filter(Boolean);
+    for (let i = parts.length - 1; i >= 0; i--) { const c = rdIso915(parts[i]); if (DT_CTRY917[c]) return DT_CTRY917[c]; }
+    return '';
+  }
+  function dtPk917(v) {   // "LOADED IN 80 PALLETS 160 JUMBO BAGS" → { n: 160, u: 'BAGS' } — the goods' own packing before the pallets
+    const all = [...String(v || '').toUpperCase().matchAll(/(\d[\d,]*)\s+(?:[A-Z]+\s+)?([A-Z]+)\b/g)].map((m) => { const u = (DT_PKU917.find((x) => x[0].test(m[2])) || [])[1]; return u ? { n: Number(m[1].replace(/,/g, '')), u } : null; }).filter(Boolean);
+    return all.find((x) => x.u !== 'PALLETS') || all[0] || null;
+  }
+  const dtF917 = (f) => (f && f.v ? Number(String(f.v).replace(/[^0-9.]/g, '')) || null : null);   // "218,400.000 KGS" → 218400
+  function dtBuild917(M) {
+    const done = rdDone915(), B = {}, texts = dtTexts917(), ALL = texts.map((x) => x.t).join('\n').toUpperCase();
+    DT_BOX917.forEach(([k, no, label]) => { B[k] = { k, no, label, v: '', src: '', chk: false, why: '' }; });
+    const put = (k, v, src, chk, why) => { if (v) Object.assign(B[k], { v: String(v), src: src || '', chk: !!chk, why: why || '' }); };
+    // the parties → the declaration type (EWS's pick; Amal can change it)
+    const shipAll = String(M.F.shipper.v || '').toUpperCase(), consAll = String(M.F.consignee.v || '').toUpperCase();
+    const guess = DT_FZ917.test(shipAll) ? 'fzt' : DT_FZ917.test(consAll) ? 'fz' : 'row';
+    const type = DT_TYPES917.find((t) => t[0] === (RD.dt || guess));
+    if (M.any) {
+      put('b1', type[2]); put('b26', 'Non E-Commerce'); put('b1a', 'New Declaration Request'); put('b3', type[1]);
+      put('b8', 'ETHIX SHIPPING LLC AE-1182403');
+    }
+    const first = (x) => String(x || '').split('\n')[0].trim().toUpperCase();
+    if (M.F.shipper.v) put('b7', first(M.F.shipper.v), M.F.shipper.src, M.F.shipper.chk, M.F.shipper.why);
+    if (type[0] === 'fz' && M.F.consignee.v) put('b6', first(M.F.consignee.v), M.F.consignee.src, M.F.consignee.chk, M.F.consignee.why);
+    if (M.F.notify.v && !/^SAME AS/i.test(M.F.notify.v)) put('b10', first(M.F.notify.v), M.F.notify.src, M.F.notify.chk, M.F.notify.why);
+    // transport
+    const mode = dtLab917('MODE OF SHIPMENT|SHIPMENT MODE|MODE OF TRANSPORT|TRANSPORT MODE|DISPATCH(?:ED)?\\s+BY|SHIPPED\\s+BY', (v) => /SEA|OCEAN|VESSEL|ROAD|LAND|TRUCK|TRAILER|AIR/i.test(v));
+    const pol = dtLab917('PORT OF LOADING|PORT OF LOAD|LOADING PORT|POL'), pod = dtLab917('PORT OF DISCHARGE(?:\\s*(?:&|AND)\\s*FINAL DESTINATION)?|DISCHARGE PORT|POD');
+    const dest = dtLab917('COUNTRY OF FINAL DESTINATION|FINAL DESTINATION|COUNTRY OF DESTINATION|PLACE OF DELIVERY|DESTINATION', (v) => !!dtCtry917(v));
+    const ves = dtLab917('VESSEL(?:\\s*NAME)?(?:\\s*/\\s*VOY(?:AGE)?)?|NAME OF VESSEL');
+    const bl = dtLab917('B\\s*/\\s*L\\s*NO\\.?|BL\\s*NO\\.?|BILL OF LADING\\s*NO\\.?|MBL\\s*NO\\.?', (v) => /\d/.test(v) && v.length <= 30);
+    let ch = '', chSure = true;
+    if (mode) { const u = mode.v.toUpperCase(); ch = /AIR/.test(u) ? 'Air' : /ROAD|LAND|TRUCK|TRAILER/.test(u) ? 'Land' : 'Sea'; }
+    else if (M.any) { ch = type[0] === 'fz' ? 'Land' : 'Sea'; chSure = false; }
+    put('b2', ch, mode ? mode.src : '', !chSure, chSure ? '' : 'Not on the documents — check it');
+    if (bl) put('b11', dtIno917(bl.v), bl.src);
+    if (ves) put('b14', ves.v.toUpperCase(), ves.src);
+    if (pol) { put('b16', dtPort917(pol.v), pol.src); put('b17', dtPort917(pol.v), pol.src); }
+    const podC = pod ? dtCtry917(pod.v) : '', podOnly = pod && podC && rdIso915(pod.v.toUpperCase().replace(/[^A-Z .]/g, '').trim()) === rdIso915(podC);
+    if (pod && !podOnly) put('b18', dtPort917(pod.v), pod.src);
+    if (podC) put('b19', podC, pod.src); else if (dest) put('b19', dtCtry917(dest.v), dest.src);
+    if (type[0] === 'fz' && /JEBEL\s*ALI|JABEL\s*ALI|JAFZA/.test(ALL)) put('b19A', 'JEBEL ALI');
+    if (ch === 'Sea' && B.b17.v === 'Jebel Ali') put('b19B', 'PR-00003 / DUBAI PORTS WORLD FACILITY');
+    // containers
+    const cont = []; texts.forEach((x) => { (x.t.toUpperCase().match(/\b[A-Z]{3}[UJZ]\s?\d{7}\b/g) || []).forEach((c) => { c = c.replace(/\s/g, ''); if (!cont.includes(c)) cont.push(c); }); });
+    const sizes = [...new Set((ALL.match(/(?:\b\d{1,2}\s*X\s*|\b)(20|40|45)\s*(?:'|’|FT\b|FEET|GP\b|HC\b|HQ\b|DV\b|STD\b|FCL\b)/g) || []).map((s) => s.match(/(20|40|45)\s*(?:'|’|F|G|H|D|S)/)[1]))];
+    const size = sizes.length === 1 ? sizes[0] : '';
+    const conts = cont.map((n, i) => ({ sl: i + 1, type: 'Standard', size, no: n }));
+    // invoices and their lines — one group per invoice
+    const groups = [];
+    M.lines.forEach((l) => {
+      const pg = done.find((p) => p.f === l.pf && p.res.kind === 'invoice') || done.find((p) => p.f === l.pf);
+      const key = pg ? dtKey917(pg) : 'f' + l.pf.id;
+      let g = groups.find((x) => x.key === key);
+      if (!g) groups.push(g = { key, f: l.pf, pg, src: [], items: [] });
+      g.src.push(l);
+    });
+    const fOf = (g, k) => { const x = rdRank915(done.filter((q) => (q.f === g.f || dtKey917(q) === g.key) && q.res.fields[k] && q.res.fields[k].v).map((p) => ({ p })), RD_PARTY915)[0]; return x ? String(x.p.res.fields[k].v) : ''; };
+    const totOf = (g, k) => { for (const { p } of rdRank915(done.filter((q) => dtKey917(q) === g.key || q.f === g.f).map((p) => ({ p })), RD_PACK915)) for (const t of p.res.totals) { const v = rdKg915(t[k], t.wu); if (v) return v; } return null; };
+    groups.forEach((g) => {
+      g.ino = dtIno917(fOf(g, 'invoice_no'));
+      const inc = fOf(g, 'incoterm').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
+      g.terms = DT_TERMS917[inc] || inc;
+      g.cur = (fOf(g, 'currency') || M.cur || '').toUpperCase().slice(0, 3);
+      const it = [];
+      g.src.forEach((l) => {
+        const k = [l.hs.slice(0, 8), String(l.desc || '').toUpperCase().replace(/[^A-Z0-9]/g, ''), l.origin].join('|');
+        let x = it.find((y) => y.k === k);
+        if (!x) it.push(x = { k, hs: l.hs.slice(0, 8), desc: String(l.desc || '').toUpperCase().replace(/\s+/g, ' ').trim(), origin: l.origin, L: [], sure: true });
+        x.L.push(l); if (!l.sure) x.sure = false;
+      });
+      const kgQ = (l) => (/^(MT|MTS|MTON|TONS?|TONNES?|KGS?|KILOS?)$/.test(l.unit) && typeof l.qty === 'number' ? rdKg915(l.qty, l.unit) : null);
+      it.forEach((x) => {
+        const sum = (f) => (x.L.every((l) => typeof f(l) === 'number') ? x.L.reduce((n, l) => n + f(l), 0) : null);
+        x.net = sum((l) => l.net); if (x.net === null) x.net = sum(kgQ);
+        x.gross = sum((l) => l.gross);
+        x.value = sum((l) => (typeof l.value === 'number' ? l.value : null));
+      });
+      if (it.length === 1) {   // one declaration line: the invoice's (or its packing list's) totals fill what the lines do not say
+        if (it[0].net === null) it[0].net = totOf(g, 'net'); if (it[0].gross === null) it[0].gross = totOf(g, 'gross');
+        if (groups.length === 1) { if (it[0].net === null && dtF917(M.F.net)) it[0].net = dtF917(M.F.net); if (it[0].gross === null && dtF917(M.F.gross)) it[0].gross = dtF917(M.F.gross); }
+      }
+      g.items = it;
+      const tt = done.filter((p) => p.f === g.f && p.res.kind === 'invoice').flatMap((p) => p.res.totals).find((t) => t.goods !== null || t.total !== null);
+      const ch2 = tt ? tt.charges || [] : [], chg = (re) => { const c = ch2.find((x) => re.test(String(x.what || ''))); return c ? c.n : null; };
+      g.value = tt ? (tt.goods !== null ? tt.goods : !ch2.length ? tt.total : null) : null;
+      if (g.value === null && it.every((x) => x.value !== null)) g.value = it.reduce((n, x) => n + x.value, 0);
+      g.freight = chg(/FREIGHT/i); g.ins = chg(/INSUR/i);
+      if (it.length === 1 && g.value !== null && it[0].value !== null && Math.abs(it[0].value - g.value) <= it[0].L.length * 0.005 + 0.001) it[0].value = g.value;   // one line: the invoice's own total (no cent lost to rounding)
+    });
+    const invs = groups.map((g, i) => ({ sl: i + 1, no: g.ino, type: 'Commercial Invoice', terms: g.terms, value: g.value === null ? '' : (g.cur ? g.cur + ' ' : '') + dtN917(g.value), freight: g.freight === null ? '' : dtN917(g.freight), ins: g.ins === null ? '' : dtN917(g.ins), pay: 'DAP(Doc against Payment)' }));
+    const curs = [...new Set(groups.map((g) => g.cur))];
+    const tot = groups.length && groups.every((g) => g.value !== null) && curs.length === 1 ? (curs[0] ? curs[0] + ' ' : '') + dtN917(groups.reduce((n, g) => n + g.value, 0)) : '';
+    let n = 0;
+    const lines = groups.map((g) => ({ ino: g.ino, items: g.items.map((x) => ({ n: ++n, hs: x.hs, desc: x.desc, qty: dtKg917(x.net), wt: dtKg917(x.gross), value: x.value === null ? '' : dtN917(x.value) + (g.cur ? ' ' + g.cur : ''), origin: DT_CTRY917[x.origin] || x.origin || '', sure: x.sure, srcN: x.L.length })) }));
+    // cargo
+    const items = groups.flatMap((g) => g.items);
+    const net = items.length && items.every((x) => x.net !== null) ? items.reduce((s, x) => s + x.net, 0) : dtF917(M.F.net) || null;
+    const gross = items.length && items.every((x) => x.gross !== null) ? items.reduce((s, x) => s + x.gross, 0) : dtF917(M.F.gross) || null;
+    if (net) put('b20', dtKg917(net), M.F.net.src, M.F.net.chk && !items.length, M.F.net.why);
+    if (gross) put('b21', dtKg917(gross), M.F.gross.src, M.F.gross.chk && !items.length, M.F.gross.why);
+    const vol = rdTot915('cbm', RD_PACK915); if (vol) put('b22', dtN917(vol.v, 3) + ' cbm', vol.src);
+    const pkBy = {};
+    rdRank915(rdCands915('packages'), RD_PACK915).forEach((c) => { const k = dtKey917(c.p); if (!pkBy[k]) pkBy[k] = c; });
+    const pks = Object.values(pkBy).map((c) => Object.assign({ c }, dtPk917(c.v) || {})).filter((x) => x.u);
+    if (pks.length && pks.every((x) => x.u === pks[0].u)) put('b23', pks.reduce((s, x) => s + x.n, 0) + '-' + pks[0].u, pks[0].c.src + (pks.length > 1 ? ' · ' + pks.length + ' invoices' : ''), pks.some((x) => !x.c.sure));
+    else if (M.F.packages.v) { const x = dtPk917(M.F.packages.v); if (x) put('b23', x.n + '-' + x.u, M.F.packages.src, M.F.packages.chk); }
+    put('b24', cont.length ? (/\bLCL\b/.test(ALL) ? 'LCL' : 'FCL') : /\bFCL\b/.test(ALL) ? 'FCL' : /\bLCL\b/.test(ALL) ? 'LCL' : '');
+    const inos = groups.map((g) => g.ino).filter(Boolean);
+    if (inos.length) put('b25', 'INVOICE REF: ' + inos.join(', '));
+    return { type: type[0], guess, B, conts, invs, tot, lines, nInv: groups.length };
+  }
+  function dtFlat917(D, k) {   // a copy key → its value
+    if (D.B[k]) return D.B[k].v;
+    if (k === 'd39') return 'Invoice'; if (k === 'd40') return 'Available in Copy';
+    const m = String(k).match(/^([cil])(\d+)\.(\w+)$/); if (!m) return '';
+    const row = m[1] === 'c' ? D.conts[+m[2]] : m[1] === 'i' ? D.invs[+m[2]] : D.lines.flatMap((g) => g.items)[+m[2]];
+    return row ? String(row[m[3]] || '') : '';
+  }
+  const DT_LCOLS917 = [['hs', '61', 'HS CODE'], ['desc', '62', 'GOODS DESCRIPTION'], ['qty', '63', 'STAT QTY./UNIT'], ['wt', '64a', 'WEIGHT/UNIT'], ['value', '65', 'GOODS VALUE IN FOREIGN CURRENCY'], ['origin', '70', 'ORIGIN']];
+  const DT_ICOLS917 = [['no', '30', 'INVOICE NO.'], ['type', '31', 'INVOICE TYPE'], ['terms', '33', 'TERMS OF DELIVERY'], ['value', '34', 'INVOICE VALUE'], ['freight', '35', 'FREIGHT'], ['ins', '36', 'INSURANCE'], ['pay', '37', 'PAYMENT METHOD']];
+  function dtLineText917(x) { return DT_LCOLS917.map((c) => x[c[0]] || '').join('\t'); }
+  function dtAllText917(D) {
+    const out = DT_BOX917.map(([k]) => D.B[k]).filter((b) => b.v).map((b) => b.label + ' (' + b.no + '): ' + b.v);
+    if (D.conts.length) out.push('', 'CONTAINER DETAILS (26 · 27 · 28)', ...D.conts.map((c) => c.sl + '\t' + c.type + '\t' + c.size + '\t' + c.no));
+    if (D.invs.length) out.push('', 'INVOICE (30 – 37)', ...D.invs.map((r) => r.sl + '\t' + DT_ICOLS917.map((c) => r[c[0]] || '').join('\t')), ...(D.nInv > 1 && D.tot ? ['TOTAL\t' + D.tot] : []));
+    const L = D.lines.flatMap((g) => g.items);
+    if (L.length) out.push('', 'INVOICE LINE ITEM DETAILS (61 – 70)', ...D.lines.flatMap((g) => (D.nInv > 1 ? ['INVOICE ' + g.ino] : []).concat(g.items.map((x) => x.n + '\t' + dtLineText917(x)))));
+    return out.join('\n');
+  }
+  function rdDtHtml917(M) {
+    const D = dtBuild917(M); RD.D = D;
+    const ghost = !M.any && RD.busy;
+    const cp = (k, v, cls) => (ghost ? '<span class="rd915-sk"></span>' : v
+      ? '<button type="button" class="dt917-v' + (cls ? ' ' + cls : '') + '" data-rd915="dt" data-k="' + k + '" aria-label="Copy ' + esc(v) + '"><span>' + esc(v) + '</span>' + icon('copy', 13) + '</button>'
+      : '<span class="dt917-v is-none">—</span>');
+    const box = (k, span) => {
+      const b = D.B[k];
+      return '<div class="dt917-b' + (span ? ' is-' + span : '') + (b.chk ? ' is-chk' : '') + (b.v ? '' : ' is-empty') + '" data-k="' + k + '"' + (b.src ? ' title="' + esc(b.src) + '"' : '') + '>' +
+        '<small>' + esc(b.label) + '<sup>' + b.no + '</sup>' + (b.chk ? '<span class="rd915-chk" title="' + esc(b.why || 'Not sure — check it on the document') + '">CHECK</span>' : '') + '</small>' +
+        (k === 'b25' && b.v ? '<div class="dt917-mk"><i class="dt917-job">JOB NO.</i>' + cp(k, b.v) + '</div>' : cp(k, b.v)) + '</div>';
+    };
+    const sec = (title, nos, inner) => '<section class="dt917-s"><h3><span>' + title + '</span>' + (nos ? '<em>' + nos + '</em>' : '') + '</h3>' + inner + '</section>';
+    const types = '<div class="dt917-type" role="radiogroup" aria-label="Declaration type">' + DT_TYPES917.map((t) =>
+      '<button type="button" role="radio" class="dt917-tp' + (D.type === t[0] ? ' is-on' : '') + '" aria-checked="' + (D.type === t[0]) + '" data-rd915="dtt" data-t="' + t[0] + '">' + esc(t[1]) + '</button>').join('') + '</div>';
+    const bill = '<div class="dt917-g">' + box('b1') + box('b26') + box('b1a') + box('b2') + box('b3') +
+      box('b6', 3) + box('b7', 2) + box('b8', 2) + box('b9', 2) + box('b10') +
+      box('b11') + box('b12') + box('b13') + box('b14') + box('b15') +
+      box('b16') + box('b17') + box('b18') + box('b19', 2) + box('b19A', 2) + box('b19B', 3) +
+      box('b20') + box('b21') + box('b22') + box('b23') + box('b24') + '</div>';
+    const th = (no, label, cls) => '<th' + (cls ? ' class="' + cls + '"' : '') + '>' + label + (no ? '<sup>' + no + '</sup>' : '') + '</th>';
+    const td = (k, v, l, cls) => '<td data-l="' + esc(l) + '"' + (cls ? ' class="' + cls + '"' : '') + '>' + cp(k, v) + '</td>';
+    const emptyRow = (n, text) => (ghost ? [0, 1].map(() => '<tr class="is-sk"><td colspan="' + n + '"><span class="rd915-sk"></span></td></tr>').join('') : '<tr class="is-empty"><td colspan="' + n + '">' + text + '</td></tr>');
+    const contT = '<div class="rd915-tw dt917-tw is-c"><table class="rd915-tb dt917-tb is-c"><thead><tr>' + th('', 'SL NO') + th('26', 'CONTAINER TYPE') + th('27', 'CONTAINER SIZE') + th('28', 'CONTAINER NUMBER') + '</tr></thead><tbody>' +
+      (D.conts.length ? D.conts.map((c, i) => '<tr><td class="rd915-n" data-l="SL NO">' + c.sl + '</td>' + td('c' + i + '.type', c.type, 'CONTAINER TYPE') + td('c' + i + '.size', c.size, 'CONTAINER SIZE') + td('c' + i + '.no', c.no, 'CONTAINER NUMBER', 'm') + '</tr>').join('')
+        : emptyRow(4, M.any ? 'No container numbers on these documents.' : 'Container numbers appear here.')) + '</tbody></table></div>';
+    const invT = '<div class="rd915-tw dt917-tw is-i"><table class="rd915-tb dt917-tb is-i"><thead><tr>' + th('', 'SL NO') + DT_ICOLS917.map((c) => th(c[1], c[2])).join('') + '</tr></thead><tbody>' +
+      (D.invs.length ? D.invs.map((r, i) => '<tr><td class="rd915-n" data-l="SL NO">' + r.sl + '</td>' + DT_ICOLS917.map((c) => td('i' + i + '.' + c[0], r[c[0]], c[2], c[0] === 'value' || c[0] === 'no' ? 'm' : '')).join('') + '</tr>').join('')
+        : emptyRow(8, M.any ? 'No invoice on these documents.' : 'Each invoice appears here — one row per invoice.')) + '</tbody>' +
+      (D.nInv > 1 ? '<tfoot><tr><td></td><td colspan="3">TOTAL · ' + D.nInv + ' invoices</td><td class="m" data-l="TOTAL">' + (D.tot ? '<button type="button" class="dt917-v" data-rd915="dtv" data-v="' + esc(D.tot) + '"><span>' + esc(D.tot) + '</span>' + icon('copy', 13) + '</button>' : '—') + '</td><td colspan="3"></td></tr></tfoot>' : '') + '</table></div>' +
+      (D.invs.length ? '<div class="dt917-doc"><small>DOCUMENT AVAILABILITY<sup>39</sup></small>' + cp('d39', 'Invoice') + '<small>TYPE<sup>40</sup></small>' + cp('d40', 'Available in Copy') + '</div>' : '');
+    let li = 0;
+    const lineT = '<div class="rd915-tw dt917-tw is-l"><table class="rd915-tb dt917-tb is-l"><thead><tr>' + th('', 'LINE ITEM') + DT_LCOLS917.map((c) => th(c[1], c[2], c[0] === 'desc' ? 'rd915-d' : '')).join('') + '<th></th></tr></thead><tbody>' +
+      (D.lines.some((g) => g.items.length) ? D.lines.map((g) => (D.nInv > 1 ? '<tr class="dt917-gh"><td colspan="8">INVOICE <b>' + esc(g.ino || '—') + '</b></td></tr>' : '') + g.items.map((x) => {
+        const i = li++;
+        return '<tr class="' + (x.sure ? '' : 'is-chk') + '"><td class="rd915-n" data-l="LINE ITEM">' + x.n + (x.srcN > 1 ? '<em class="dt917-from" title="' + x.srcN + ' lines on the invoice">' + x.srcN + ' → 1</em>' : '') + '</td>' +
+          DT_LCOLS917.map((c) => td('l' + i + '.' + c[0], x[c[0]], c[2], (c[0] === 'desc' ? 'rd915-d' : c[0] === 'origin' ? '' : 'm') + (c[0] === 'hs' && x.hs && x.hs.length < 8 ? ' is-chk' : ''))).join('') +
+          '<td class="rd915-lc"><button type="button" class="rd915-cp is-line" data-rd915="dtl" data-i="' + i + '" aria-label="Copy line ' + x.n + '">' + icon('copy', 14) + '</button></td></tr>';
+      }).join('')).join('') : emptyRow(8, M.any ? 'No goods lines on these documents.' : 'The goods lines appear here — one line per HS code, per invoice.')) + '</tbody></table></div>';
+    const L = D.lines.flatMap((g) => g.items), noHs = L.filter((x) => !x.hs).length;
     const hsNote = noHs ? (noHs === L.length ? 'No HS codes on the invoice — add them in Dubai Trade.' : rdPl915(noHs, 'line') + ' without an HS code — add ' + (noHs === 1 ? 'it' : 'them') + ' in Dubai Trade.') : '';
-    if (M.wFrom === 'pl') notes.push('Weights per line from the packing list.');
-    else if (M.wTot) notes.push('Weights per line are not on the invoice — the totals are the packing list’s.');
-    return '<div class="rd915-tw"><table class="rd915-tb"><thead><tr><th>#</th><th>HS CODE</th><th>GOODS<br>DESCRIPTION</th><th>ORIGIN</th><th>QTY</th><th>UNIT</th><th>GROSS KG</th><th>NET KG</th><th>VALUE</th><th></th></tr></thead><tbody>' + rows + '</tbody>' + foot + '</table></div>' +
-      '<div class="rd915-fl is-boe">' + M.cards.map(card).join('') + '</div>' +
-      (notes.length || M.check.text || hsNote ? '<div class="rd915-note' + (M.check.ok === false ? ' is-chk' : '') + '">' + esc(notes.join(' ')) + (M.check.text ? ' <span>' + esc(M.check.text) + '</span>' : '') + (hsNote ? ' <b class="rd915-hsn">' + esc(hsNote) + '</b>' : '') + '</div>' : '');
+    const note = M.check.text || hsNote ? '<div class="rd915-note' + (M.check.ok === false ? ' is-chk' : '') + '">' + (M.check.text ? '<span>' + esc(M.check.text) + '</span>' : '') + (hsNote ? ' <b class="rd915-hsn">' + esc(hsNote) + '</b>' : '') + '</div>' : '';
+    return '<div class="dt917">' + types +
+      sec('CUSTOM BILL', '1 – 24', bill) +
+      sec('MARKS &amp; NUMBER', '25', '<div class="dt917-g is-1">' + box('b25', 5) + '</div>') +
+      sec('CONTAINER DETAILS', '26 – 28', contT) +
+      sec('INVOICE', '30 – 40', invT) +
+      sec('INVOICE LINE ITEM DETAILS', '61 – 70', lineT + note) + '</div>';
   }
   function rdTextHtml915(M) {
     if (!M.text.length) return '<div class="rd915-empty">' + icon('reader915', 22) + '<span>' + (RD.busy ? 'The text of each page appears here as it is read.' : 'The text of every page appears here once it is read — ready to copy.') + '</span></div>';
@@ -9265,15 +9472,15 @@
     const M = rdMerge915(); RD.M = M;
     const anim = first ? ' reveal' : '';
     const tab = (id, label) => '<button type="button" role="tab" class="rd915-tab' + (RD.tab === id ? ' is-on' : '') + '" aria-selected="' + (RD.tab === id) + '" data-rd915="tab" data-t="' + id + '">' + label + '</button>';
-    const allLabel = RD.tab === 'boe' ? 'Copy all lines' : RD.tab === 'text' ? 'Copy all text' : 'Copy all for the SI';
-    const can = RD.tab === 'boe' ? M.lines.length > 0 : RD.tab === 'text' ? M.text.length > 0 : RD_SI915.some((k) => M.F[k].v);
+    const allLabel = RD.tab === 'boe' ? 'Copy all boxes' : RD.tab === 'text' ? 'Copy all text' : 'Copy all for the SI';
+    const can = RD.tab === 'boe' ? M.any : RD.tab === 'text' ? M.text.length > 0 : RD_SI915.some((k) => M.F[k].v);
     $('#view').innerHTML = '<div class="rd915-pg">' +
       '<header class="rd915-head' + anim + '"><div class="rd915-kick">TOOLS · SI AND BOE HELPER</div><h1>Document reader</h1>' +
         '<p class="rd915-sub">Drop the invoice and packing list — even scanned. EWS reads them and lays the details out ready to copy.</p></header>' +
       '<div class="rd915-g' + anim + '">' + rdLeftCard915() +
-        '<div class="rd915-r"><div class="rd915-tabs"><div class="rd915-tl" role="tablist" aria-label="Document reader">' + tab('si', 'FOR THE SI') + tab('boe', 'FOR THE BOE · DUBAI TRADE') + tab('text', 'ALL TEXT') + '</div>' +
+        '<div class="rd915-r"><div class="rd915-tabs"><div class="rd915-tl" role="tablist" aria-label="Document reader">' + tab('si', 'FOR THE SI') + tab('boe', 'FOR DUBAI TRADE') + tab('text', 'ALL TEXT') + '</div>' +
           '<button type="button" class="rd915-all" data-rd915="all"' + (can ? '' : ' disabled') + '>' + icon('copy', 16) + '<span>' + allLabel + '</span></button></div>' +
-          '<div class="rd915-body' + (RD.busy && !M.any ? ' is-wait' : '') + '" role="tabpanel">' + (RD.tab === 'boe' ? rdBoeHtml915(M) : RD.tab === 'text' ? rdTextHtml915(M) : rdSiHtml915(M)) + '</div></div>' +
+          '<div class="rd915-body' + (RD.busy && !M.any ? ' is-wait' : '') + '" role="tabpanel">' + (RD.tab === 'boe' ? rdDtHtml917(M) : RD.tab === 'text' ? rdTextHtml915(M) : rdSiHtml915(M)) + '</div></div>' +
       '</div></div>';
   }
 
@@ -9282,7 +9489,8 @@
     let ok = false;
     try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); ok = true; } } catch (e) { ok = false; }
     if (!ok) { const ta = document.createElement('textarea'); ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;'; document.body.appendChild(ta); ta.select(); try { ok = document.execCommand('copy'); } catch (e) { ok = false; } ta.remove(); }
-    if (ok && btn) { btn.classList.add('is-copied'); const k = btn.innerHTML; btn.innerHTML = icon('ok915', btn.classList.contains('rd915-all') ? 16 : 15) + (btn.classList.contains('rd915-all') ? '<span>Copied</span>' : ''); setTimeout(() => { btn.classList.remove('is-copied'); btn.innerHTML = k; }, 1400); }
+    if (ok && btn && btn.classList.contains('dt917-v')) { btn.classList.add('is-copied'); setTimeout(() => btn.classList.remove('is-copied'), 1400); }   // v2.9.17: the value stays
+    else if (ok && btn) { btn.classList.add('is-copied'); const k = btn.innerHTML; btn.innerHTML = icon('ok915', btn.classList.contains('rd915-all') ? 16 : 15) + (btn.classList.contains('rd915-all') ? '<span>Copied</span>' : ''); setTimeout(() => { btn.classList.remove('is-copied'); btn.innerHTML = k; }, 1400); }
     toast(ok ? 'Copied' : 'Could not copy — select the text and copy it', ok ? {} : { error: true });
   }
 
@@ -9413,8 +9621,12 @@
       else if (a === 'cp') { const f = M.F[b.dataset.k] || M.cards.find((c) => c.k === b.dataset.k); if (f && f.v) rdCopy915(f.v, b); }
       else if (a === 'line') { const l = M.lines[+b.dataset.i]; if (l) rdCopy915(rdLineText915(l, M.cur), b); }
       else if (a === 'page') { const x = M.text[+b.dataset.i]; if (x) rdCopy915(x.text, b); }
+      else if (a === 'dt') { const v = dtFlat917(RD.D || dtBuild917(M), b.dataset.k); if (v) rdCopy915(v, b); }   // v2.9.17: FOR DUBAI TRADE
+      else if (a === 'dtv') { if (b.dataset.v) rdCopy915(b.dataset.v, b); }
+      else if (a === 'dtl') { const x = (RD.D || dtBuild917(M)).lines.flatMap((g) => g.items)[+b.dataset.i]; if (x) rdCopy915(dtLineText917(x), b); }
+      else if (a === 'dtt') { RD.dt = b.dataset.t; rerender(); const t = $('.dt917-tp.is-on'); if (t) t.focus({ preventScroll: true }); }
       else if (a === 'all') {
-        const t = RD.tab === 'boe' ? M.lines.map((l) => rdLineText915(l, M.cur)).join('\n') : RD.tab === 'text' ? M.text.map((x) => '— ' + x.kind.toUpperCase() + ' · ' + x.p.f.name + ' · p' + x.p.n + ' —\n' + x.text).join('\n\n') : rdSiText915(M);
+        const t = RD.tab === 'boe' ? dtAllText917(RD.D || dtBuild917(M)) : RD.tab === 'text' ? M.text.map((x) => '— ' + x.kind.toUpperCase() + ' · ' + x.p.f.name + ' · p' + x.p.n + ' —\n' + x.text).join('\n\n') : rdSiText915(M);
         if (t) rdCopy915(t, b);
       }
     });
