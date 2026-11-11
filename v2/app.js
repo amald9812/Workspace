@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders, cover, system health, arrange Home, Face ID, document reader — v2.9.15)
+   enquiries, follow-ups, delays, close & archive, costing, reminders, cover, system health, arrange Home, document reader — v2.9.16)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -450,7 +450,7 @@
     if (!pw) { setLoginMsg(msg, 'Enter your password.', 'error'); $('#loginPass').focus(); return; }
     state.busy = true; loginBusy(true); setLoginMsg(msg, '');
     try {
-      const res = await api.call('ethixSignIn', pkSignArgs914(user, pw), { timeout: 60000 });   // v2.9.14: + this device's Face ID
+      const res = await api.call('ethixSignIn', [user, pw, true], { timeout: 60000 });
       if (res && res.success && res.token) {
         api.token = res.token;
         state.pendingUser = user;
@@ -458,8 +458,6 @@
         store.set(LAST_USER, user); keepSession(user, res && res.role);
         let boot = res.boot;
         if (!boot) boot = await api.call('ethixBootstrap');
-        pkAfter914(res, user);   // v2.9.14: 30 more days for this device's Face ID — or it is gone
-        if (await pkOffer914(user, boot, () => enterApp(boot, user, res.role))) return;   // v2.9.14: offer Face ID on this device
         $('#signinCard').classList.add('leaving');
         setTimeout(() => enterApp(boot, user, res.role), 280);
         return;
@@ -503,7 +501,6 @@
       const res = await api.call('ethixSetPassword', [pw], { timeout: 60000 });
       if (res && res.ok) {
         store.set(LAST_USER, user); keepSession(user, res && res.role);
-        if (await pkOffer914(user, res.boot, () => enterApp(res.boot, user))) return;   // v2.9.14
         $('#signinCard').classList.add('leaving');
         setTimeout(() => enterApp(res.boot, user), 280);
         return;
@@ -1934,7 +1931,7 @@
       : isSales() ? go2('#/enquiries', 'enq', 'My enquiries', enqOpen().length) + go2('#/costing', 'costing', 'Costing', costRows().open) + arrGo914()
       : isAdmin() ? go2('#/health', 'health913', 'System health') + go2('#/names', 'names913', 'Customer names') : '';   // v2.9.13
     return (shortcuts ? '<div class="acct-shortcuts">' + shortcuts + '</div>' : '') + '<div class="acct"><span class="avatar">' + esc(initials(state.user)) + '</span><div><div class="acct-name" id="drawerTitle">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(ROLE_NAMES[state.role] || state.role) + '</div></div></div>' +
-      pkAcct914() + '<form class="tile pw-form" id="pwForm" novalidate><h3 class="tile-title">CHANGE PASSWORD</h3>' +
+      '<form class="tile pw-form" id="pwForm" novalidate><h3 class="tile-title">CHANGE PASSWORD</h3>' +
         '<input type="text" name="username" autocomplete="username" value="' + esc(state.user) + '" class="sr-only" tabindex="-1" aria-hidden="true" readonly>' +
         '<label class="pop-label" for="pwCurrent">Current password</label><div class="pw-wrap is-plain"><input id="pwCurrent" type="password" autocomplete="current-password"><button type="button" class="pw-eye" data-eye="pwCurrent" aria-label="Show password">' + EYE + '</button></div>' +
         '<label class="pop-label" for="pwNew">New password</label><div class="pw-wrap is-plain"><input id="pwNew" type="password" autocomplete="new-password"><button type="button" class="pw-eye" data-eye="pwNew" aria-label="Show password">' + EYE + '</button></div>' +
@@ -1960,7 +1957,7 @@
     if (pw !== pw2) { setLoginMsg(msg, 'The two new passwords don’t match.', 'error'); return; }
     const btn = $('#pwSave', form); btn.disabled = true; btn.textContent = 'SAVING…';
     try {
-      const res = await api.call('ethixChangePassword', [cur, pw, pkMine914()]);   // v2.9.14: this device keeps its Face ID
+      const res = await api.call('ethixChangePassword', [cur, pw]);
       if (res && res.ok) { closeOverlays(); toast('Password changed. Your other devices were signed out.'); return; }
       setLoginMsg(msg, (res && res.error) || 'Not changed.', 'error');
     } catch (e) { if (e.kind !== 'auth') setLoginMsg(msg, /not available/i.test(e.message) ? 'Needs the Phase 3 Code.gs update.' : e.message, 'error'); }
@@ -2000,7 +1997,7 @@
             '<span class="ur-name"><span class="avatar' + (u.role === 'SALES' ? ' is-other' : '') + '">' + esc(initials(u.name)) + '</span><span class="ur-who"><span><b>' + esc(u.name) + '</b>' + (u.name === state.user ? ' <span class="you">YOU</span>' : '') + '</span>' + (u.email ? '<small class="ur-mail">' + icon('mail', 12) + esc(u.email) + '</small>' : u.role === 'CS' ? '<small class="ur-mail is-none">No work email</small>' : '') + '</span></span>' +
             '<span class="ur-role"><span class="chip ' + rc[1] + '">' + rc[0] + '</span></span>' +
             '<span class="ur-status">' + (u.locked ? '<span class="chip chip-urgent">' + icon('alert', 13) + 'Locked · ' + u.locked + ' min</span>' : u.online ? '<span class="online"><i class="dot is-on"></i>Online' + (u.sessions > 1 ? ' · ' + u.sessions + ' devices' : '') + '</span>' : '<span class="online"><i class="dot"></i>' + (u.sessions ? 'Signed in · idle' : 'Offline') + '</span>') + '</span>' +
-            '<span class="ur-pw">' + esc(PW_TEXT[u.password] || u.password) + pkChip914(u) + '</span>' +   // v2.9.14: Face ID devices
+            '<span class="ur-pw">' + esc(PW_TEXT[u.password] || u.password) + '</span>' +
             '<span class="ur-act">' + (u.locked ? '<button type="button" class="btn-ghost btn-sm" data-adm="unlock" data-user="' + esc(u.name) + '">Unlock</button>' : '') +
               (u.name !== state.user && !(u.name === 'MASTER' && state.user !== 'MASTER') ? '<button type="button" class="icon-btn" data-adm="menu" data-user="' + esc(u.name) + '" aria-label="Manage ' + esc(u.name) + '">' + icon('more', 18) + '</button>' : '') + '</span>' +
           '</li>';
@@ -2012,8 +2009,8 @@
   function peopleAction(a) {
     a = String(a || '');
     const M = [
-      [/^SIGNED IN WITH (.+)$/, (m) => 'signed in with ' + pkWords914(m[1])], [/^TURNED (ON|OFF) (.+ · .+)$/, (m) => 'turned ' + m[1].toLowerCase() + ' ' + pkWords914(m[2])],   // v2.9.14
-      [/^REMOVED (.+ · .+) OF (.+)$/, (m) => 'removed ' + pkWords914(m[1]) + ' of ' + m[2]], [/^FACE ID REFUSED — (.+)$/, (m) => 'was refused by Face ID · ' + m[1].toLowerCase()],
+      [/^SIGNED IN WITH (.+)$/, (m) => 'signed in with ' + pkOldWords916(m[1])], [/^TURNED (ON|OFF) (.+ · .+)$/, (m) => 'turned ' + m[1].toLowerCase() + ' ' + pkOldWords916(m[2])],   // v2.9.14 rows (Face ID, removed in v2.9.16)
+      [/^REMOVED (.+ · .+) OF (.+)$/, (m) => 'removed ' + pkOldWords916(m[1]) + ' of ' + m[2]], [/^FACE ID REFUSED — (.+)$/, (m) => 'was refused by Face ID · ' + m[1].toLowerCase()],
       [/^LOGGED IN$/, () => 'signed in'], [/^LOGGED OUT$/, () => 'signed out'],
       [/^SET A NEW PASSWORD$/, () => 'set their own password'], [/^CHANGED PASSWORD$/, () => 'changed their password'],
       [/^CREATED USER (.+) \((.+)\)$/, (m) => 'created an account for ' + m[1] + ' · ' + nice(m[2])],
@@ -3121,7 +3118,7 @@
       state.resuming = false;
       api.token = null;
       document.body.classList.remove('is-resuming');
-      if (e.kind === 'auth' || /new password/i.test(e.message)) { dropSession(); pkStartUnlock914(); }   // v2.9.14: Face ID instead of the password
+      if (e.kind === 'auth' || /new password/i.test(e.message)) dropSession();
       else { const n = $('#cardNote'); if (n) { n.hidden = false; n.textContent = 'Could not reach ETHIX just now — reload to try again, or sign in.'; } }
       return false;
     }
@@ -5685,11 +5682,11 @@
 
   function confirmLogout() {
     closeOverlays(true);
-    $('#confirmTitle').textContent = 'Log out?'; $('#confirmText').textContent = pkLogoutText914();   // v2.9.14: Face ID next time $('#confirmYes').textContent = 'Log out';
+    $('#confirmTitle').textContent = 'Log out?'; $('#confirmText').textContent = 'You’ll need your password to come back in.'; $('#confirmYes').textContent = 'Log out';
     const wrap = $('#confirmWrap'); wrap.hidden = false; $('#confirmNo').focus();
     const close = () => { wrap.hidden = true; };
     $('#confirmNo').onclick = close;
-    $('#confirmYes').onclick = () => { api.logout(); dropSession(); pkOut914(); document.body.style.opacity = '0.6'; history.replaceState(null, '', location.pathname + location.search); setTimeout(() => window.location.reload(), 250); };
+    $('#confirmYes').onclick = () => { api.logout(); dropSession(); document.body.style.opacity = '0.6'; history.replaceState(null, '', location.pathname + location.search); setTimeout(() => window.location.reload(), 250); };
     wrap.onclick = (e) => { if (e.target === wrap) close(); };
   }
 
@@ -8197,15 +8194,11 @@
   // 10 · Arrange Home: each person's order of the five counters and the three tiles, and which are hidden (kept on the server,
   //      so the laptop and the phone show the same Home). Arrange mode: dashed outlines, ⋮⋮ to drag (or the arrow keys), the
   //      eye hides a tile, Reset / Done.
-  // 11 · Face ID / fingerprint unlock (passkeys): the password once on a device, then 30 days with the device's own check.
+  // (11 · Face ID / fingerprint unlock was removed in v2.9.16)
   // ====================================================================================================================
   I.grip914 = '<g fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></g>';
   I.eye914 = '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>';
   I.arrange914 = '<rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2" stroke-dasharray="2.4 2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/>';
-  I.face914 = '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M9 9v1.5M15 9v1.5M12 9v4h-1M9.5 16a3.5 3.5 0 0 0 5 0"/>';
-  I.finger914 = '<path d="M7.5 11a4.5 4.5 0 0 1 9 0v1.5c0 2.5-.6 4.6-1.6 6.5"/><path d="M12 11v2c0 3-.8 5.3-2.2 7"/><path d="M4.5 9.5A8 8 0 0 1 19.6 9"/><path d="M5 14c.3 2-.2 4-1 5.5M19.5 13.5c0 1.5-.2 3-.6 4.3"/>';
-  I.phone914 = '<rect x="6.5" y="2.5" width="11" height="19" rx="2.6"/><path d="M10.5 18.5h3"/>';
-  I.laptop914 = '<rect x="4.5" y="5" width="15" height="10" rx="1.6"/><path d="M2.5 18.5h19"/>';
 
   // ------------------------------------------------------------------------------------------------ 10 · Arrange Home
   const HK914 = ['active', 'costing', 'sied', 'free', 'hold'], HT914 = ['watch', 'week', 'day'];
@@ -8219,8 +8212,6 @@
   const homeKey914 = (H) => JSON.stringify({ k: H.k, t: H.t, h: H.h });
   function applyBoot914(boot) {
     if (!H914.on && !H914.timer) { H914.home = boot.home914 || null; H914.savedKey = homeKey914(home914()); }
-    S914.server = !!(boot.pk914 && boot.pk914.on);
-    if (S914.server) pkCan914();
   }
   const ctl914 = (id, hid) => '<span class="a914-ctl"><button type="button" class="a914-eye' + (hid ? ' is-on' : '') + '" data-a914-eye="' + id + '" aria-pressed="' + hid + '" aria-label="' + (hid ? 'Show ' : 'Hide ') + esc(hName914(id)) + '" title="' + (hid ? 'Hidden — show it' : 'Hide') + '">' + icon('eye914', 15) + '</button>' +
     '<button type="button" class="a914-grip" data-a914-grip="' + id + '" aria-label="Move ' + esc(hName914(id)) + ' — drag it, or use the arrow keys" title="Drag to move">' + icon('grip914', 16) + '</button></span>';
@@ -8435,287 +8426,18 @@
     window.addEventListener('hashchange', () => { if (H914.on && !/^#\/(home)?$/.test(location.hash || '#/')) arrange914(false); });
   }
 
-  // ------------------------------------------------------------------------------------------------ 11 · Face ID / fingerprint
-  const PK914 = 'ethix.v2.pk914', PKNO914 = 'ethix.v2.pk914no';
-  const S914 = { server: false, can: null, canP: null, busy: false, pw: false };
-  const b64e914 = (buf) => { const b = new Uint8Array(buf); let s = ''; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
-  const b64d914 = (s) => { s = String(s || '').replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; const t = atob(s), b = new Uint8Array(t.length); for (let i = 0; i < t.length; i++) b[i] = t.charCodeAt(i); return b; };
-  function pkDev914() {
-    const ua = navigator.userAgent || '', touchMac = /Macintosh/.test(ua) && navigator.maxTouchPoints > 1;
-    if (/iPhone|iPod/.test(ua)) return { dev: 'iPhone', place: 'iPhone', word: 'Face ID', ic: 'face914', note: 'Your face never leaves the iPhone — it checks you and tells EWS only “yes, it’s {n}”.' };
-    if (/iPad/.test(ua) || touchMac) return { dev: 'iPad', place: 'iPad', word: 'Face ID / Touch ID', ic: 'face914', note: 'Your face or finger never leaves the iPad — it checks you and tells EWS only “yes, it’s {n}”.' };
-    if (/Android/.test(ua)) return { dev: 'Android phone', place: 'phone', word: 'fingerprint', ic: 'finger914', note: 'Your fingerprint never leaves the phone — it checks you and tells EWS only “yes, it’s {n}”.' };
-    if (/Windows/.test(ua)) return { dev: 'Windows laptop', place: 'laptop', word: 'Windows Hello', ic: 'finger914', note: 'Windows Hello checks your face or finger on this laptop — EWS never sees it.' };
-    if (/Macintosh/.test(ua)) return { dev: 'Mac', place: 'laptop', word: 'Touch ID', ic: 'finger914', note: 'Touch ID checks your finger on this laptop — EWS never sees it.' };
-    return { dev: 'Device', place: 'device', word: 'screen lock', ic: 'finger914', note: 'Your screen lock checks you on this device — EWS never sees it.' };
-  }
-  const pkWordUp914 = (w) => (/^[a-z]/.test(w) ? w[0].toUpperCase() + w.slice(1) : w);
-  function pkCan914() {   // this device has Face ID / a fingerprint / Windows Hello / a screen lock that websites may use
-    if (!S914.canP) S914.canP = (async () => { try { return !!(window.isSecureContext && window.PublicKeyCredential && PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch (e) { return false; } })().then((v) => (S914.can = v));
-    return S914.canP;
-  }
-  function pkRec914(user) {
-    const r = store.get(PK914, null);
-    if (!r || typeof r.id !== 'string' || !r.u) return null;
-    return !user || r.u === user ? r : null;
-  }
-  const pkLive914 = (r) => !!r && r.exp > Date.now() && !!window.PublicKeyCredential;
-  function pkKeep914(user, x) { if (x && x.id) store.set(PK914, { u: user, id: x.id, exp: +x.exp || 0, dev: x.dev || '', word: x.word || pkDev914().word }); }
-  function pkDrop914() { try { localStorage.removeItem(PK914); } catch (e) { /* private mode */ } }
-  const pkMine914 = () => { const r = pkRec914(state.user); return r ? r.id : ''; };
-  function pkSignArgs914(user, pw) { const r = pkRec914(user); return r ? [user, pw, true, APP_URL98, r.id] : [user, pw, true]; }
-  function pkAfter914(res, user) {   // a password sign-in renews this device's 30 days, or says it is gone
-    const x = res && res.pk914; if (!x) return;
-    if (x.gone) { if (pkRec914(user)) pkDrop914(); } else pkKeep914(user, x);
-  }
-
-  function pkCard914(kind, rec) {   // the sign-in card: unlock, or the offer after a password sign-in
-    const d = pkDev914(), n = nice(rec.u), word = rec.word || d.word;
-    const unlock = kind === 'unlock';
-    return '<div class="pk914 is-' + kind + '" id="pkStep914">' +
-      '<span class="pk914-av" aria-hidden="true">' + esc(String(rec.u).slice(0, 1).toUpperCase()) + '</span>' +
-      '<div class="kicker pk914-k">' + (unlock ? 'WELCOME BACK' : 'FASTER SIGN-IN') + '</div>' +
-      '<h2 class="pk914-name' + (unlock ? '' : ' is-q') + '" id="pkTitle914">' + (unlock ? esc(n) : 'Use ' + esc(word) + ' next time?') + '</h2>' +
-      '<div class="pk914-dev">' + (unlock ? 'This ' + esc(d.place) + ' · remembered 30 days' : 'This ' + esc(d.place) + ' · for 30 days') + '</div>' +
-      '<button type="button" class="pk914-go" id="pkGo914" data-pk914="' + (unlock ? 'go' : 'add') + '">' + icon(d.ic, 22) + '<span>' + (unlock ? 'Unlock with ' : 'Turn on ') + esc(word) + '</span></button>' +
-      '<div class="pk914-msg" id="pkMsg914" role="alert"></div>' +
-      '<button type="button" class="pk914-pw" data-pk914="' + (unlock ? 'pw' : 'later') + '">' + (unlock ? 'Use password instead' : 'Not now') + '</button>' +
-      '<p class="pk914-note">' + esc(d.note.replace('{n}', n)) + '</p></div>';
-  }
-  function pkShow914(kind, rec, after) {
-    const card = $('#signinCard'), old = $('#pkStep914'); if (old) old.remove();
-    S914.after = after || null;
-    card.classList.toggle('is-pk914', !!kind);
-    if (!kind) return;
-    card.insertAdjacentHTML('beforeend', pkCard914(kind, rec));
-    card.classList.remove('shake');
-    if (document.activeElement && card.contains(document.activeElement)) document.activeElement.blur();
-  }
-  function pkMsg914(text) { const m = $('#pkMsg914'); if (m) { m.textContent = text || ''; m.classList.toggle('is-on', !!text); } }
-  function pkBusy914(on, label) {
-    const b = $('#pkGo914'); if (!b) return;
-    if (on) { b.dataset.label = b.querySelector('span').textContent; b.querySelector('span').textContent = label; } else if (b.dataset.label) b.querySelector('span').textContent = b.dataset.label;
-    b.disabled = on; b.classList.toggle('is-busy914', on);
-  }
-  function pkToPassword914(message) {
-    clearInterval(PKC914.timer);
-    pkShow914(null);
-    S914.pw = true;
-    showKnown();
-    $('#stepLogin').hidden = false;
-    if (message) setLoginMsg($('#loginMsg'), message, 'locked');
-    setTimeout(() => { const f = $('#userField').hidden ? $('#loginPass') : $('#loginUser'); if (f) f.focus(); }, 40);
-  }
-  // v2.9.14.1 — the one-time code is fetched the moment the card shows (that also wakes the server), kept fresh, and
-  // Face ID starts by itself once per opening (not after a Log out). A tap on the button calls Face ID in the same tap
-  // (Safari needs that), so on iPhone only Apple's own "Use Passkey" sheet remains.
-  const PKC914 = { c: '', at: 0, p: null, timer: 0, auto: false };
-  function pkFetch914() {
-    if (!PKC914.p) PKC914.p = api.call('ethixPkChallenge', [], { timeout: 30000 })
-      .then((r) => { PKC914.c = (r && r.c) || ''; PKC914.at = Date.now(); return PKC914.c; })
-      .catch(() => '').then((c) => { PKC914.p = null; return c; });
-    return PKC914.p;
-  }
-  const pkFresh914 = () => !!PKC914.c && Date.now() - PKC914.at < 150e3;   // each code lasts 3 minutes on the server
-  function pkKeepFresh914() {
-    clearInterval(PKC914.timer);
-    PKC914.timer = setInterval(() => {
-      if (!$('#pkStep914.is-unlock') || state.signedIn) { clearInterval(PKC914.timer); return; }
-      if (!document.hidden && !S914.busy && !pkFresh914()) pkFetch914();
-    }, 30e3);
-  }
-  const pkOut914 = () => { try { sessionStorage.setItem('ethix.pk914out', '1'); } catch (e) { /* private mode */ } };
-  function pkStartUnlock914() {   // the sign-in screen shows the unlock when this device has a live passkey
-    const r = pkRec914();
-    if (!pkLive914(r) || S914.pw || !api.connected) return false;
-    pkShow914('unlock', r);
-    PKC914.c = '';
-    const ready = pkFetch914();
-    pkKeepFresh914();
-    let out = false;
-    try { out = sessionStorage.getItem('ethix.pk914out') === '1'; sessionStorage.removeItem('ethix.pk914out'); } catch (e) { /* private mode */ }
-    if (!out) ready.then((c) => { if (c) pkAuto914(); });
-    return true;
-  }
-  function pkAuto914() {   // once per opening, when the page is in front
-    const go = () => { if (PKC914.auto || S914.busy || state.signedIn || !$('#pkStep914.is-unlock')) return; PKC914.auto = true; pkUnlock914(true); };
-    if (document.visibilityState === 'visible' && document.hasFocus()) { go(); return; }
-    const f = () => { window.removeEventListener('focus', f); document.removeEventListener('visibilitychange', v); go(); };
-    const v = () => { if (document.visibilityState === 'visible') f(); };
-    window.addEventListener('focus', f); document.addEventListener('visibilitychange', v);
-  }
-  async function pkUnlock914(auto) {
-    const rec = pkRec914(); if (!rec || S914.busy) return;
-    const word = rec.word || pkDev914().word;
-    S914.busy = true; pkMsg914(''); pkBusy914(true, 'Checking…');
-    let leaving = false;
-    try {
-      let c = pkFresh914() ? PKC914.c : '';
-      if (!c) c = await pkFetch914();   // only when the code is missing or old (the card was open a long time)
-      if (!c) { if (!auto) pkMsg914('EWS could not be reached — check the connection, or use your password.'); return; }
-      let cred;
-      try {
-        // no await before this line when the code is ready: Face ID starts within the tap itself
-        cred = await navigator.credentials.get({ publicKey: { challenge: b64d914(c), allowCredentials: [{ type: 'public-key', id: b64d914(rec.id), transports: ['internal', 'hybrid'] }], userVerification: 'required', timeout: 60000 } });
-      } catch (x) {
-        if (!auto) pkMsg914(x && x.name === 'NotAllowedError' ? pkWordUp914(word) + ' did not go through — try again, or use your password.' : 'This device could not use ' + word + ' just now — use your password.');
-        return;   // the code was not used: the next tap reuses it (the timer renews it before it ages out)
-      }
-      PKC914.c = '';   // signed now: this code is spent
-      const r = cred.response;
-      const res = await api.call('ethixPkUnlock', [rec.u, { id: b64e914(cred.rawId), cd: b64e914(r.clientDataJSON), ad: b64e914(r.authenticatorData), sig: b64e914(r.signature) }, true, APP_URL98], { timeout: 60000 });
-      if (res && res.success && res.token) {
-        clearInterval(PKC914.timer);
-        api.token = res.token;
-        state.pendingUser = rec.u;
-        pkKeep914(rec.u, res.pk914);
-        store.set(LAST_USER, rec.u); keepSession(rec.u, res.role);
-        let boot = res.boot;
-        if (!boot) boot = await api.call('ethixBootstrap');
-        leaving = true;
-        $('#signinCard').classList.add('leaving');
-        setTimeout(() => { pkShow914(null); enterApp(boot, rec.u, res.role); }, 280);
-        return;
-      }
-      if (res && res.gone) { pkDrop914(); pkToPassword914(res.message); return; }
-      $('#signinCard').classList.remove('shake'); void $('#signinCard').offsetWidth; $('#signinCard').classList.add('shake');
-      pkMsg914((res && res.message) || 'Face ID could not sign you in — try again, or use your password.');
-      pkFetch914();
-    } catch (err) {
-      pkMsg914(err.message); pkFetch914();
-    } finally { S914.busy = false; if (!leaving) pkBusy914(false); }
-  }
-  // after a password sign-in: offer Face ID on a device that has it (not again for a week after "Not now")
-  async function pkOffer914(user, boot, enter) {
-    if (!boot || !boot.pk914 || !boot.pk914.on) return false;
-    if (pkLive914(pkRec914(user))) return false;
-    const no = store.get(PKNO914, null);
-    if (no && no.u === user && Date.now() - no.t < 7 * 864e5) return false;
-    if (!(await pkCan914())) return false;
-    $('#stepLogin').hidden = true; $('#stepNewPw').hidden = true;
-    pkShow914('offer', { u: user }, enter);
-    return true;
-  }
-  function pkLeave914() {
-    const go = S914.after; S914.after = null;
-    if (!go) return;
-    $('#signinCard').classList.add('leaving');
-    setTimeout(() => { pkShow914(null); go(); }, 280);
-  }
-  // turning it on: the device makes a new key (its check first), EWS keeps the public half
-  async function pkCreate914(user) {
-    const d = pkDev914();
-    const b = await api.call('ethixPkBegin', [], { timeout: 30000 });
-    const uid = new Uint8Array(16); window.crypto.getRandomValues(uid);
-    let cred;
-    try {
-      cred = await navigator.credentials.create({ publicKey: {
-        rp: { name: 'Ethix Workspace' }, user: { id: uid, name: b.user, displayName: nice(b.user) }, challenge: b64d914(b.c),
-        pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
-        authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred', requireResidentKey: false },
-        timeout: 60000, attestation: 'none' } });
-    } catch (x) {
-      throw new ApiError(x && x.name === 'NotAllowedError' ? pkWordUp914(d.word) + ' did not go through — try again.' : x && x.name === 'InvalidStateError' ? 'This device is already set up — sign out and unlock with ' + d.word + '.' : 'This device could not turn on ' + d.word + ' just now.', 'device');
-    }
-    const r = cred.response;
-    const res = await api.call('ethixPkAdd', [{ id: b64e914(cred.rawId), cd: b64e914(r.clientDataJSON), ao: b64e914(r.attestationObject), dev: d.dev, word: d.word }], { timeout: 60000 });
-    if (!res || !res.ok) throw new ApiError((res && res.error) || 'Not turned on.', 'server');
-    pkKeep914(user, res);
-    try { localStorage.removeItem(PKNO914); } catch (e) { /* private mode */ }
-    return res;
-  }
-  async function pkAdd914() {
-    if (S914.busy) return;
-    const user = state.pendingUser || store.get(LAST_USER, ''), d = pkDev914();
-    S914.busy = true; pkMsg914(''); pkBusy914(true, 'Waiting for ' + d.word + '…');
-    let ok = false;
-    try { await pkCreate914(user); ok = true; }
-    catch (e) { pkMsg914(e.message); }
-    finally { S914.busy = false; if (!ok) pkBusy914(false); }
-    if (ok) { pkBusy914(true, pkWordUp914(d.word) + ' is on'); $('#pkGo914').classList.add('is-ok914'); setTimeout(pkLeave914, 650); }
-  }
-
-  // My account: Face ID on this device — on (until when) / off, and the button that changes it
-  function pkAcct914() {
-    if (!S914.server || !S914.can || !state.user) return '';
-    const d = pkDev914(), r = pkRec914(state.user), on = pkLive914(r);
-    const until = on ? dxb(r.exp) : null;
-    return '<div class="tile pk914-acct" id="pkAcct914"><span class="pk914-acct-ic">' + icon(d.ic, 20) + '</span>' +
-      '<div class="pk914-acct-t"><h3 class="tile-title">' + esc(d.word.toUpperCase()) + ' ON THIS ' + esc(d.place.toUpperCase()) + '</h3>' +
-      '<p>' + (on ? '<b class="pk914-on">On</b> · your password again after ' + until.getDate() + ' ' + nice(MON_UP[until.getMonth()]) : 'Unlock EWS with ' + esc(d.word) + ' instead of typing your password.') + '</p><p class="pk914-acct-msg" id="pkAcctMsg914" role="alert"></p></div>' +
-      '<button type="button" class="' + (on ? 'btn-ghost' : 'btn-brutal') + ' btn-sm" data-pk914="' + (on ? 'off' : 'on') + '">' + (on ? 'Turn off' : 'Turn on') + '</button></div>';
-  }
-  async function pkAcctToggle914(btn) {
-    if (S914.busy) return;
-    const on = btn.dataset.pk914 === 'off', d = pkDev914(), msg = $('#pkAcctMsg914');
-    S914.busy = true; btn.disabled = true;
-    try {
-      if (on) { const id = pkMine914(); if (id) await api.call('ethixPkRemove', [id]); pkDrop914(); toast(pkWordUp914(d.word) + ' is off on this ' + d.place + ' — the password next time'); }
-      else { await pkCreate914(state.user); toast(pkWordUp914(d.word) + ' is on for this ' + d.place); }
-      const t = $('#pkAcct914'); if (t) t.outerHTML = pkAcct914();
-    } catch (e) { if (msg) msg.textContent = e.message; btn.disabled = false; }
-    finally { S914.busy = false; }
-  }
-
-  // Admin · People: each person's devices, and Remove
-  const pkDay914 = (t) => { const d = dxb(t), t0 = today0(), d0 = new Date(d); d0.setHours(0, 0, 0, 0); const n = Math.round((t0 - d0) / 864e5); return n === 0 ? 'today' : n === 1 ? 'yesterday' : d.getDate() + ' ' + nice(MON_UP[d.getMonth()]); };
-  const pkDate914 = (t) => { const d = dxb(t); return d.getDate() + ' ' + nice(MON_UP[d.getMonth()]); };
-  const pkDevIc914 = (dev) => (/iPhone|phone/i.test(dev) ? 'phone914' : /iPad/i.test(dev) ? 'phone914' : 'laptop914');
-  function pkChip914(u) {
-    const L = u.devices || []; if (!L.length) return '';
-    const names = L.map((x) => x.dev), txt = names.length > 2 ? names[0] + ' + ' + (names.length - 1) + ' more' : names.join(' · ');
-    return '<button type="button" class="pk914-chip" data-pk914="devs" data-user="' + esc(u.name) + '" aria-label="Face ID and fingerprint devices of ' + esc(u.name) + ': ' + esc(names.join(', ')) + '">' + icon('finger914', 13) + '<span>' + esc(txt) + '</span></button>';
-  }
-  function pkDevPop914(name) {
-    return () => {
-      const u = adminData().users.find((x) => x.name === name), L = (u && u.devices) || [];
-      return '<div class="pop-title">' + esc(name) + '</div>' +
-        (L.length ? '<ul class="pk914-list">' + L.map((x) => '<li><span class="pk914-li-ic">' + icon(pkDevIc914(x.dev), 18) + '</span><span class="pk914-li-t"><b>' + esc(x.dev) + '</b><small>' + esc(x.word) + ' · added ' + pkDate914(x.added) + ' · ' + (x.used ? 'last used ' + pkDay914(x.used) : 'not used yet') + (x.exp && x.exp < Date.now() ? ' · <i>password due</i>' : '') + '</small></span>' +
-          '<button type="button" class="btn-ghost btn-sm is-danger" data-pk914="rm" data-user="' + esc(name) + '" data-id="' + esc(x.id) + '">Remove</button></li>').join('') + '</ul>' : '<p class="pop-text">No devices.</p>') +
-        '<p class="pop-hint">A removed device asks for the password next time.</p>';
-    };
-  }
-  async function pkAdminRemove914(btn) {
-    const name = btn.dataset.user, id = btn.dataset.id, u = adminData().users.find((x) => x.name === name), x = u && (u.devices || []).find((y) => y.id === id);
-    btn.disabled = true;
-    try {
-      const res = await api.call('ethixAdminDeviceRemove', [name, id]);
-      if (res && res.list) { state.admin = res.list; }
-      if (name === state.user && pkMine914() === id) pkDrop914();
-      rerender(); refreshOverlay();
-      if (!((adminData().users.find((y) => y.name === name) || {}).devices || []).length) closeOverlays();
-      toast((x ? x.dev : 'Device') + ' removed — it asks for the password next time');
-    } catch (e) { btn.disabled = false; toast(e.message, { error: true }); }
-  }
-  const pkWords914 = (s) => String(s || '').toLowerCase().replace(/face id \/ touch id|face id|touch id|windows hello|iphone|ipad|android|windows|mac\b/g, (w) => ({ 'face id / touch id': 'Face ID / Touch ID', 'face id': 'Face ID', 'touch id': 'Touch ID', 'windows hello': 'Windows Hello', iphone: 'iPhone', ipad: 'iPad', android: 'Android', windows: 'Windows', mac: 'Mac' }[w]));
-
-  const pkLogoutText914 = () => { const r = pkRec914(state.user); return pkLive914(r) ? 'Next time ' + (r.word || pkDev914().word) + ' unlocks it — or your password.' : 'You’ll need your password to come back in.'; };
   function initV2914() {
     initArrange914();
-    document.addEventListener('click', (e) => {
-      const b = e.target.closest && e.target.closest('[data-pk914]'); if (!b) return;
-      const k = b.dataset.pk914;
-      if (k === 'go') pkUnlock914(false);
-      else if (k === 'pw') pkToPassword914('');
-      else if (k === 'add') pkAdd914();
-      else if (k === 'later') { store.set(PKNO914, { u: state.pendingUser || store.get(LAST_USER, ''), t: Date.now() }); pkLeave914(); }
-      else if (k === 'on' || k === 'off') pkAcctToggle914(b);
-      else if (k === 'devs' && isAdmin()) openPop(b, 'FACE ID / FINGERPRINT', pkDevPop914(b.dataset.user));
-      else if (k === 'rm' && isAdmin()) pkAdminRemove914(b);
-    });
-    document.addEventListener('keydown', (e) => {   // the sign-in card: Enter unlocks (or turns it on)
-      if (e.key !== 'Enter' || !$('#signinCard.is-pk914') || state.signedIn) return;
-      if (e.target.closest && e.target.closest('button, a, input')) return;
-      const g = $('#pkGo914'); if (g && !g.disabled) { e.preventDefault(); g.click(); }
-    });
-    if (!savedSession()) pkStartUnlock914();
+    try { ['ethix.v2.pk914', 'ethix.v2.pk914no'].forEach((k) => localStorage.removeItem(k)); sessionStorage.removeItem('ethix.pk914out'); } catch (e) { /* private mode */ }   // v2.9.16: Face ID removed
   }
 
-  // ==================================================================== v2.9.15 — Document reader (Customer Service)
+  // ==================================================================== v2.9.15 / v2.9.16 — Document reader (Customer Service)
   // Drop invoices / packing lists (PDF, scan, phone photo, several at once). Pages become pictures here (pdf.js, on this
-  // device); PDFs that already have text send their text instead (fewer Groq tokens, exact). Read with Groq: Code.gs calls
-  // Groq with the key from Script Properties. Nothing is saved — the results live in this page's memory until Start again,
-  // Log out or closing the page. Tabs: FOR THE SI · FOR THE BOE · DUBAI TRADE · ALL TEXT.
+  // device). v2.9.16 — READ (free first): a PDF's own text, or Google's reading of a scan (Code.gs, Drive OCR), goes through
+  // EWS's own rules (rdRules916); EWS checks itself and only invoice / packing-list pages with gaps go to Groq, as text.
+  // The page picker: every page a thumbnail with a tick. Read with Groq stays (everything with Groq, as in v2.9.15).
+  // Nothing is saved — the results live in this page's memory until Start again, Log out or closing the page.
+  // Tabs: FOR THE SI · FOR THE BOE · DUBAI TRADE · ALL TEXT.
   I.reader915 = '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M8.5 13h7M8.5 16.5h4.5"/>';
   I.doc915 = '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>';
   I.scan915 = '<path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M7.5 12h9"/>';
@@ -8723,13 +8445,319 @@
   const PDFJS915 = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/';
   const RD_MAXP915 = 30, RD_MAXF915 = 12;
   const RD = { user: null, files: [], tab: 'si', busy: false, stop: false, msg: null, n: 0, until: 0, tick: null, tries: 0,
-    tpm: 8000, rem: null, at: 0, q: Promise.resolve(), lib: null, done: 0 };
+    tpm: 8000, rem: null, at: 0, q: Promise.resolve(), lib: null, done: 0, stage: '', how: null, gapOnly: false, fill: 0, fillN: 0 };
   try { const g = JSON.parse(localStorage.getItem('ethix.v2.groq915') || 'null'); if (g && g.tpm > 1000) RD.tpm = g.tpm; } catch (e) { /* private mode */ }
   const RD_KIND915 = { 'invoice': 'Invoice', 'packing list': 'Packing list', 'bill of lading': 'BL', 'certificate of origin': 'Certificate of origin' };
   const rdPl915 = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
   function rd915Clear() {   // Log out / another person / Start again: everything read is forgotten
-    RD.stop = true; RD.files = []; RD.msg = null; RD.tab = 'si'; RD.user = state.user || null; RD.until = 0; RD.done = 0;
+    RD.stop = true; RD.files = []; RD.msg = null; RD.tab = 'si'; RD.user = state.user || null; RD.until = 0; RD.done = 0; RD.how = null; RD.stage = ''; RD.gapOnly = false;
     clearInterval(RD.tick); RD.tick = null;
+  }
+
+  // ==================================================================== v2.9.16 — EWS's own rules (no AI)
+  // A page's text (the PDF's own text, or Google's reading of a scan) → the same answer Groq gives:
+  // { kind, text, fields: { key: { v, sure } }, lines: [...], totals: [...] } — so rdMerge915 shows it the same way.
+  // The rules only state what is printed; a guess is marked sure: false (CHECK). What they cannot find stays empty and
+  // the page is offered to Groq (rdGaps916).
+  const RU_PK916 = '(?:(?:JUMBO|WOODEN|PLASTIC|STEEL|HDPE|PP|PAPER|FIBRE|FIBER|EMPTY|NEW)\\s+)?(?:BAGS?|DRUMS?|DURMS|CARTONS?|CTNS?|PALLETS?|PLTS?|PKGS?|PACKAGES?|BOXES|BOX|ROLLS?|BALES?|CASES?|CRATES?|BUNDLES?|COILS?|IBCS?|PIECES|PCS|CANS?|BARRELS?|SACKS?|REELS?|TINS?)';
+  const RU_PKC916 = new RegExp('^(\\d[\\d,]*)\\s+(' + RU_PK916 + ')$', 'i');
+  const RU_WU916 = /^(KGS?|KILOS?|KILOGRAMS?|MTS?|MTONS?|TONS?|TONNES?|LBS?|GMS?|G)$/;
+  const RU_CURS916 = /^(USD|US\$|\$|AED|DHS?|EUR|€|GBP|£|INR|CNY|RMB|SAR|JPY|OMR|QAR|KWD|BHD)$/;
+  const ruCur916 = (t) => { const u = String(t || '').toUpperCase(); return /^(US\$|\$)$/.test(u) ? 'USD' : /^DHS?$/.test(u) ? 'AED' : u === '€' ? 'EUR' : u === '£' ? 'GBP' : u === 'RMB' ? 'CNY' : u; };
+  function ruNum916(s) {   // "1,300.00" · "27.290 MT" · "41,003.77 USD" · "$ 34,320.00" → { n, u }
+    const m = String(s).trim().match(/^(USD|US\$|\$|AED|EUR|€|GBP|£|INR|CNY|RMB|SAR)?\s*(-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*([A-Za-z$€£%]{0,6})\.?$/);
+    if (!m) return null;
+    return { n: Number(m[2].replace(/,/g, '')), u: (m[3] || m[1] || '').toUpperCase(), dec: (m[2].split('.')[1] || '').length };
+  }
+  function ruType916(c) {   // what a table heading names
+    const t = String(c).toUpperCase().replace(/\s+/g, ' ').trim();
+    if (/^(SR|S|SL|SI|ITEM|LINE)?\.? ?(NO|#|NR)\.?$|^#$|^S\.?N\.?$/.test(t)) return 'sr';
+    if (/NO\.? ?OF CONTAINERS?/.test(t)) return 'nc';
+    if (/H\.?S\.? ?CODE|\bHSN\b|TARIFF/.test(t)) return 'hs';
+    if (/ORIGIN/.test(t)) return 'origin';
+    if (/CONTAINER|CNTR/.test(t)) return 'cont';
+    if (/\bSEAL\b/.test(t)) return 'seal';
+    if (/GROSS|\bG\.?W\b/.test(t)) return 'gross';
+    if (/\bNET\b|\bN\.?W\b/.test(t)) return 'net';
+    if (/\b(RATE|PRICE|U\/P)\b/.test(t)) return 'rate';
+    if (/AMOUNT|VALUE|\bAMT\b|^TOTAL( USD| AED| US\$)?$/.test(t)) return 'value';
+    if (/QTY|QUANTITY|^MT$|^PCS$|^KGS?$/.test(t)) return 'qty';
+    if (/^UNITS?$|\bUOM\b/.test(t)) return 'unit';
+    if (/PACKAGE|PACKING|PKGS|CARTONS|\bBAGS\b|DRUMS|PALLETS/.test(t)) return 'pk';
+    if (/DESCRIPTION|PARTICULARS|COMMODITY|GOODS|PRODUCT|^ITEMS?$/.test(t)) return 'desc';
+    return '';
+  }
+  const ruUnitIn916 = (c) => { const m = String(c).toUpperCase().match(/\(\s*([A-Z$]{1,6})\s*\)|\bIN\s+(KGS?|MTS?|USD|AED|LBS)\b|^(MT|KGS?|PCS)$|(US\$|USD|AED)(?:\/[A-Z]+)?$/); return m ? (m[1] || m[2] || m[3] || m[4]) : ''; };
+  const RU_HEADISH916 = /^(IN\s+[A-Z$]{2,4}|\(?\s*(MT|KGS?|LBS|PCS|USD|AED|US\$|NOS|SETS?|UNITS?)\s*\)?|WEIGHT(\s*\([A-Z]+\))?|P\.?M\.?T\.?)$/i;
+  const RU_STOP916 = /^(AMOUNT IN WORDS|INVOICE (AMT|AMOUNT|VALUE)|PAYMENT|BANK\b|PORT OF|VESSEL|FOR,|FOR AND ON|TERMS\b|DECLARATION|WE (HEREBY )?(DECLARE|CERTIFY)|PAGE ?\d|PREPARED|AUTHORI[SZ]ED|SIGNATURE|REMARKS|NOTE\b|E\.? ?& ?O\.? ?E)/i;
+  const RU_KEY916 = /^(DATE|DATED|INVOICE|INV\b|PL NO|P\/L|BL NO|B\/L|PAYMENT|PRICE|POL|POD|CURRENCY|DISPATCH|COUNTRY OF|DELIVERY|DESTINATION|TERMS|SHIPMENT|MODE OF|SALES CONTRACT|CONTRACT|PO NO|P\.?O\.? NO|ORDER|TOTAL|PORT OF|VESSEL|LC NO|L\/C|REF\b|OUR REF|YOUR REF|PAGE|COMMERCIAL)/i;
+  const RU_SHIP916 = /^(SELLER|SHIPPER|EXPORTER|CONSIGNOR|SUPPLIER|BENEFICIARY)(\s*[\/&]\s*(SELLER|SHIPPER|EXPORTER|SUPPLIER))?(\s+(NAME|DETAILS))?\s*:?\s*(.*)$/i;
+  const RU_CONS916 = /^(BUYER|CONSIGNEE|IMPORTER|CUSTOMER|BILL TO|SOLD TO|SHIP TO|CONSIGNED TO|MESSRS\.?|M\/S\.?|TO)(\s*[\/&]\s*(BUYER|CONSIGNEE|IMPORTER|SHIP TO))?(\s+(NAME|DETAILS))?\s*:?\s*(.*)$/i;
+  const RU_NOTI916 = /^(NOTIFY(\s+PARTY)?(\s+\d)?)()()()\s*:?\s*(.*)$/i;
+  const RU_INCO916 = /\b(EXW|EX[- ]?WORKS|FCA|FAS|FOB|CFR|CNF|C&F|C ?& ?F|CIF|CPT|CIP|DAP|DPU|DAT|DDP)\b[\s,:-]*(.*)$/i;
+  function ruDate916(v) {   // 24-Sep-26 · 08/10/2026 (day first) · 2026-10-08 · 8 October 2026 → YYYY-MM-DD
+    const t = String(v || '').trim(), MON = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+    const out = (y, m, d, sure) => (m >= 1 && m <= 12 && d >= 1 && d <= 31 ? { v: (y < 100 ? 2000 + y : y) + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0'), sure } : null);
+    let m = t.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})$/); if (m) return out(+m[1], +m[2], +m[3], true);
+    m = t.match(/^(\d{1,2})[-\/. ]([A-Za-z]{3,9})[-\/., ]+(\d{2,4})$/); if (m) return out(+m[3], MON.indexOf(m[2].slice(0, 3).toUpperCase()) + 1, +m[1], true);
+    m = t.match(/^([A-Za-z]{3,9})[-\/. ]+(\d{1,2})[-\/., ]+(\d{2,4})$/); if (m) return out(+m[3], MON.indexOf(m[1].slice(0, 3).toUpperCase()) + 1, +m[2], true);
+    m = t.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{2,4})$/); if (m) return +m[2] > 12 ? out(+m[3], +m[1], +m[2], true) : out(+m[3], +m[2], +m[1], true);
+    return null;
+  }
+  function ruKind916(L) {
+    const title = (s) => (/PACKING\s+(LIST|SLIP)|WEIGHT\s+LIST|PACKING\s*\/\s*WEIGHT/i.test(s) && !/INVOICE\s*(&|AND|CUM)\s*PACKING/i.test(s) ? 'packing list'
+      : /\bINVOI[CV]E\b/i.test(s) && !/INVOICE\s*(NO|DATE|NUMBER|VALUE|AMT|AMOUNT|#|REF)/i.test(s) ? 'invoice'
+      : /BILL\s+OF\s+LADING|SEA\s?WAY\s?BILL|AIR\s?WAY\s?BILL/i.test(s) ? 'bill of lading' : /CERTIFICATE\s+OF\s+ORIGIN/i.test(s) ? 'certificate of origin' : '');
+    for (let i = 0; i < Math.min(L.length, 14); i++) { const s = L[i].s.trim(); if (s.length <= 60) { const k = title(s); if (k) return k; } }
+    for (let i = 0; i < L.length; i++) { const s = L[i].s.trim(); if (s.length <= 46) { const k = title(s); if (k) return k; } }
+    return 'other';
+  }
+  function rdRules916(text, cols) {
+    const split = cols === false ? /\t|\s{2,}|\s+\|\s+/ : /\t|\s{3,}|\s+\|\s+/;
+    let gap = false;
+    const L = String(text || '').replace(/\r/g, '').split('\n').map((s) => ({ s: s.trim(), c: s.trim().split(split).map((x) => x.trim()).filter(Boolean) })).filter((l) => { if (!l.c.length) { gap = true; return false; } l.gap = gap; gap = false; return true; });
+    const ocr = cols === false;
+    const res = { kind: ruKind916(L), text: '', fields: {}, lines: [], totals: [] };
+    const F = res.fields, set = (k, v, sure) => { v = String(v || '').trim(); if (v && !F[k]) F[k] = { v, sure: sure !== false }; };
+    const all = L.map((l) => l.s).join('\n'), U = all.toUpperCase();
+    const paper = res.kind === 'invoice' || res.kind === 'packing list';
+    // ---------- tables ----------
+    const isHead = (l) => { if (l.c.length < 3) return null; const ty = l.c.map(ruType916), d = [...new Set(ty.filter(Boolean))]; return d.length >= 2 && (ty.includes('desc') || (ty.includes('cont') && (ty.includes('gross') || ty.includes('net')))) ? ty : null; };
+    const headish = (l) => l.c.every((c) => RU_HEADISH916.test(c) || (ruType916(c) && !/\d{3}/.test(c) && !/:/.test(c)));
+    const tables = [], used = new Set();
+    let cur = '';
+    for (let i = 0; i < L.length; i++) {
+      const ty = isHead(L[i]); if (!ty) continue;
+      const H = { ty, n: L[i].c.length, u: L[i].c.map(ruUnitIn916), units: [], order: [] };
+      const hl = [L[i]]; used.add(i);
+      for (let b = i - 1; b >= Math.max(0, i - 2) && headish(L[b]) && !isHead(L[b]); b--) { hl.unshift(L[b]); used.add(b); }
+      let j = i + 1;
+      while (j < L.length && headish(L[j]) && !isHead(L[j])) { hl.push(L[j]); used.add(j); j++; }
+      hl.forEach((l) => l.c.forEach((c) => { const u = ruUnitIn916(c); if (u) H.units.push(u); const t = ruType916(c); if (/^(qty|net|gross|rate|value)$/.test(t)) H.order.push(t); }));
+      H.wu = H.units.find((u) => RU_WU916.test(u)) || ''; H.cur = ruCur916(H.units.find((u) => RU_CURS916.test(u)) || '');
+      if (H.cur) cur = cur || H.cur;
+      const T = { H, items: [], tot: null, closed: false }; tables.push(T);
+      let item = null, group = { desc: '', hs: '', origin: '' }, prevRow = false;
+      const prev = tables.length > 1 ? tables[tables.length - 2].items.slice(-1)[0] : null;
+      if (prev) group = { desc: prev.desc, hs: prev.hs, origin: prev.origin };
+      const sums = (k) => T.items.reduce((n, x) => n + (typeof x[k] === 'number' ? x[k] : 0), 0);
+      const near = (a, b) => Math.abs(a - b) <= Math.max(0.006, Math.abs(b) * 0.00002);
+      const tot = () => (T.tot = T.tot || { qty: null, unit: '', packages: '', gross: null, net: null, wu: '', cbm: null, goods: null, charges: [], total: null, cur: '' });
+      const totalRow = (l, label) => {
+        const t = tot(); let s = l.c.filter((c) => !RU_CURS916.test(c.toUpperCase())).join('   ');
+        const pk = s.match(new RegExp('(\\d[\\d,]*)\\s+(' + RU_PK916 + ')\\b', 'i'));
+        if (pk) { t.packages = t.packages || (pk[1] + ' ' + pk[2]).toUpperCase(); s = s.replace(pk[0], ' '); }
+        const nums = []; const re = /(USD|US\$|\$|AED|EUR|GBP)?\s*(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:\s*(USD|AED|EUR|GBP|MTS?|KGS?|TONS?|LBS?|PCS|NOS|SETS?|CBM|M3)\b)?/gi; let m;
+        while ((m = re.exec(s))) { if (!m[1] && /[A-Za-z\/-]/.test(s.charAt(m.index + m[0].indexOf(m[2]) - 1))) continue; nums.push({ n: Number(m[2].replace(/,/g, '')), u: (m[3] || m[1] || '').toUpperCase(), dec: (m[2].split('.')[1] || '').length }); }
+        const sub = /^SUB[- ]?TOTAL/i.test(label);
+        nums.forEach((x, k) => {
+          if (/^(CBM|M3)$/.test(x.u)) { t.cbm = x.n; return; }
+          const money = RU_CURS916.test(x.u);
+          if (money) { cur = cur || ruCur916(x.u); t.cur = t.cur || ruCur916(x.u); }
+          const f = ['qty', 'net', 'gross', 'value'].find((q) => !x['_' + q] && T.items.length && T.items.some((it) => typeof it[q] === 'number') && near(sums(q), x.n) && (q === 'value' ? t.total === null || sub : t[q] === null) && !(money && q !== 'value') && !(RU_WU916.test(x.u) && q === 'value'));
+          if (f === 'value' || (!f && (money || (k === nums.length - 1 && x.dec === 2 && T.items.some((it) => typeof it.value === 'number'))))) { if (sub) t.goods = x.n; else t.total = x.n; }
+          else if (f) { t[f] = x.n; if (f === 'qty') t.unit = t.unit || x.u || (T.items[0] || {}).unit || ''; else t.wu = t.wu || (RU_WU916.test(x.u) ? x.u : '') || (T.items[0] || {}).wu || H.wu; }
+          else if (RU_WU916.test(x.u) && t.qty === null && res.kind !== 'packing list') { t.qty = x.n; t.unit = x.u; }
+        });
+      };
+      for (; j < L.length; j++) {
+        const l = L[j]; if (isHead(l)) break;
+        const cells = l.c.filter((c) => { if (RU_CURS916.test(c.toUpperCase())) { cur = cur || ruCur916(c); return false; } return true; });
+        if (!cells.length) continue;
+        const tl = l.c.find((c) => /^(GRAND\s+|SUB[- ]?|NET\s+)?TOTAL\b/i.test(c));
+        if (tl) { totalRow(l, tl); T.closed = true; used.add(j); continue; }
+        if (T.closed) {
+          const ch = l.s.match(/^((?:SEA|OCEAN|AIR|INLAND)?\s*(?:FREIGHT|INSURANCE|DISCOUNT|VAT|TAX|HANDLING|DOCUMENTATION)[A-Za-z %().\/-]*?)[\s:$]*((?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2})\s*(?:USD|AED)?$/i);
+          if (ch && res.kind === 'invoice') { const t = tot(); if (t.total !== null && t.goods === null) { t.goods = t.total; t.total = null; } t.charges.push({ what: ch[1].trim().replace(/\s+/g, ' '), n: Number(ch[2].replace(/,/g, '')) }); used.add(j); }
+          continue;
+        }
+        if (RU_STOP916.test(l.s) || /^CONTAINER DETAILS/i.test(l.s)) { T.closed = true; continue; }
+        used.add(j);
+        // what each cell says about the goods (HS code, origin, weights, container, seal, packing)
+        const R = [], A = {};
+        cells.forEach((c) => {
+          let m;
+          if ((m = c.match(/^\(?\s*H\.?S\.?\s*(?:CODE|NO)?\.?\s*[:#-]?\s*(\d[\d .]{2,16}\d)\s*\)?$/i))) A.hs = m[1].replace(/[^0-9]/g, '');
+          else if ((m = c.match(/^\(?\s*(?:COUNTRY OF ORIGIN|ORIGIN|MADE IN)\s*[:-]?\s*([A-Za-z .]{2,40}?)\s*\)?$/i))) A.origin = m[1].trim().toUpperCase();
+          else if ((m = c.match(/^GROSS\s*(?:WEIGHT|WT)\.?\s*[:-]?\s*([\d,]+(?:\.\d+)?)\s*([A-Za-z]*)\.?$/i))) { A.gross = Number(m[1].replace(/,/g, '')); A.wu = m[2].toUpperCase(); }
+          else if ((m = c.match(/^NET\s*(?:WEIGHT|WT)\.?\s*[:-]?\s*([\d,]+(?:\.\d+)?)\s*([A-Za-z]*)\.?$/i))) { A.net = Number(m[1].replace(/,/g, '')); A.wu = m[2].toUpperCase() || A.wu; }
+          else if ((m = c.match(/^(?:CONTAINER|CNTR)(?:\s*NO\.?)?\s*[:-]\s*([A-Z]{4}\s?\d{6,7})$/i))) { A.cont = m[1]; A.contLabel = true; }
+          else if (/^[A-Z]{4}\s?\d{7}$/.test(c)) A.cont = c;
+          else if (/^SEAL(?:\s*NO\.?)?\s*[:-]?\s*\w+$/i.test(c)) A.seal = 1;
+          else if ((m = c.match(/^PACKING\s*[:-]\s*(.+)$/i))) { const q = m[1].match(/(\d[\d,]*)\s*([A-Za-z]+)/); if (q) A.pk = { n: Number(q[1].replace(/,/g, '')), u: q[2].toUpperCase() }; }
+          else if ((m = c.match(RU_PKC916))) { A.pkTxt = c.toUpperCase().replace(/\s+/g, ' '); A.pk = A.pk || { n: Number(m[1].replace(/,/g, '')), u: m[2].toUpperCase().replace(/\s+/g, ' ') }; }
+          else R.push(c);
+        });
+        const aligned = cells.length === H.n;
+        let sr = false;
+        if (R.length > 1 && /^\d{1,3}(\.0+)?\.?$/.test(R[0]) && (aligned ? H.ty[0] === 'sr' : true)) { sr = true; R.shift(); }
+        const nums = R.map(ruNum916), texts = R.filter((c, k) => !nums[k] && /[A-Za-z]{2}/.test(c)), N = nums.filter(Boolean);
+        const apply = (t) => { if (A.pkTxt) t.pkTxt = A.pkTxt; if (A.hs) t.hs = A.hs; if (A.origin) t.origin = A.origin; if (A.cont) t.cont = (t.cont || 0) + 1; if (A.pk) t.pk = A.pk;
+          if (typeof A.gross === 'number') { t.gross = A.gross; t.wu = A.wu || t.wu; } if (typeof A.net === 'number') { t.net = A.net; t.wu = A.wu || t.wu; } };
+        if (!N.length) {
+          if (sr && texts.length) { item = { desc: texts[0], hs: group.hs, origin: group.origin, own: true, open: true, sure: true, n: 0 }; T.items.push(item); apply(item); prevRow = false; continue; }
+          if (item) { apply(item); if (prevRow && texts.length === 1 && cells.length === 1 && !/:/.test(texts[0]) && texts[0].length < 70 && !Object.keys(A).length) item.desc += ' ' + texts[0]; }
+          else { apply(group); if (texts.length && !group.own && !Object.keys(A).length) { group.desc = texts[0]; group.own = true; } }
+          prevRow = false; continue;
+        }
+        // a row with numbers: a new line of goods, or more of the one before
+        const numsOnly = !texts.length && !sr;
+        if (numsOnly && !A.cont && T.items.length && !(item && item.open)) { totalRow(l, ''); continue; }   // only numbers under the rows: the table's own totals
+        let target, more = false;
+        if (item && item.open) { target = item; item.open = false; }
+        else if (numsOnly && item && item.own && !A.contLabel) { target = item; more = true; }
+        else { target = { desc: '', hs: group.hs, origin: group.origin, own: false, sure: true, n: 0 }; T.items.push(target); item = target; }
+        const seen = [];
+        const put = (k, x) => { if (!x) return; seen.push(k); target[k] = more && typeof target[k] === 'number' ? Math.round((target[k] + x.n) * 1e6) / 1e6 : x.n;
+          if (k === 'qty') target.unit = target.unit || (x.u && !RU_CURS916.test(x.u) ? x.u : '') || H.u[H.ty.indexOf('qty')] || H.u[H.ty.indexOf('net')] || H.wu;
+          if (k === 'gross' || k === 'net') target.wu = (RU_WU916.test(x.u) ? x.u : '') || H.u[H.ty.indexOf(k)] || target.wu || H.wu;
+          if (k === 'value' && RU_CURS916.test(x.u)) cur = cur || ruCur916(x.u); };
+        const hasQty = H.ty.includes('qty'), hasVal = H.ty.includes('value') || H.order.includes('value');
+        if (aligned && !more) {
+          cells.forEach((c, k) => {
+            const t = H.ty[k], x = ruNum916(c);
+            if (t === 'desc' && !ruNum916(c) && R.includes(c)) { target.desc = c; target.own = true; }
+            else if (t === 'pk' && /\d/.test(c)) target.pkTxt = c.toUpperCase();
+            else if (t === 'unit' && !x) target.unit = target.unit || (/^METRIC TON/i.test(c) ? 'MT' : c.toUpperCase());
+            else if (x && /^(qty|gross|rate|value)$/.test(t)) put(t === 'rate' ? '_rate' : t, x);
+            else if (x && t === 'net') put(!hasQty && hasVal ? 'qty' : 'net', x);
+          });
+          if (!target.own) target.desc = group.desc;
+        } else {
+          if (!more) { if (texts.length && !(texts.length === 1 && /^METRIC TON/i.test(texts[0]))) { target.desc = target.desc || texts[0]; target.own = target.own || !!texts[0]; } if (!target.desc) target.desc = group.desc; }
+          texts.forEach((c) => { if (/^METRIC TON/i.test(c)) target.unit = target.unit || 'MT'; });
+          const order = more && target.cols ? target.cols : null;
+          if (order && order.length === N.length) order.forEach((k, q) => put(k, N[q]));
+          else if (hasVal || res.kind === 'invoice') {
+            const money = N.filter((x) => RU_CURS916.test(x.u)), wt = N.filter((x) => RU_WU916.test(x.u) || /^(PCS|NOS|SETS?|UNITS?|CTNS?)$/.test(x.u));
+            let q = null, r = null, v = null;
+            if (money.length && wt.length) { q = wt[0]; v = money[money.length - 1]; r = money.length > 1 ? money[money.length - 2] : null; }
+            else {
+              for (let a = 0; a < N.length - 2 && !v; a++) for (let b = a + 1; b < N.length - 1 && !v; b++) for (let c2 = b + 1; c2 < N.length && !v; c2++) if (Math.abs(N[a].n * N[b].n - N[c2].n) <= Math.max(0.02, N[c2].n * 0.0006)) { q = N[a]; r = N[b]; v = N[c2]; }
+              if (!v && N.length === 2 && !H.order.includes('rate')) { q = N[0]; v = N[1]; }
+              else if (!v) { v = N[N.length - 1]; if (N.length > 1) { q = N[0]; target.sure = false; } }
+            }
+            put('qty', q); put('_rate', r); put('value', v);
+          } else {
+            const o = H.order.filter((k) => k !== 'rate' && k !== 'value');
+            if (o.length === N.length) o.forEach((k, q) => put(k, N[q]));
+            else if (N.length === 1 && o.includes('qty')) put('qty', N[0]);
+            else if (N.length === 2 && o.includes('gross') && o.includes('net')) { const g = o.filter((k) => k === 'gross' || k === 'net'); put(g[0], N[0]); put(g[1], N[1]); }
+            else target.sure = false;
+          }
+        }
+        if (!more) target.cols = seen.slice();
+        apply(target); target.n++; prevRow = true;
+      }
+      i = j - 1;
+    }
+    // ---------- the goods lines: the table with the most rows ----------
+    const best = tables.filter((t) => t.items.length).sort((a, b) => b.items.length - a.items.length)[0];
+    if (best && paper) {
+      const inv = res.kind === 'invoice';
+      res.lines = best.items.map((it) => {
+        const hs = String(it.hs || ''), l = { hs: hs.length === 12 ? hs.slice(0, 8) : hs, desc: String(it.desc || '').replace(/\s+/g, ' ').trim(), origin: it.origin || '', sure: it.sure !== false };
+        if (typeof it.qty === 'number') { l.qty = it.qty; l.unit = it.unit || ''; }
+        if (typeof it.gross === 'number') l.gross = it.gross;
+        if (typeof it.net === 'number') l.net = it.net;
+        if (l.gross !== undefined || l.net !== undefined) l.wu = it.wu || best.H.wu || '';
+        if (typeof it.value === 'number') l.value = it.value; else if (inv) l.sure = false;
+        if (!l.desc) l.sure = false;
+        if (it.pk) l._pk = it.pk;
+        return l;
+      });
+    }
+    if (!res.lines.length && res.kind === 'invoice') {   // a scan read by Google: rows on one line each — kept only when qty × price = amount
+      const unit = (U.match(/\((PCS|MTS?|KGS?|SETS?|NOS|CTNS?|ROLLS?|UNITS?)\)/) || [])[1] || '';
+      const T = { qty: null, unit: '', packages: '', gross: null, net: null, wu: '', cbm: null, goods: null, charges: [], total: null, cur: '' }, n = (x) => Number(String(x).replace(/,/g, ''));
+      L.forEach((l) => {
+        const s = l.s.replace(/\s*\|\s*/g, ' ');
+        const m = s.match(/^(.*?[A-Za-z].*?)\s+(\d[\d,]*(?:\.\d+)?)\s*(?:[A-Za-z]{2,5}\s+)?(?:USD|US\$|\$)?\s*(\d[\d,]*\.\d{1,4})\s+(?:USD|US\$|\$)?\s*(\d[\d,]*\.\d{2})$/);
+        if (m && !/TOTAL/i.test(m[1]) && T.total === null && Math.abs(n(m[2]) * n(m[3]) - n(m[4])) <= Math.max(0.02, n(m[4]) * 0.0006)) { res.lines.push({ hs: '', desc: m[1].trim(), origin: '', qty: n(m[2]), unit, value: n(m[4]), sure: true }); return; }
+        if (!res.lines.length) return;
+        const t = s.match(/^(.*?)[\s:=})\]-]*(?:USD|US\$|\$)?\s*(\d[\d,]*\.\d{2})$/); if (!t) return;
+        const sum = res.lines.reduce((a, x) => a + x.value, 0);
+        if (/SUB[- ]?TOTAL/i.test(t[1]) || (T.goods === null && T.total === null && !/[A-Za-z]{3}/.test(t[1]))) T.goods = n(t[2]);   // the numbers under the rows
+        else if (/^(GRAND\s+|NET\s+)?TOTAL\b/i.test(t[1])) T.total = n(t[2]);
+        else if (/FREIGHT|INSURANCE|DISCOUNT|\bVAT\b/i.test(t[1])) { if (T.total !== null && T.goods === null) { T.goods = T.total; T.total = null; } T.charges.push({ what: t[1].replace(/[^A-Za-z ]/g, ' ').replace(/\s+/g, ' ').trim(), n: n(t[2]) }); }
+        else if (/TOTAL/i.test(t[1])) T.total = n(t[2]);
+      });
+      if (T.total !== null || T.goods !== null) res.totals.push(T);
+    }
+    tables.forEach((t) => { if (t.tot && paper) { const x = t.tot; if (x.qty !== null || x.gross !== null || x.net !== null || x.total !== null || x.goods !== null || x.packages || x.cbm !== null) res.totals.push(x); } });
+    // ---------- labels anywhere on the page ----------
+    const lab = (re, fn) => { for (let i = 0; i < L.length; i++) for (let k = 0; k < L[i].c.length; k++) { const m = L[i].c[k].match(re); if (!m) continue; const v = ((m[m.length - 1] || '').trim() || (L[i].c[k + 1] || '')).replace(/^[\s—–:#|.-]+/, '').trim(); if (fn(v, i, k) === true) return; } };
+    lab(/^(?:COMMERCIAL\s+|TAX\s+|PROFORMA\s+)?INV(?:OICE)?\.?\s*(?:NO|NUMBER|#|REF)\.?\s*[:#]?\s*(.*)$/i, (v) => { if (/\d/.test(v) && v.length <= 40 && !/^DATE/i.test(v)) { set('invoice_no', v); return true; } });
+    lab(res.kind === 'invoice' ? /^(?:INVOICE\s+|INV\.?\s+)?DATED?\.?\s*:?\s*(.*)$/i : /^(?:INVOICE\s+|INV\.?\s+)DATED?\.?\s*:?\s*(.*)$/i, (v) => { const d = ruDate916(v); if (d) { set('invoice_date', d.v, d.sure); return true; } });
+    lab(/^CURRENCY\s*:?\s*(.*)$/i, (v) => { if (/^[A-Za-z$]{1,3}$/.test(v)) { cur = ruCur916(v.toUpperCase()); F.currency = { v: cur, sure: true }; return true; } });
+    let inco = null;
+    lab(/^(?:(?:SHIPMENT|DELIVERY|PRICE|TRADE|INCO|SALES?)\s*TERMS?|TERMS?\s+OF(?:\s+(?:DELIVERY|SHIPMENT|SALE|TRADE))?|INCOTERMS?)\s*:?\s*(.*)$/i, (v, i, k) => {
+      const m = (v + ' ' + (L[i].c[k + 1] && v ? '' : '')).match(RU_INCO916) || ((L[i].c[k + 1] || '').match(RU_INCO916)); if (m) { inco = { m, sure: true }; return true; } });
+    if (!inco && paper) { const m = all.match(new RegExp('(?:^|[\\s:(])' + RU_INCO916.source.replace('\\b[\\s,:-]*(.*)$', '\\b[ ,:-]*([^\\n]*)'), 'im')); if (m && !/^EX$/i.test(m[1])) inco = { m, sure: /^[A-Z]/.test(m[2] || '') && (m[2] || '').length < 40 }; }
+    if (inco) {
+      const code = inco.m[1].toUpperCase().replace(/[^A-Z&]/g, ''), c3 = /^EXW/.test(code) ? 'EXW' : /^(CNF|C&F|CF)$/.test(code) ? 'CFR' : code;
+      set('incoterm', c3, inco.sure);
+      const place = String(inco.m[2] || '').split(/\s{3,}/)[0].replace(/\s+(USD|AED|EUR|GBP|INR|CNY|RMB|SAR|US\$|BY|VIA|PER|PAYMENT|PRICE|TERMS?|INCOTERMS?)\b.*$|\s+\d.*$/i, '').replace(/^[\s,:-]+|[\s,.;:-]+$/g, ''); if (place && place.length <= 50 && /[A-Za-z]{3}/.test(place) && !/^(DELIVERY|BASIS|TERMS?)$/i.test(place)) set('place', place.toUpperCase(), inco.sure);
+    }
+    const fr = U.match(/FREIGHT\s*:?\s*(PREPAID|COLLECT)|(PREPAID|COLLECT)\s+FREIGHT/); if (fr && paper) set('freight', fr[1] || fr[2]);
+    lab(/^(?:SHIPPING\s+)?MARKS?(?:\s*(?:&|AND)\s*(?:NOS?|NUMBERS?))?\.?\s*:\s*(.*)$/i, (v) => { if (v && v.length <= 200) { set('marks', v); return true; } });
+    if (paper) lab(/^\(?\s*(?:COUNTRY OF ORIGIN|ORIGIN OF GOODS|MADE IN)\s*[:-]?\s*([A-Za-z .]{0,40}?)\s*\)?$/i, (v) => { if (/^[A-Za-z .]{2,40}$/.test(v)) { set('origin', v.toUpperCase()); return true; } });
+    // total weights / packages printed outside the goods rows
+    if (paper) {
+      const T0 = { qty: null, unit: '', packages: '', gross: null, net: null, wu: '', cbm: null, goods: null, charges: [], total: null, cur: '' };
+      const docWu = (tables.find((t) => t.H.wu) || { H: {} }).H.wu || '';
+      const wt = (k, re) => lab(re, (v, i) => { if (used.has(i) && !/TOTAL/i.test(L[i].s)) return; const x = ruNum916(v); if (x && x.n > 0) { T0[k] = x.n; T0.wu = T0.wu || (RU_WU916.test(x.u) ? x.u : '') || docWu; return true; } });
+      wt('gross', /^(?:TOTAL\s+)?GROSS\s*(?:WEIGHT|WT)\.?(?:\s*\(?(?:KGS?|MTS?)\)?)?\s*:?\s*(.*)$/i);
+      wt('net', /^(?:TOTAL\s+)?NET\s*(?:WEIGHT|WT)\.?(?:\s*\(?(?:KGS?|MTS?)\)?)?\s*:?\s*(.*)$/i);
+      lab(/^(?:TOTAL\s+)?(?:VOLUME|CBM|MEASUREMENT)\s*(?:\(CBM\))?\s*:?\s*(.*)$/i, (v, i) => { if (used.has(i) && !/TOTAL/i.test(L[i].s)) return; const x = ruNum916(v); if (x && x.n > 0 && (!x.u || /^(CBM|M3)$/.test(x.u))) { T0.cbm = x.n; return true; } });
+      lab(/^TOTAL\s+(?:NO\.?\s*OF\s+)?(?:PACKAGES?|PKGS)\s*:?\s*(.*)$/i, (v) => { if (/^\d/.test(v) && v.length < 40) { T0.packages = v.toUpperCase(); return true; } });
+      if (T0.gross !== null || T0.net !== null || T0.cbm !== null || T0.packages) res.totals.unshift(T0);
+      // packages: a printed total first; else the largest count that the others add up to
+      let pk = (res.totals.find((t) => t.packages) || {}).packages || '';
+      if (!pk) {
+        const c = []; const re = new RegExp('(?:^|[\\s:(])(\\d[\\d,]*)\\s+(' + RU_PK916 + ')\\b', 'gi'); let m;
+        while ((m = re.exec(U))) c.push({ n: Number(m[1].replace(/,/g, '')), u: m[2].replace(/\s+/g, ' ') });
+        const top = c.slice().sort((a, b) => b.n - a.n)[0];
+        if (top) { const rest = c.filter((x) => x !== top && x.u === top.u && x.n < top.n).reduce((n, x) => n + x.n, 0); if (rest === top.n) pk = top.n + ' ' + top.u; }
+      }
+      if (pk) set('packages', pk);
+    }
+    if (!F.currency && paper) {
+      const n = (re) => (U.match(re) || []).length, c = [['USD', n(/\bUSD\b|US\$|US DOLLARS?/g)], ['AED', n(/\bAED\b|\bDHS\b|DIRHAMS?/g)], ['EUR', n(/\bEUR\b|€/g)], ['GBP', n(/\bGBP\b|£/g)], ['INR', n(/\bINR\b|RUPEES/g)], ['CNY', n(/\bCNY\b|\bRMB\b/g)], ['SAR', n(/\bSAR\b/g)]].sort((a, b) => b[1] - a[1]);
+      if (c[0][1] > 0) set('currency', c[0][0], c[0][1] > c[1][1]); else if (cur) set('currency', cur, false); else if (/\$/.test(U)) set('currency', 'USD', false);
+    }
+    res.totals.forEach((t) => { if ((t.total !== null || t.goods !== null) && !t.cur && F.currency) t.cur = F.currency.v; });
+    // ---------- the parties ----------
+    if (paper) {
+      const block = (re, key) => {
+        for (let i = 0; i < L.length; i++) {
+          const m = L[i].c[0].match(re); if (!m || used.has(i)) continue;
+          const first = (m[m.length - 1] || '').trim(); if (/^TO$/i.test(m[1]) && !/:/.test(L[i].c[0])) continue;
+          if (first && (RU_KEY916.test(first) || first.length > 90 || /:/.test(first))) continue;
+          const out = first ? [first] : [];
+          let clean = true;
+          for (let j = i + 1; j < L.length && out.length < (ocr ? 5 : 7) && j < i + 12; j++) {
+            const c = L[j].c[0];
+            if (ocr && out.length && (L[j].gap || RU_KEY916.test(c) || /^(CONTAINER|SHIPPING|MARKS?|FROM|ISSUED|L\/C|PER|VIA|SAILING|SHIPPED)\b/i.test(c))) break;
+            if (ocr && ((c.match(/\d+\.\d{2}\b/g) || []).length >= 2 || L[j].s.split(/\s+/).filter(ruType916).length >= 3 || /^(FROM|ISSUED|SHIPPED|PER|VIA)\b/i.test(c))) { clean = out.length > 0; break; }
+            if (used.has(j) || RU_SHIP916.test(c) && !/^TO\b/i.test(c) || /^(BUYER|CONSIGNEE|IMPORTER|NOTIFY|BILL TO|SOLD TO|SHIP TO)\b/i.test(c) || isHead(L[j])) break;
+            if (RU_KEY916.test(c)) continue;
+            if (cols !== false && L[j].c.length > 1 && ruType916(c)) break;
+            out.push(c);
+          }
+          if (out.length && /[A-Za-z]{3}/.test(out[0]) && clean) { set(key, out.join('\n').slice(0, 600), !ocr || out.length <= 5); return; }
+        }
+      };
+      block(RU_SHIP916, 'shipper'); block(RU_CONS916, 'consignee'); block(RU_NOTI916, 'notify');
+      if (!F.shipper) {   // no label: a company name printed as the letterhead
+        const co = /\b(L\.?L\.?C|LTD|LIMITED|CO\.|FZE|FZCO|FZC|INC|CORP|CORPORATION|TRADING|INDUSTRIES|ENTERPRISES?|GMBH|PVT|COMPANY|IMPORT|EXPORT)\b/i;
+        for (let i = 0; i < Math.min(L.length, 4); i++) { const c = L[i].c[0]; if (co.test(c) && !/INVOICE|PACKING/i.test(c) && c.length < 90) { set('shipper', c, false); break; } }
+      }
+      const ds = [...new Set(res.lines.map((l) => l.desc.toUpperCase()).filter(Boolean))];
+      if (ds.length) set('description', ds.slice(0, 4).join(', ').slice(0, 300), ds.length <= 4);
+      if (!F.origin) { const o = [...new Set(res.lines.map((l) => l.origin).filter(Boolean))]; if (o.length === 1) set('origin', o[0]); }
+    }
+    return res;
   }
 
   // ---------- files → pages (on this device) ----------
@@ -8790,10 +8818,10 @@
       for (let i = 1; i <= n; i++) {
         if (!RD.files.includes(f)) return;
         const pg = await doc.getPage(i);
-        const p = { id: f.id + '.' + i, f, n: i, img: null, text: null, st: 'new', res: null };
+        const p = { id: f.id + '.' + i, f, n: i, img: null, text: null, st: 'new', res: null, on: true, kind: '', thumb: '' };
         p.text = await rdText915(pg);
-        if (!p.text) { p.img = await rdRender915(pg, 1500, 0.82); scans++; }
-        if (i === 1) f.thumb = await rdRender915(pg, 132, 0.72);
+        if (!p.text) { p.img = await rdRender915(pg, 1500, 0.82); scans++; } else p.kind = rdRules916(p.text).kind;
+        p.thumb = await rdRender915(pg, 132, 0.72); if (i === 1) f.thumb = p.thumb;
         f.pages.push(p);
         pg.cleanup();
         if (n > 2) rdDraw915();
@@ -8852,14 +8880,16 @@
     const im = await rdImgEl915(file);
     const w = im.naturalWidth, h = im.naturalHeight;
     if (!w || !h) throw new Error('This photo type cannot be opened here — save it as JPG and add it again.');
-    f.pages.push({ id: f.id + '.1', f, n: 1, img: rdDraw915Img(im, w, h, 1600, 0.84), text: null, st: 'new', res: null });
     f.thumb = rdDraw915Img(im, w, h, 0, 0.72, true);
+    f.pages.push({ id: f.id + '.1', f, n: 1, img: rdDraw915Img(im, w, h, 1600, 0.84), text: null, st: 'new', res: null, on: true, kind: '', thumb: f.thumb });
     f.total = 1; f.meta = 'photo · 1 page';
   }
 
   // ---------- Read with Groq: one to three pages a call, paced to the plan's tokens a minute ----------
-  const rdTodo915 = () => RD.files.filter((f) => f.st === 'ready').flatMap((f) => f.pages.filter((p) => p.st === 'new' || p.st === 'wait'));
-  function rdCost915(p) { return p.img ? { in: 2100, out: p.short ? 1500 : 1900 } : { in: Math.ceil(p.text.length / 3.2) + 40, out: 700 }; }
+  const rdTodo915 = () => RD.files.filter((f) => f.st === 'ready').flatMap((f) => f.pages.filter((p) => p.on && (p.st === 'new' || p.st === 'wait') && (!RD.gapOnly || p.keep)));
+  const rdOn916 = () => RD.files.filter((f) => f.st === 'ready').flatMap((f) => f.pages.filter((p) => p.on));
+  const rdTx916 = (p) => p.text || (p.keep && !p.full && p.ocrOk ? p.ocr : null);   // what Groq gets: text when there is good text (a third of a picture's tokens)
+  function rdCost915(p) { const t = rdTx916(p); return !t ? { in: 2100, out: p.short ? 1500 : 1900 } : { in: Math.ceil(t.length / 3.2) + 40, out: p.keep ? 1100 : 700 }; }
   function rdNeed915(b) {
     let i = 1000, o = 300; b.forEach((p) => { const c = rdCost915(p); i += c.in; o += c.out; });
     o = Math.min(o, 6000); return { in: i, out: o, total: i + o, likely: i + Math.round(o * 0.7) };
@@ -8894,26 +8924,40 @@
   const rdLeft915 = () => { const s = Math.max(0, Math.ceil((RD.until - Date.now()) / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
   function rdEta915(pages) {   // the whole read, in words
     const tok = pages.reduce((n, p) => { const c = rdCost915(p); return n + c.in + c.out * 0.7 + 350; }, 0);
-    const min = tok / RD.tpm, calls = Math.ceil(pages.filter((p) => p.img).length + pages.filter((p) => !p.img).length / 3);
+    const min = tok / RD.tpm, calls = Math.ceil(pages.filter((p) => !rdTx916(p)).length + pages.filter((p) => rdTx916(p)).length / 3);
     const sec = Math.max(min * 60, calls * 7);
     return sec < 50 ? 'under a minute' : sec < 90 ? 'about a minute' : 'about ' + Math.round(sec / 60) + ' minutes';
   }
-  async function rdRead915() {
+  async function rdRead915(mode) {
     if (RD.busy) { RD.stop = true; rdDraw915(); return; }
     await RD.q;
+    mode = mode || 'groq';
+    const again = (P) => P.forEach((p) => { p.keep = p.res; p.st = 'new'; });
+    if (mode === 'groq' && !rdTodo915().length) { const P = rdOn916().filter((p) => p.st === 'done' && p.by !== 'groq'); P.forEach((p) => { p.full = true; }); again(P); }   // read again, everything with Groq
+    if (mode === 'gaps') again(rdOn916().filter((p) => p.st === 'done' && p.gap));
     if (!rdTodo915().length) return;
-    RD.busy = true; RD.stop = false; RD.msg = null; RD.tries = 0; RD.user = state.user;
+    RD.busy = true; RD.stop = false; RD.msg = null; RD.tries = 0; RD.user = state.user; RD.how = null; RD.fill = 0; RD.fillN = 0;
+    RD.stage = mode === 'smart' ? 'free' : 'groq';
     rdDraw915();
-    let fail = null, read = 0;
+    let fail = null, read = 0, free = 0, scans = 0;
     try {
-      while (!RD.stop) {
+      if (mode === 'smart') {
+        const r = await rdFree916(); fail = r.fail; free = r.read; scans = r.scans;
+        if (fail && fail.auth) return;
+        const G = fail || RD.stop ? [] : rdGaps916();
+        G.forEach((p) => { p.gap = true; });
+        if (G.length) { again(G); mode = 'gaps'; } else mode = '';
+      }
+      RD.gapOnly = mode === 'gaps'; RD.stage = mode ? 'groq' : ''; RD.fillN = RD.gapOnly ? rdTodo915().length : 0;
+      if (mode) rdDraw915();
+      while (mode && !RD.stop) {
         const batch = rdBatch915(); if (!batch.length) break;
         const need = rdNeed915(batch), wait = rdWaitFor915(need.likely);
         if (wait > 0) { batch.forEach((p) => { p.st = 'wait'; }); if (!(await rdSleep915(wait))) { batch.forEach((p) => { p.st = 'new'; }); break; } }
         batch.forEach((p) => { p.st = 'read'; }); rdDraw915();
         let res;
         try {
-          res = await api.call('ethixReadGroq', [{ pages: batch.map((p) => (p.img ? { img: p.img } : { text: p.text })), out: need.out, short: batch.some((p) => p.short) }], { timeout: 150000 });
+          res = await api.call('ethixReadGroq', [{ pages: batch.map((p) => { const t = rdTx916(p); return !t ? { img: p.img } : p.text ? { text: t } : { text: t, ocr: true }; }), out: need.out, short: batch.some((p) => p.short) }], { timeout: 150000 });
         } catch (e) { batch.forEach((p) => { p.st = 'new'; }); if (e && e.kind === 'auth') return; fail = { err: (e && e.message) || 'Could not reach EWS — try again.' }; break; }
         if (!RD.files.some((f) => batch.some((p) => p.f === f))) continue;   // Start again while it was reading
         res = res || {};
@@ -8931,28 +8975,41 @@
           if (batch.length > 1) { batch.forEach((p) => { p.solo = true; p.st = 'new'; }); continue; }
           const p = batch[0];
           if (!p.short) { p.short = true; p.st = 'new'; continue; }
+          if (p.keep) { p.res = p.keep; p.keep = null; p.full = false; p.st = 'done'; continue; }   // the rules' reading stays, its gaps marked
           p.st = 'err'; p.why = 'Too much on this page for one read — try a clearer scan or photo.'; continue;
         }
         RD.tries = 0;
         batch.forEach((p, i) => {
           const x = (res.pages || [])[i] || { kind: 'other', text: '' };
-          p.res = { kind: x.kind || 'other', text: p.text ? '' : String(x.text || ''), fields: x.fields || {}, lines: [], totals: [] };
-          p.st = 'done'; read++;
+          p.old = p.keep || null; p.keep = null;
+          p.res = { kind: x.kind || 'other', text: p.text ? '' : String(x.text || '') || p.ocr || '', fields: x.fields || {}, lines: [], totals: [] };
+          p.st = 'done'; p.by = 'groq'; p.gap = false; read++; RD.fill++;
         });
         (res.lines || []).forEach((l) => { const p = batch[(l.p || 1) - 1]; if (p) p.res.lines.push(l); });
         (res.totals || []).forEach((t) => { const p = batch[(t.p || 1) - 1]; if (p) p.res.totals.push(t); });
+        batch.forEach((p) => {   // a gap fill: what the rules found and Groq left out stays
+          const o = p.old; p.old = null;
+          if (o && !p.full) { Object.keys(o.fields).forEach((k) => { if (!p.res.fields[k]) p.res.fields[k] = o.fields[k]; }); if (p.res.kind === 'other') p.res.kind = o.kind; if (!p.res.lines.length) p.res.lines = o.lines; if (!p.res.totals.length) p.res.totals = o.totals; }
+          p.full = false; p.kind = p.res.kind;
+        });
         if (RD.files.some((f) => f.pages.some((p) => p.st === 'done')) && !RD.done) RD.done = 1;
         rdDraw915();
       }
     } finally {
-      RD.busy = false; RD.until = 0; clearInterval(RD.tick);
-      RD.files.forEach((f) => f.pages.forEach((p) => { if (p.st === 'read' || p.st === 'wait') p.st = 'new'; }));
+      RD.busy = false; RD.until = 0; clearInterval(RD.tick); RD.gapOnly = false; RD.stage = '';
+      RD.files.forEach((f) => f.pages.forEach((p) => {
+        if (p.keep) { p.res = p.keep; p.keep = null; p.full = false; p.st = 'done'; }   // not reached: the reading it had stays
+        else if (p.st === 'read' || p.st === 'wait') p.st = 'new';
+      }));
     }
+    const left = rdOn916().filter((p) => p.st === 'done' && p.gap).length, was = mode === 'gaps';
+    if (free || read) RD.how = { free: free, scans: scans, groq: read, left: left };
     if (fail && fail.busy) {
-      RD.msg = { kind: 'busy', text: fail.why === 'day' ? 'Groq’s free plan is used up for today — try again tomorrow.' : fail.why === 'hour' ? 'You have read a lot this hour — try again in a little while.' : 'Groq is busy — try again in a minute.' };
+      const t = fail.why === 'google' ? 'Google is busy reading — try again in a minute.' : fail.why === 'day' ? 'Groq’s free plan is used up for today — try again tomorrow.' : fail.why === 'hour' ? 'You have read a lot this hour — try again in a little while.' : 'Groq is busy — try again in a minute.';
+      RD.msg = { kind: 'busy', text: was && left && fail.why !== 'google' ? t.replace(' — try again', ' — the gaps are marked CHECK. Try again') : t };
       rdNote915(RD.msg.text);
     } else if (fail) { RD.msg = { kind: 'err', text: fail.err }; toast(fail.err, { error: true }); }
-    else if (read && !RD.stop && !(state.route && state.route.name === 'reader')) toast('Document reader — ' + rdPl915(read, 'page') + ' read');
+    else if ((read || free) && !RD.stop && !(state.route && state.route.name === 'reader')) toast('Document reader — ' + rdPl915(free || read, 'page') + ' read');
     RD.stop = false;
     rdDraw915();
   }
@@ -8968,7 +9025,7 @@
   function rdDraw915() { if (state.signedIn && state.route && state.route.name === 'reader') rerender(); }
 
   // ---------- what was read → the SI, the BOE, all text ----------
-  const rdDone915 = () => RD.files.flatMap((f) => f.pages.filter((p) => p.st === 'done' && p.res));
+  const rdDone915 = () => RD.files.flatMap((f) => f.pages.filter((p) => p.on && p.res && (p.st === 'done' || p.keep)));
   const rdNum915 = (n, d) => (n === null || n === undefined || !isFinite(n) ? '' : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }));
   function rdKg915(n, u) {
     if (n === null || n === undefined || !isFinite(n)) return null;
@@ -8984,7 +9041,7 @@
   const RD_PARTY915 = ['invoice', 'packing list', 'bill of lading', 'certificate of origin', 'other'];
   const RD_PACK915 = ['packing list', 'invoice', 'bill of lading', 'certificate of origin', 'other'];
   function rdRank915(list, order) { return list.map((x, i) => [x, i]).sort((a, b) => (order.indexOf(a[0].p.res.kind) - order.indexOf(b[0].p.res.kind)) || a[1] - b[1]).map((x) => x[0]); }
-  function rdCands915(key) { return rdDone915().filter((p) => p.res.fields[key] && p.res.fields[key].v).map((p) => ({ p, v: String(p.res.fields[key].v), sure: p.res.fields[key].sure !== false })); }
+  function rdCands915(key) { return rdDone915().filter((p) => p.res.fields[key] && p.res.fields[key].v).map((p) => ({ p, v: String(p.res.fields[key].v), sure: p.res.fields[key].sure !== false && !p.gap })); }
   const rdKey915 = (v) => String(v || '').toUpperCase().split('\n')[0].replace(/\b(LLC|L\.L\.C|FZE|FZCO|FZC|FZ|LTD|LIMITED|PVT|CO|INC)\b\.?/g, '').replace(/[^A-Z0-9]/g, '').slice(0, 24);
   function rdPick915(key, order, same) {
     const c = rdRank915(rdCands915(key), order); if (!c.length) return null;
@@ -9021,7 +9078,7 @@
     const origOf = (f) => { const x = origAll.find((o) => o.p.f === f); return x ? x.v : origOne.length === 1 ? origOne[0] : ''; };   // the same file's origin; another file's only when all agree
     let wFrom = '';
     const lines = base.map((l) => ({ hs: String(l.hs || '').replace(/[^0-9]/g, ''), hsRaw: l.hs || '', desc: l.desc || '', origin: rdIso915(l.origin || origOf(l.pg.f)), qty: l.qty, unit: String(l.unit || '').toUpperCase(),
-      gross: rdKg915(l.gross, l.wu), net: rdKg915(l.net, l.wu), value: base === inv ? l.value : null, sure: l.sure !== false, src: rdSrc915(l.pg), pf: l.pg.f }));
+      gross: rdKg915(l.gross, l.wu), net: rdKg915(l.net, l.wu), value: base === inv ? l.value : null, sure: l.sure !== false && !l.pg.gap, src: rdSrc915(l.pg), pf: l.pg.f }));
     if (base === inv && pl.length === inv.length && lines.every((l) => l.gross === null && l.net === null)) {
       lines.forEach((l, i) => { l.gross = rdKg915(pl[i].gross, pl[i].wu); l.net = rdKg915(pl[i].net, pl[i].wu); }); wFrom = 'pl';
     }
@@ -9065,11 +9122,17 @@
     if (T.gross === null && g) { T.gross = g.n; wTot = true; }
     if (T.net === null && n) { T.net = n.n; wTot = true; }
     const money = (x) => (curT ? curT + ' ' : '') + rdNum915(x, 2);
-    const t0 = tots.find((t) => t.goods !== null || t.total !== null) || null;
+    let t0 = tots.find((t) => t.goods !== null || t.total !== null) || null;
+    const invF = [...new Set(done.filter((p) => p.res.kind === 'invoice').map((p) => p.f))];
+    if (invF.length > 1) {   // v2.9.16: two invoices dropped together — their totals added up
+      const per = invF.map((f) => done.filter((p) => p.f === f && p.res.kind === 'invoice').flatMap((p) => p.res.totals).find((t) => t.goods !== null || t.total !== null));
+      const r2 = (x) => Math.round(x * 100) / 100, gd = (t) => (t.goods !== null ? t.goods : (t.charges || []).length ? null : t.total);
+      if (per.every((t) => t && gd(t) !== null)) t0 = { goods: r2(per.reduce((n, t) => n + gd(t), 0)), total: per.every((t) => t.total !== null) ? r2(per.reduce((n, t) => n + t.total, 0)) : null, charges: per.flatMap((t) => t.charges || []), cur: per[0].cur };
+    }
     let check = { ok: null, text: '' };
     if (T.value !== null && t0) {
       const ch = t0.charges || [], chSum = ch.reduce((s, c) => s + (c.n || 0), 0), goods = t0.goods !== null ? t0.goods : t0.total !== null && !ch.length ? t0.total : null;
-      const eq = (a, b) => Math.abs(a - b) < 0.015;
+      const eq = (a, b) => Math.abs(a - b) < Math.max(0.015, lines.length * 0.005 + 0.001);
       if (goods !== null && eq(T.value, goods)) {
         check = ch.length && t0.total !== null && eq(goods + chSum, t0.total)
           ? { ok: true, text: 'Totals checked: the lines add up to ' + money(T.value) + '; with ' + ch.map((c) => (c.what || 'charges').toLowerCase() + ' ' + money(c.n)).join(' and ') + ' that is the invoice total, ' + money(t0.total) + '.' }
@@ -9085,8 +9148,8 @@
       Object.assign({ k: 'exporter', label: 'EXPORTER' }, rdCard915(nameOf(rdPick915('exporter', RD_PARTY915, rdKey915) || party('shipper')))),
       Object.assign({ k: 'incoterm', label: 'INCOTERMS' }, rdCard915(inc ? Object.assign({}, inc, { v: incT }) : null)),
       Object.assign({ k: 'currency', label: 'INVOICE CURRENCY' }, rdCard915(curT ? { v: curT, src: cur ? cur.src : t0 ? 'Invoice total' : '', chk: !!(cur && cur.chk) } : null))];
-    const text = RD.files.flatMap((f) => f.pages.filter((p) => p.st === 'done' || (p.text && p.st !== 'err')).map((p) => ({ p, kind: p.res ? (RD_KIND915[p.res.kind] || 'Other') : 'Text', text: p.text || (p.res && p.res.text) || '' }))).filter((x) => x.text);
-    return { any: done.length > 0, F, lines, T, wFrom, wTot, check, cards, cur: curT, ino: ino ? ino.v.toUpperCase() : '', inc: incT, text };
+    const text = RD.files.flatMap((f) => f.pages.filter((p) => p.on && (p.st === 'done' || p.keep || (p.text && p.st !== 'err'))).map((p) => ({ p, kind: p.res ? (RD_KIND915[p.res.kind] || 'Other') : 'Text', text: p.text || p.ocr || (p.res && p.res.text) || '' }))).filter((x) => x.text);
+    return { any: done.length > 0, F, lines, T, wFrom, wTot, check, cards, cur: curT, ino: ino ? ino.v.toUpperCase() : '', inc: incT, text, nInv: invF.length };
   }
   function rdCard915(x) { return x ? { v: x.v, src: x.src || '', chk: !!x.chk, why: x.why || '' } : { v: '', src: '', chk: false, why: '' }; }
   const RD_SI915 = ['shipper', 'consignee', 'notify', 'marks', 'description', 'packages', 'gross', 'net', 'volume', 'invoice', 'freight'];
@@ -9097,7 +9160,8 @@
   function rdFileSt915(f) {
     if (f.st === 'prep') return ['is-prep', 'OPENING…'];
     if (f.st === 'err') return ['is-err', 'CAN’T OPEN'];
-    const P = f.pages, d = P.filter((p) => p.st === 'done').length;
+    const P = f.pages.filter((p) => p.on), d = P.filter((p) => p.st === 'done').length;
+    if (!P.length) return ['is-new', 'NOT TICKED'];
     if (P.some((p) => p.st === 'read')) return ['is-read', 'READING' + (P.length > 1 ? ' P' + P.find((p) => p.st === 'read').n : '')];
     if (P.some((p) => p.st === 'wait') && RD.until) return ['is-wait', 'WAITING <span data-rd915-left>' + rdLeft915() + '</span>'];
     if (P.length && d === P.length) return ['is-done', 'READ ' + icon('ok915', 11)];
@@ -9106,38 +9170,47 @@
     return ['is-new', 'READY'];
   }
   function rdFileRow915(f) {
-    const st = rdFileSt915(f), P = f.pages, d = P.filter((p) => p.st === 'done').length;
-    const meta = f.st === 'err' ? f.err : f.st === 'prep' ? 'getting the pages ready' : f.meta + (f.more ? ' · first ' + P.length + ' read' : '');
+    const st = rdFileSt915(f), P = f.pages.filter((p) => p.on), d = P.filter((p) => p.st === 'done').length;
+    const one = f.pages.length === 1 && f.pages[0].kind ? ' · ' + rdKd916(f.pages[0].kind) : '';
+    const meta = f.st === 'err' ? f.err : f.st === 'prep' ? 'getting the pages ready' : f.meta + (f.more ? ' · first ' + f.pages.length + ' opened' : '') + (f.pages.length > 1 && P.length < f.pages.length ? ' · ' + P.length + ' ticked' : '') + one;
     const bar = RD.busy && P.length > 1 && d < P.length && f.st === 'ready' ? '<i class="rd915-bar"><b style="width:' + Math.round(d / P.length * 100) + '%"></b></i>' : '';
     return '<div class="rd915-file ' + st[0] + '" data-f="' + f.id + '">' +
       '<span class="rd915-th">' + (f.thumb ? '<img src="' + f.thumb + '" alt="">' : '') + '</span>' +
-      '<div class="rd915-fn"><b title="' + esc(f.name) + '">' + esc(f.name) + '</b><small>' + esc(meta) + '</small>' + bar + '</div>' +
+      '<div class="rd915-fn"><b title="' + esc(f.name) + '">' + esc(f.name) + '</b><small>' + esc(meta.replace(/(\d) (pages?|ticked|opened)\b/g, '$1\u00a0$2').replace(/PACKING LIST/g, 'PACKING\u00a0LIST')) + '</small>' + bar + '</div>' +
       '<span class="rd915-st">' + st[1] + '</span>' +
-      (RD.busy && f.pages.some((p) => p.st === 'read') ? '' : '<button type="button" class="rd915-x" data-rd915="rm" data-f="' + f.id + '" aria-label="Remove ' + esc(f.name) + '">' + icon('close', 13) + '</button>') + '</div>';
+      (RD.busy && f.pages.some((p) => p.st === 'read') ? '' : '<button type="button" class="rd915-x" data-rd915="rm" data-f="' + f.id + '" aria-label="Remove ' + esc(f.name) + '">' + icon('close', 13) + '</button>') + '</div>' + rdStrip916(f);
   }
   function rdLeftCard915() {
-    const todo = rdTodo915(), prep = RD.files.some((f) => f.st === 'prep'), total = RD.files.reduce((n, f) => n + f.pages.length, 0);
-    const done = RD.files.reduce((n, f) => n + f.pages.filter((p) => p.st === 'done').length, 0), anyDone = done > 0;
+    const todo = rdTodo915(), prep = RD.files.some((f) => f.st === 'prep'), total = RD.files.reduce((n, f) => n + f.pages.length, 0), on = rdOn916().length;
+    const done = rdOn916().filter((p) => p.st === 'done').length, anyDone = done > 0;
     const ph = isTouch();
     let act = '';
     if (RD.busy) {
       const cur = RD.files.flatMap((f) => f.pages).filter((p) => p.st === 'read');
       act = '<div class="rd915-run" role="status">' + (RD.until ? '<span class="rd915-dot is-wait"></span>Waiting for Groq’s free plan · <b data-rd915-left>' + rdLeft915() + '</b>'
-        : '<span class="rd915-dot"></span>Groq is reading ' + (cur.length > 1 ? 'pages ' : 'page ') + (done + 1) + (cur.length > 1 ? '–' + (done + cur.length) : '') + ' of ' + total + '…') + '</div>' +
+        : RD.stage === 'free' ? '<span class="rd915-dot"></span>' + rdFreeSay916()
+        : RD.gapOnly ? '<span class="rd915-dot"></span>Groq is filling the gaps · page ' + Math.min(RD.fillN, RD.fill + 1) + (cur.length > 1 ? '–' + Math.min(RD.fillN, RD.fill + cur.length) : '') + ' of ' + RD.fillN + '…'
+        : '<span class="rd915-dot"></span>Groq is reading ' + (cur.length > 1 ? 'pages ' : 'page ') + (done + 1) + (cur.length > 1 ? '–' + (done + cur.length) : '') + ' of ' + on + '…') + '</div>' +
         '<button type="button" class="btn-ghost rd915-stop" data-rd915="read">Stop</button>';
     } else if (RD.files.length) {
-      const label = prep ? 'Getting the pages ready…' : RD.msg && todo.length ? 'Try again' : todo.length && anyDone ? 'Read ' + rdPl915(todo.length, 'new page') + ' with Groq' : 'Read with Groq';
+      const label = prep ? 'Getting the pages ready…' : RD.msg && todo.length ? 'Try again' : todo.length && anyDone ? 'Read ' + rdPl915(todo.length, 'new page') : 'Read';
+      const gaps = rdOn916().filter((p) => p.st === 'done' && p.gap).length, canAgain = rdOn916().some((p) => p.st === 'done' && p.by !== 'groq');
+      const how = RD.how && !todo.length ? (RD.how.groq && RD.how.free ? 'Groq filled the gaps on ' + rdPl915(RD.how.groq, 'page') : RD.how.groq ? 'Read with Groq' : RD.how.left ? '' : (RD.how.scans ? 'Read here and by Google' : 'Read here') + ' — Groq was not needed') : '';
       act = (RD.msg ? '<div class="rd915-msg is-' + RD.msg.kind + '" role="alert">' + esc(RD.msg.text) + '</div>' : '') +
-        (todo.length || prep ? '<button type="button" class="rd915-go" data-rd915="read"' + (prep ? ' disabled' : '') + '>' + icon('scan915', 17) + '<span>' + label + '</span></button>' +
-          (!prep && todo.length && !RD.msg ? '<div class="rd915-eta">' + rdPl915(todo.length, 'page') + ' · ' + rdEta915(todo) + (RD.tpm <= 12000 ? ' on Groq’s free plan' : '') + '</div>' : '')
-        : anyDone ? '<div class="rd915-all-done">' + icon('ok915', 14) + '<span>' + (done === total && total > 1 ? 'All ' + total + ' pages read' : rdPl915(done, 'page') + ' read') + '</span></div>' : '');
+        (todo.length || prep ? '<button type="button" class="rd915-go" data-rd915="smart"' + (prep ? ' disabled' : '') + '>' + icon('scan915', 17) + '<span>' + label + '</span></button>' +
+          (!prep && todo.length && !RD.msg ? '<div class="rd915-eta">' + rdPl915(todo.length, 'page') + ' · ' + rdEta916(todo) + '</div>' : '')
+        : anyDone ? '<div class="rd915-all-done">' + icon('ok915', 14) + '<span>' + (done === on && on > 1 ? 'All ' + on + ' pages read' : rdPl915(done, 'page') + ' read') + '</span></div>' +
+          (how ? '<div class="rd916-how">' + esc(how) + '</div>' : '') +
+          (gaps ? '<button type="button" class="rd915-go rd916-fill" data-rd915="gaps">' + icon('scan915', 17) + '<span>Fill the gaps with Groq</span></button><div class="rd915-eta">' + rdPl915(gaps, 'page') + ' with gaps · marked CHECK until then</div>' : '')
+        : !on && total ? '<div class="rd916-none">Tick the pages to read.</div>' : '') +
+        (!prep && (todo.length || canAgain) ? '<button type="button" class="rd916-alt" data-rd915="read">' + (todo.length ? 'Read with Groq' : 'Read again with Groq') + '<small>' + (todo.length ? rdEta915(todo) : rdEta915(rdOn916().filter((p) => p.st === 'done' && p.by !== 'groq'))) + (RD.tpm <= 12000 ? ' on its free plan' : '') + '</small></button>' : '');
     }
     return '<section class="rd915-card">' +
       '<button type="button" class="rd915-drop" data-rd915="pick" aria-label="Add invoices or packing lists"><span class="rd915-dic">' + icon('doc915', 19) + '</span>' +
         '<b>' + (ph ? 'Add invoice, packing list…' : 'Drop invoice, packing list…') + '</b><small>' + (ph ? 'PDF, scan or take a photo · several at once' : 'PDF, scan or phone photo · several at once') + '</small></button>' +
       (RD.files.length ? '<div class="rd915-files">' + RD.files.map(rdFileRow915).join('') + '</div>' : '') +
       (act ? '<div class="rd915-act">' + act + '</div>' : '') +
-      '<div class="rd915-safe">' + icon('lock', 14) + '<span>Nothing is saved — close the page and it is gone. Read with Groq sends these pages to Groq to be read.</span></div>' +
+      '<div class="rd915-safe">' + icon('lock', 14) + '<span>Nothing is saved. Scans are read in the EWS Google account and deleted at once; Groq sees only the pages Read cannot finish.</span></div>' +
       (RD.files.length && !RD.busy ? '<button type="button" class="rd915-again" data-rd915="clear">Start again</button>' : '') +
     '</section>';
   }
@@ -9145,7 +9218,7 @@
     const empty = !f.v;
     if (empty && RD.busy) ghost = true;   // still reading: it may be on a page not read yet
     return '<div class="rd915-f' + (f.wide ? ' is-wide' : '') + (f.chk ? ' is-chk' : '') + (empty ? ' is-empty' : '') + '" data-k="' + f.k + '">' +
-      '<small><span>' + f.label + '</span>' + (f.src ? '<em>' + esc(f.src) + '</em>' : '') + (f.chk ? '<span class="rd915-chk" title="' + esc(f.why || 'Groq was not sure — check it on the document') + '">CHECK</span>' : '') + '</small>' +
+      '<small><span>' + f.label + '</span>' + (f.src ? '<em>' + esc(f.src) + '</em>' : '') + (f.chk ? '<span class="rd915-chk" title="' + esc(f.why || 'Not sure — check it on the document') + '">CHECK</span>' : '') + '</small>' +
       (ghost ? '<span class="rd915-sk"></span>' + (f.wide ? '<span class="rd915-sk is-s"></span>' : '') : empty ? '<pre class="is-none">' + (rdDone915().length ? 'Not on these documents' : '—') + '</pre>' : '<pre>' + esc(f.v) + '</pre>') +
       (f.chk && f.why ? '<div class="rd915-why">' + esc(f.why) + '</div>' : '') +
       (empty || ghost ? '' : '<button type="button" class="rd915-cp" data-rd915="cp" data-k="' + f.k + '" aria-label="Copy ' + esc(f.label.toLowerCase()) + '">' + icon('copy', 15) + '</button>') + '</div>';
@@ -9167,7 +9240,7 @@
       : ghost ? [0, 1, 2].map(() => '<tr class="is-sk"><td colspan="10"><span class="rd915-sk"></span></td></tr>').join('')
       : '<tr class="is-empty"><td colspan="10">' + (M.any ? 'No goods lines on these documents.' : 'The invoice’s goods lines appear here, in the order Dubai Trade asks for them.') + '</td></tr>';
     const T = M.T;
-    const foot = L.length ? '<tfoot><tr><td></td><td colspan="3">TOTAL' + (M.ino ? ' · invoice ' + esc(M.ino) : '') + (M.inc ? ' · ' + esc(M.inc) : '') + '</td>' +
+    const foot = L.length ? '<tfoot><tr><td></td><td colspan="3">TOTAL' + (M.nInv > 1 ? ' · ' + M.nInv + ' invoices' : M.ino ? ' · invoice ' + esc(M.ino) : '') + (M.inc ? ' · ' + esc(M.inc) : '') + '</td>' +
       td('QTY', T.qty === null ? dash : rdNum915(T.qty, T.qty % 1 ? 3 : 0), 'm') + td('UNIT', esc(T.unit) || '') +
       td('GROSS KG', T.gross === null ? dash : rdNum915(T.gross, 3), 'm') + td('NET KG', T.net === null ? dash : rdNum915(T.net, 3), 'm') +
       td('VALUE', T.value === null ? dash : (M.cur ? '<span class="rd915-cur">' + esc(M.cur) + '</span>' : '') + rdNum915(T.value, 2), 'm rd915-v') + '<td></td></tr></tfoot>' : '';
@@ -9183,7 +9256,7 @@
       (notes.length || M.check.text || hsNote ? '<div class="rd915-note' + (M.check.ok === false ? ' is-chk' : '') + '">' + esc(notes.join(' ')) + (M.check.text ? ' <span>' + esc(M.check.text) + '</span>' : '') + (hsNote ? ' <b class="rd915-hsn">' + esc(hsNote) + '</b>' : '') + '</div>' : '');
   }
   function rdTextHtml915(M) {
-    if (!M.text.length) return '<div class="rd915-empty">' + icon('reader915', 22) + '<span>' + (RD.busy ? 'The text of each page appears here as Groq reads it.' : 'The text of every page appears here once it is read — ready to copy.') + '</span></div>';
+    if (!M.text.length) return '<div class="rd915-empty">' + icon('reader915', 22) + '<span>' + (RD.busy ? 'The text of each page appears here as it is read.' : 'The text of every page appears here once it is read — ready to copy.') + '</span></div>';
     return '<div class="rd915-pages">' + M.text.map((x, i) => '<article class="rd915-pgx"><header><b>' + esc(x.kind.toUpperCase()) + '</b><em>' + esc(x.p.f.name) + ' · p' + x.p.n + '</em>' +
       '<button type="button" class="rd915-cp" data-rd915="page" data-i="' + i + '" aria-label="Copy the text of this page">' + icon('copy', 15) + '</button></header><pre>' + esc(x.text) + '</pre></article>').join('') + '</div>';
   }
@@ -9196,7 +9269,7 @@
     const can = RD.tab === 'boe' ? M.lines.length > 0 : RD.tab === 'text' ? M.text.length > 0 : RD_SI915.some((k) => M.F[k].v);
     $('#view').innerHTML = '<div class="rd915-pg">' +
       '<header class="rd915-head' + anim + '"><div class="rd915-kick">TOOLS · SI AND BOE HELPER</div><h1>Document reader</h1>' +
-        '<p class="rd915-sub">Drop the invoice and packing list — even scanned. Groq reads them and EWS lays the details out ready to copy.</p></header>' +
+        '<p class="rd915-sub">Drop the invoice and packing list — even scanned. EWS reads them and lays the details out ready to copy.</p></header>' +
       '<div class="rd915-g' + anim + '">' + rdLeftCard915() +
         '<div class="rd915-r"><div class="rd915-tabs"><div class="rd915-tl" role="tablist" aria-label="Document reader">' + tab('si', 'FOR THE SI') + tab('boe', 'FOR THE BOE · DUBAI TRADE') + tab('text', 'ALL TEXT') + '</div>' +
           '<button type="button" class="rd915-all" data-rd915="all"' + (can ? '' : ' disabled') + '>' + icon('copy', 16) + '<span>' + allLabel + '</span></button></div>' +
@@ -9213,6 +9286,113 @@
     toast(ok ? 'Copied' : 'Could not copy — select the text and copy it', ok ? {} : { error: true });
   }
 
+  // ---------- v2.9.16: the page picker ----------
+  const RD_KD916 = { 'invoice': 'INVOICE', 'packing list': 'PACKING LIST', 'bill of lading': 'BL', 'certificate of origin': 'COO', 'other': 'OTHER' };
+  const rdKd916 = (k) => RD_KD916[k] || '';
+  function rdStrip916(f) {   // a file's pages: small thumbnails, each with a tick; the kind under it once it is known
+    if (f.st !== 'ready' || f.pages.length < 2) return '';
+    return '<div class="rd916-strip" data-f="' + f.id + '" role="group" aria-label="Pages of ' + esc(f.name) + '">' + f.pages.map((p) => {
+      const kd = rdKd916(p.kind), st = p.st === 'read' ? ' is-read' : p.st === 'done' ? ' is-done' : p.st === 'err' ? ' is-err' : '';
+      return '<button type="button" class="rd916-pt' + (p.on ? ' is-on' : ' is-off') + st + (p.gap && p.st === 'done' ? ' is-gap' : '') + '" data-rd915="pg" data-p="' + p.id + '" aria-pressed="' + (p.on ? 'true' : 'false') + '"' + (RD.busy ? ' disabled' : '') +
+        ' aria-label="Page ' + p.n + (kd ? ', ' + kd.toLowerCase() : '') + (p.on ? ', ticked' : ', not ticked') + '" title="' + (p.on ? 'Ticked — click to leave this page out' : 'Left out — click to read this page') + '">' +
+        '<span class="rd916-im">' + (p.thumb ? '<img src="' + p.thumb + '" alt="">' : '') + '<i class="rd916-tk">' + icon('ok915', 10) + '</i><b class="rd916-no">' + p.n + '</b></span>' +
+        '<em class="rd916-kd' + (kd ? ' is-' + (p.kind === 'invoice' ? 'inv' : p.kind === 'packing list' ? 'pl' : 'ot') : '') + '">' + (kd || '&nbsp;') + '</em></button>';
+    }).join('') + '</div>';
+  }
+  function rdTick916(id) {
+    if (RD.busy) return;
+    const p = RD.files.flatMap((f) => f.pages).find((x) => x.id === id); if (!p) return;
+    p.on = !p.on; RD.msg = null; RD.how = null;
+    rerender();
+    const b = document.querySelector('.rd916-pt[data-p="' + id + '"]'); if (b) b.focus({ preventScroll: true });
+  }
+  function rdEta916(pages) {   // Read: text is read at once; a scan takes Google a few seconds (two at a time)
+    const s = pages.filter((p) => !p.text && typeof p.ocr !== 'string').length, sec = s * 2.5 + (s ? 2 : 0);
+    return (sec < 3 ? 'at once' : sec < 15 ? 'a few seconds' : sec < 45 ? 'about half a minute' : sec < 90 ? 'about a minute' : 'about ' + Math.round(sec / 60) + ' minutes') + ' · free';
+  }
+  function rdFreeSay916() {
+    const P = rdOn916(), S = P.filter((p) => !p.text), got = S.filter((p) => typeof p.ocr === 'string').length, now = S.filter((p) => p.st === 'read').length;
+    if (!S.length || !now) return 'Reading…';
+    return 'Google is reading ' + (now > 1 ? 'pages ' + (got + 1) + '–' + (got + now) : 'page ' + (got + 1)) + ' of ' + S.length + '…';
+  }
+
+  // ---------- v2.9.16: Read — free first ----------
+  // 1 a PDF's own text is already here; a scan / photo goes to Code.gs, where Google reads it (Drive OCR; the file is deleted
+  //   at once), two pages at a time. 2 EWS's rules lay each page out. 3 rdGaps916 checks the result; only pages with gaps go to Groq.
+  async function rdFree916() {
+    const pages = rdTodo915(), scans = pages.filter((p) => !p.text && typeof p.ocr !== 'string');
+    let fail = null, i = 0, read = 0;
+    const one = async () => {
+      while (i < scans.length && !RD.stop && !fail) {
+        const p = scans[i++]; p.st = 'read'; rdDraw915();
+        let res = null, tries = 0;
+        for (;;) {
+          try { res = await api.call('ethixReadOcr', [{ img: p.img }], { timeout: 120000 }); }
+          catch (e) { p.st = 'new'; fail = fail || (e && e.kind === 'auth' ? { auth: true } : { err: (e && e.message) || 'Could not reach EWS — try again.' }); return; }
+          res = res || {};
+          if (res.busy && res.wait && res.wait <= 30 && tries < 2 && !RD.stop && !fail) { tries++; await new Promise((ok) => setTimeout(ok, res.wait * 1000)); continue; }
+          break;
+        }
+        p.st = 'new';
+        if (!RD.files.includes(p.f)) continue;   // Start again while it was reading
+        if (res.error) { fail = fail || { err: res.error }; return; }
+        if (res.busy) { fail = fail || { busy: true, why: res.why === 'hour' ? 'hour' : 'google' }; return; }
+        p.ocr = String(res.text || '').replace(/\r/g, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 20000);
+        const flat = p.ocr.replace(/\s/g, '');
+        p.ocrOk = flat.length >= 40 && (flat.match(/[A-Za-z0-9]/g) || []).length / flat.length >= 0.55;
+        p.blank = flat.length < 15;
+      }
+    };
+    await Promise.all([one(), one()]);
+    if (fail && fail.auth) return { fail, read, scans: 0 };
+    pages.forEach((p) => {   // what there is text for is laid out, even when a later scan failed
+      if (!RD.files.includes(p.f) || p.st !== 'new') return;
+      const t = p.text || p.ocr; if (typeof t !== 'string') return;
+      const r = rdRules916(t, !!p.text); r.text = p.text ? '' : p.ocr;
+      p.res = r; p.kind = r.kind; p.by = p.text ? 'ews' : 'google'; p.gap = false; p.keep = null; p.st = 'done'; read++;
+    });
+    rdFile916();
+    if (read && !RD.done) RD.done = 1;
+    return { fail, read, scans: pages.filter((p) => p.by === 'google' && p.st === 'done').length };
+  }
+  function rdFile916() {   // packages counted line by line ("Packing: 20 bags" on each) and no total printed: added up, marked CHECK
+    RD.files.forEach((f) => {
+      const P = f.pages.filter((p) => p.on && p.st === 'done' && p.res && p.by !== 'groq');
+      const use = P.filter((p) => p.res.kind === 'packing list').length ? P.filter((p) => p.res.kind === 'packing list') : P.filter((p) => p.res.kind === 'invoice');
+      if (!use.length || use.some((p) => (p.res.fields.packages && !p.res.fields.packages.sum) || p.res.totals.some((t) => t.packages))) return;
+      const L = use.flatMap((p) => p.res.lines); if (!L.length || !L.every((l) => l._pk && l._pk.n > 0)) return;
+      const u = [...new Set(L.map((l) => l._pk.u))]; if (u.length !== 1) return;
+      use.forEach((p) => { delete p.res.fields.packages; });
+      use[use.length - 1].res.fields.packages = { v: L.reduce((n, l) => n + l._pk.n, 0) + ' ' + u[0], sure: false, sum: true };
+    });
+  }
+  function rdGaps916() {   // EWS checks itself — the pages Groq should look at (invoice / packing-list pages only)
+    const out = new Set(), all = rdDone915().filter((p) => p.by !== 'groq');
+    const has = (P, k) => P.some((p) => p.res.fields[k] && p.res.fields[k].v);
+    RD.files.forEach((f) => {
+      const P = all.filter((p) => p.f === f), inv = P.filter((p) => p.res.kind === 'invoice'), pl = P.filter((p) => p.res.kind === 'packing list');
+      if (inv.length) {
+        const L = inv.flatMap((p) => p.res.lines), t = inv.flatMap((p) => p.res.totals).find((x) => x.goods !== null || x.total !== null);
+        const sum = L.reduce((n, l) => n + (typeof l.value === 'number' ? l.value : 0), 0), ch = t ? (t.charges || []).reduce((n, c) => n + (c.n || 0), 0) : 0;
+        const tol = Math.max(0.015, L.length * 0.005 + 0.001);
+        const adds = t && (t.goods !== null ? Math.abs(sum - t.goods) < tol : Math.abs(sum + ch - t.total) < tol);
+        if (!L.length || L.some((l) => l.sure === false) || !adds || !has(inv, 'shipper') || !has(inv, 'consignee') || !has(inv, 'invoice_no')) inv.forEach((p) => out.add(p));
+      }
+      if (pl.length) {
+        const L = pl.flatMap((p) => p.res.lines), T = pl.flatMap((p) => p.res.totals);
+        const w = T.some((t) => t.gross !== null) || (L.length > 0 && L.every((l) => typeof l.gross === 'number'));
+        const pk = has(pl, 'packages') || has(inv, 'packages') || T.some((t) => t.packages);
+        if (!w || !pk || L.some((l) => l.sure === false)) pl.forEach((p) => out.add(p));
+      }
+    });
+    all.forEach((p) => { if (!p.text && !p.ocrOk && !p.blank && p.res.kind === 'other') out.add(p); });   // Google could not read it: the picture goes
+    if (!all.some((p) => p.res.kind === 'invoice' || p.res.kind === 'packing list')) all.filter((p) => (p.text || p.ocr || '').length > 200).slice(0, 3).forEach((p) => out.add(p));
+    return [...out];
+  }
+
+  // v2.9.16: Face ID / fingerprint unlock is gone — older HISTORY rows that mention it still read well
+  const pkOldWords916 = (s) => String(s || '').toLowerCase().replace(/face id \/ touch id|face id|touch id|windows hello|iphone|ipad|android|windows|mac\b/g, (w) => ({ 'face id / touch id': 'Face ID / Touch ID', 'face id': 'Face ID', 'touch id': 'Touch ID', 'windows hello': 'Windows Hello', iphone: 'iPhone', ipad: 'iPad', android: 'Android', windows: 'Windows', mac: 'Mac' })[w] || w);
+
   function initV2915() {
     const inp = document.createElement('input');
     inp.type = 'file'; inp.multiple = true; inp.accept = 'application/pdf,.pdf,image/*'; inp.id = 'rd915In'; inp.hidden = true; inp.setAttribute('aria-hidden', 'true');
@@ -9223,7 +9403,10 @@
       const b = e.target.closest && e.target.closest('[data-rd915]'); if (!b || !onPage()) return;
       const a = b.dataset.rd915, M = RD.M || rdMerge915();
       if (a === 'pick') inp.click();
-      else if (a === 'read') rdRead915();
+      else if (a === 'read') rdRead915('groq');
+      else if (a === 'smart') rdRead915('smart');
+      else if (a === 'gaps') rdRead915('gaps');
+      else if (a === 'pg') rdTick916(b.dataset.p);
       else if (a === 'tab') { RD.tab = b.dataset.t; rerender(); const t = $('.rd915-tab.is-on'); if (t) t.focus({ preventScroll: true }); }
       else if (a === 'rm') { RD.files = RD.files.filter((f) => String(f.id) !== b.dataset.f); RD.msg = null; rerender(); }
       else if (a === 'clear') { rd915Clear(); rerender(); }
