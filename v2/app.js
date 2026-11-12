@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders, cover, system health, arrange Home, document reader, for Dubai Trade, BL check, view access — v2.9.20)
+   enquiries, follow-ups, delays, close & archive, costing, reminders, cover, system health, arrange Home, document reader, for Dubai Trade, BL check, view access — v2.9.21)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -8047,7 +8047,7 @@
     view.innerHTML = '<div class="hl913-pg">' + healthHead913(anim) +
       '<div class="hl913-row' + anim + '" style="--d:40ms">' + tile('SHEET SIZE', T.size) + tile('LAST BACKUP', T.backup) + tile('MORNING EMAIL', T.mail) + tile('PROBLEMS · 7 DAYS', T.probs) + '</div>' +
       '<div class="hl913-2' + anim + '" style="--d:80ms">' + tabsCard + archCard + '</div>' +
-      '<div class="' + anim.trim() + '" style="--d:120ms">' + logCard + '</div></div>';
+      '<div class="' + anim.trim() + '" style="--d:120ms">' + logCard + '</div>' + blOkCard921(anim) + '</div>';   // v2.9.21: BL CHECK · NOT A PROBLEM
     view.classList.toggle('is-busy913', !!H.loading);
   }
   function copyText913() {   // the problem log for Claude: health in one line, then every problem with its details
@@ -9506,7 +9506,7 @@
     return '<div class="rd915-pages">' + M.text.map((x, i) => '<article class="rd915-pgx"><header><b>' + esc(x.kind.toUpperCase()) + '</b><em>' + esc(x.p.f.name) + ' · p' + x.p.n + '</em>' +
       '<button type="button" class="rd915-cp" data-rd915="page" data-i="' + i + '" aria-label="Copy the text of this page">' + icon('copy', 15) + '</button></header><pre>' + esc(x.text) + '</pre></article>').join('') + '</div>';
   }
-  // ==================================================================== v2.9.19 — BL CHECK (v2.9.20: word by word, spelling, no false alarms)
+  // ==================================================================== v2.9.19 — BL CHECK (v2.9.20: word by word, spelling, no false alarms; v2.9.21: every detail)
   // The BL draft checked against the SI (Excel file, PDF or pasted text) — or the invoice / packing list when there is no SI —
   // and the EIRs: the port marks the seal after the physical check, so the EIR's seal is the correct one. EWS tells, in plain
   // sentences, everything that does not match; one Copy takes the whole message. Nothing is saved. (Amal, 12 Nov 2026.)
@@ -9618,6 +9618,7 @@
     return out;
   }
   function blWts919(text) {   // weights with a label: "TOTAL GROSS WEIGHT: 92400 KGS" · "NET WEIGHT IN MT : 190.670 MT" · "NET WT" over "190,670.000 KGS"
+    // v2.9.21: each figure says where it is printed — 'desc' (the label and the figure together) or 'box' (the figure under its label)
     const L = String(text || '').toUpperCase().split('\n'), out = { gross: [], net: [] };
     const kg = (n, u) => (/^(MTS?|M\.?T\.?|TONS?|TONNES?)$/.test(u || '') ? n * 1000 : n);
     const LAB = /\b(GROSS|GR\.?|NET|NT\.?)\s*(?:WEIGHT|WT\.?|WGT)\b/g;
@@ -9626,15 +9627,24 @@
       const labs = [...l.matchAll(LAB)];
       labs.forEach((m, j) => {
         const which = /^G/.test(m[1]) ? 'gross' : 'net';
-        const rest = l.slice(m.index + m[0].length, j + 1 < labs.length ? labs[j + 1].index : undefined);
+        const rest0 = l.slice(m.index + m[0].length, j + 1 < labs.length ? labs[j + 1].index : undefined), rest = rest0.split(/\s{3,}/)[0];   // v2.9.21: the same cell only
+        const nx = (rest0.split(/\s{3,}/)[1] || '').trim().match(/^(\d[\d,]*(?:\.\d+)?)\s*(KGS?|KILOS?|MTS?|M\.?T\.?)?$/);
         const v = rest.match(/^[^0-9\n]{0,24}?(\d[\d,]*(?:\.\d+)?) ?(KGS?|KILOS?|MTS?|M\.?T\.?|TONS?|TONNES?)?\b/);
         const labU = (rest.match(/^[^0-9]*\b(KGS?|MTS?)\b/) || [])[1] || '';
         const cell = (l.split(/\s{3,}/).find((c) => c.includes(m[0])) || l).trim();
-        if (v) { const n = blNum919(v[1]); if (n !== null && (n >= 100 || /MT/.test(v[2] || labU))) out[which].push({ kg: kg(n, v[2] || labU), line: cell }); return; }
+        if (v) { const n = blNum919(v[1]); if (n !== null && (n >= 100 || /MT/.test(v[2] || labU))) out[which].push({ kg: kg(n, v[2] || labU), line: cell, where: 'desc' }); return; }
+        if (nx && labs.length === 1) { const n = blNum919(nx[1]); if (n !== null && (n >= 100 || /MT/.test(nx[2] || labU))) out[which].push({ kg: kg(n, nx[2] || labU), line: nx[0], where: 'box' }); return; }   // v2.9.21: the next cell
         if (labs.length > 1) return;   // a table heading (GROSS and NET side by side)
         for (let k = i + 1; k <= i + 2 && k < L.length; k++) {
           if (blCns919(L[k]).length || /(GROSS|GR\.?|NET|NT\.?)\s*(WEIGHT|WT)/.test(L[k])) continue;
-          const w = L[k].match(/(\d[\d,]*(?:\.\d+)?) ?(KGS?|KILOS?|MTS?|M\.?T\.?)\b/); if (w) { out[which].push({ kg: kg(blNum919(w[1]), w[2]), line: L[k].trim() }); break; }
+          const w = L[k].match(/(\d[\d,]*(?:\.\d+)?) ?(KGS?|KILOS?|MTS?|M\.?T\.?)\b/); if (w) { out[which].push({ kg: kg(blNum919(w[1]), w[2]), line: L[k].trim(), where: 'box' }); return; }
+        }
+        for (let k = i + 1; k <= i + 3 && k < L.length; k++) {   // v2.9.21: the box — a figure alone in the last cell ("NET WT" over "13200.000", "KGS" under it)
+          if (blCns919(L[k]).length) break;
+          const cs = L[k].trim().split(/\s{3,}/), f = cs[cs.length - 1].match(/^(\d[\d,]*(?:\.\d+)?)\s*(KGS?|KILOS?|MTS?|M\.?T\.?)?$/);
+          if (!f) continue;
+          const n = blNum919(f[1]); if (n !== null && (n >= 100 || /MT/.test(f[2] || labU))) out[which].push({ kg: kg(n, f[2] || labU), line: cs[cs.length - 1], where: 'box' });
+          break;
         }
       });
     });
@@ -9831,21 +9841,349 @@
     return '';
   }
 
+  // ==================================================================== v2.9.21 — BL CHECK "every detail" (Amal, 12 Nov 2026)
+  // The SI is the truth: every detail on every SI line must be on the BL draft, wherever and however it is printed — codes exactly
+  // (ED / BOE / HS / invoice / UN numbers, emails, phones — spacing aside), numbers by value (13468.70 = 13,468.700), words as in
+  // v2.9.20. A table's per-row weights / packages are checked by their sum. The SI's own form words are not details. Also: seals with
+  // no EIR are "not checked", the container check digit, the BL against itself, dangerous goods, "Show what was checked",
+  // "Not a problem" (one list for the team — Code.gs) and draft against draft ("What changed").
+  I.np921 = '<circle cx="12" cy="12" r="8.6"/><path d="M8.4 12.3l2.5 2.5 4.8-5.1"/>';
+  I.diff921 = '<path d="M7.5 3.5h6.5l4 4v9.5h-10.5z"/><path d="M14 3.5v4h4"/><path d="M4.5 7v13.5h10"/><path d="M10.5 11.5h4.5M10.5 14.5h3"/>';
+  I.nc921 = '<circle cx="12" cy="12" r="7.5" stroke-dasharray="2.6 2.4"/>';
+  I.list921 = '<path d="M9 7h11M9 12h11M9 17h11"/><path d="M4 7l1 1 2-2M4 12l1 1 2-2M4 17l1 1 2-2"/>';
+
+  // ---------- the SI's own form words (labels, headings) are not details ----------
+  const BL_FORMW921 = new Set(('SHIPPER SHIPPERS EXPORTER CONSIGNOR CONSIGNEE NOTIFY PARTY PARTIES ALSO ADDRESS COMPLETE NAME AND OF THE TO BY AT IN FOR WITH ON OR ' +
+    'BILL BILLS LADING BL B L NO NOS NUMBER NUMBERS NBR BOOKING EXPORT REFERENCES REFERENCE REF FORWARDING AGENT FMC POINT COUNTRY ORIGIN GOODS ' +
+    'ROUTING INSTRUCTIONS INSTRUCTION SHIPPING BASIC OTHER PRE CARRIAGE PLACE RECEIPT PARTICIPATING CARRIER VESSEL VOYAGE VOY FLAG PORT LOADING ' +
+    'DISCHARGE ETD ETA ORIGINALS ORIGINAL RELEASED RELEASE BE FINAL DESTINATION DELIVERY TYPE MOVEMENT IF MIXED USE FIELD PARTICULARS FURNISHED ' +
+    'CONTAINER CONTAINERS CNTR SEAL SEALS MARKS QUANTITY QTY PACKAGES PACKAGE PKGS PKG NET GROSS WEIGHT WEIGHTS WT KG KGS MT MEASUREMENT CBM VOLUME ' +
+    'DESCRIPTION DATE ISSUE TELEX DRAFT COPY DETAILS DETAIL POC CONTACT PERSON TEL TELEPHONE PHONE MOB MOBILE FAX EMAIL MAIL E ID COMMODITY ED BOE ' +
+    'HS CODE INVOICE SL SR S SERIAL TOTAL TOTALS SIZE UNIT').split(' '));
+  const blUp921 = (s) => blFold920(s).toUpperCase().replace(/\s+/g, ' ').trim();
+  const blForm921 = (s) => { const w = blUp921(s).split(/[^A-Z0-9]+/).filter(Boolean); return w.length > 0 && w.length <= 10 && w.every((x) => BL_FORMW921.has(x)); };
+  // sections whose values are instructions to the line, not BL details (the SI's export reference, booking, release, dates …)
+  const BL_SKIP921 = /^(EXPORT\s+REF|FORWARDING\s+AGENT|FMC\b|BOOKING|(BASIC|OTHER|SPECIAL)\s+INSTRUCTION|ORIGINALS?\s+TO\s+BE|ETD\b|ETA\b|PLACE\s*(&|AND)\s*DATE|DATE\b|NO\.?\s*OF\s*ORIGINAL)/;
+  const BL_PTR921 = /\b(ATTACHED|ANNEXURE|AS\s+PER\s+(THE\s+)?(LIST|TABLE|SHEET|ATTACHMENT)|SEE\s+(BELOW|ABOVE|ATTACHED|LIST|SHEET)|TABLE\s*(NO\.?\s*)?\d+)\b/;
+  const BL_CHAT921 = /^(DEAR\b|HI\b|HELLO\b|GOOD\s+(MORNING|AFTERNOON|EVENING)\b|PLEASE\b|PLS\b|KINDLY\b|((BEST|KIND|WARM)\s+)?REGARDS\b|THANKS?\b|THANK\s+YOU\b|(SUBJECT|FROM|TO|CC|SENT|RE|FWD?)\s*:)/;
+  const BL_END921 = /^((BEST|KIND|WARM)\s+)?(REGARDS|THANKS?|THANK\s+YOU)\b/;
+  const BL_PHL921 = /^(TEL|TELEPHONE|PHONE|PH|MOB|MOBILE|CELL|CONTACT|FAX|WHATSAPP|WA)\b/;
+  function blLab921(s) {   // "Label : value" → { lab, val } — a label only when its words are the SI's form words
+    const m = String(s).match(/^([^:;]{1,48}?)\s*[:;]\s*(.*)$/);
+    if (m && !/\d/.test(m[1]) && (blForm921(m[1]) || BL_ANYLAB919.test(blUp921(m[1])))) return { lab: m[1].trim(), val: m[2].trim() };
+    return { lab: '', val: String(s).trim() };
+  }
+  const blIsLab921 = (c) => { const x = String(c || '').trim(), L = blLab921(x); return !!x && !/\d/.test(x) && !(L.lab && L.val) && (blForm921(x) || BL_ANYLAB919.test(blUp921(x).replace(/[:;.\s]+$/, ''))); };
+  function blPretty921(h, many) {   // a heading as a field name: "ED NO" → "ED numbers", "Shipper / Exporter (Complete …)" → "Shipper / exporter"
+    let s = blFold920(h).replace(/\([^)]*\)/g, ' ').replace(/[:;.\s]+$/, '').replace(/\s+/g, ' ').trim();
+    if (!s) return '';
+    const m = s.match(/^(.*?)\s*\b(NO|NOS|NUMBERS?|NBR)\.?$/i);
+    if (m && m[1]) s = m[1] + (many ? ' numbers' : ' number');
+    else if (many && /\bCODE$/i.test(s)) s += 's';
+    return s.split(' ').map((w, i) => (/^[A-Z0-9&/-]{1,3}$/.test(w) && /[A-Z]/.test(w) && w !== 'AND' && w !== 'OF' && w !== 'THE' ? w : i ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())).join(' ');
+  }
+
+  // ---------- a value → its details: emails, phones, numbers, container counts, codes, words ----------
+  const BL_TOKSP921 = /[\s,;:|()*"“”'‘’<>«»[\]{}!?]+/;
+  const blShape921 = (t) => String(t).toUpperCase().replace(/[0-9]/g, '9').replace(/[A-Z]/g, 'A');
+  const blK921 = (s) => String(s).replace(/(\d),(?=\d{3}(?!\d))/g, '$1');   // 13,468.70 → 13468.70 (before cutting at commas)
+  const BL_EMAIL921 = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+  const BL_CNT921 = /\b0*(\d{1,3})\s*[xX×]\s*(20|40|45)(?![0-9])(?:\s*(?:'|’|FT|FEET)?\s*(?:GP|HC|HQ|DV|SD|STD|RF|RH|OT|FR|TK|NOR|DC)\b)?/g;
+  function blParts921(val, ph) {
+    let s = blFold920(val).replace(/ /g, ' ');
+    const P = { em: [], ph: [], num: [], cnt: [], code: [], w: [] };
+    s = blK921(s);
+    s = s.replace(BL_EMAIL921, (m) => { P.em.push(m.toLowerCase()); return ' , '; });
+    s = s.replace(BL_CNT921, (m, n, z) => { P.cnt.push({ t: m.trim(), n: +n, z }); return ' , '; });
+    s = s.replace(ph ? /\+?\s?\(?\d[\d().-]*(?: \(?\d[\d().-]*)*\d/g : /\+\s?\(?\d[\d().-]*(?: \(?\d[\d().-]*)*\d/g, (m) => {
+      const d = m.replace(/\D/g, ''); if (d.length >= 7 && d.length <= 15 && (ph || d.length >= 8)) { P.ph.push({ t: m.trim(), d }); return ' , '; } return m;
+    });
+    const T = s.split(BL_TOKSP921).map((x) => x.replace(/^[.\-/]+|[.\-/]+$/g, '')).filter(Boolean);
+    T.forEach((t, i) => {
+      if (/^\d{1,3}(,\d{3})+(\.\d+)?$|^\d+\.\d+$|^[1-9]\d{3,6}$/.test(t)) { P.num.push({ t, n: Number(t.replace(/,/g, '')), mt: /^(MTS?|M\.?T|TONS?|TONNES?)$/i.test(T[i + 1] || '') }); return; }
+      const c = t.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (c.length >= 5 && /\d/.test(c) && (/[A-Z]/.test(c) || /^0/.test(c) || c.length >= 8 || /[-/.]/.test(t))) { P.code.push({ t: t.toUpperCase(), c, sh: blShape921(t) }); return; }
+      P.w.push(t);
+    });
+    return P;
+  }
+  function blIdx921(D) {   // the BL's details, once per document
+    if (D.ix) return D.ix;
+    const ix = { em: new Set(), ph: new Map(), num: [], cnt: new Set(), code: new Set(), toks: [] };
+    for (const m of D.T.matchAll(BL_EMAIL921)) ix.em.add(m[0].toLowerCase());
+    const U = D.U;
+    for (const m of U.matchAll(/\+?\s?\(?\d[\d().-]*(?: \(?\d[\d().-]*)*\d/g)) { const d = m[0].replace(/\D/g, ''); if (d.length >= 7 && !ix.ph.has(d)) ix.ph.set(d, m[0].trim()); }
+    for (const m of U.matchAll(/\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?/g)) {
+      const n = Number(m[0].replace(/,/g, '')); ix.num.push(n);
+      if (/^\s*(MTS?|M\.?T\b|TONS?|TONNES?)/.test(U.slice(m.index + m[0].length, m.index + m[0].length + 9))) ix.num.push(n * 1000);
+    }
+    for (const m of U.matchAll(BL_CNT921)) ix.cnt.add(+m[1] + '|' + m[2]);
+    const seen = new Set();
+    U.split('\n').forEach((l) => {
+      const tk = blK921(l.replace(BL_EMAIL921, ' ')).split(BL_TOKSP921).map((x) => x.replace(/^[.\-/]+|[.\-/]+$/g, '')).filter(Boolean);
+      const add = (x) => { const c = x.replace(/[^A-Z0-9]/g, ''); if (c.length >= 3) ix.code.add(c); return c; };
+      tk.forEach((t, i) => {
+        const c = add(t); t.split(/[.\-/]+/).forEach(add);
+        for (let k = 2; k <= 4 && i + k <= tk.length; k++) add(tk.slice(i, i + k).join(''));
+        if (c.length >= 5 && /\d/.test(c) && /[A-Z]|^0|[-/.]/.test(t) && !seen.has(c)) { seen.add(c); ix.toks.push({ t, c, sh: blShape921(t) }); }
+      });
+    });
+    return (D.ix = ix);
+  }
+  const blNumOn921 = (ix, n, mt) => ix.num.some((x) => Math.abs(x - n) < 1e-6 || (mt && Math.abs(x - n * 1000) < 1e-3));
+  function blMiss921(D, P, wordsJudged) {   // the details of a value that are not on the BL: [{ k, v, sh, near }]
+    const ix = blIdx921(D), out = [];
+    P.em.forEach((e) => { if (!ix.em.has(e)) out.push({ k: 'em', v: e }); });
+    P.ph.forEach((p) => { if (!ix.ph.has(p.d) && !ix.code.has(p.d)) { const n = [...ix.ph.entries()].find(([d]) => Math.abs(d.length - p.d.length) <= 1 && blLev919(d, p.d) <= 2); out.push({ k: 'ph', v: p.t, near: n ? n[1] : '' }); } });
+    P.num.forEach((x) => { if (!blNumOn921(ix, x.n, x.mt)) out.push({ k: 'num', v: x.t }); });
+    P.cnt.forEach((x) => { if (!ix.cnt.has(x.n + '|' + x.z)) out.push({ k: 'cnt', v: x.t }); });
+    P.code.forEach((x) => { if (!ix.code.has(x.c)) out.push({ k: 'code', v: x.t, c: x.c, sh: x.sh }); });
+    if (!wordsJudged) { const W = blWords920(P.w.join(' ')).filter((x) => !D.keys.has(x.k)); if (W.length) out.push({ k: 'w', v: W.map((x) => x.w).join(' ') }); }
+    return out;
+  }
+  const blCdWant921 = (c) => { let s = 0; for (let i = 0; i < 10; i++) s += (/\d/.test(c[i]) ? +c[i] : BL_CDV919.indexOf(c[i])) * Math.pow(2, i); return (s % 11) % 10; };
+  function blBlNo921(B) {   // the BL number: the labelled cell, else the code beside / above / below the label
+    const code = (v) => /^[A-Z0-9][A-Z0-9/-]{5,30}$/i.test(v) && /\d/.test(v);
+    const clean = (v) => String(v || '').replace(/\(?DRAFT\)?/i, '').trim().split(/\s{2,}/)[0].trim();
+    const LAB = /^(B\s*\/\s*L\s*(NO|NUMBER)|BILL OF LADING\s*(NO|NUMBER))\.?\s*:?$/i;
+    const v = clean(blCellLab919(B.T, /^(B\s*\/\s*L\s*(NO|NUMBER)|BILL OF LADING\s*(NO|NUMBER))/));
+    if (code(v)) return v;
+    const m = B.U.match(/B ?\/ ?L ?(?:NO|NUMBER)\.? ?[:.]? ?([A-Z0-9][A-Z0-9/-]{5,30})/);
+    if (m && /\d/.test(m[1])) return m[1];
+    const L = B.T.split('\n');
+    for (let i = 0; i < L.length; i++) {
+      const cs = L[i].trim().split(/\s{3,}/); if (!LAB.test(cs[cs.length - 1])) continue;
+      for (const k of [i - 1, i + 1]) { const n = String(L[k] || '').trim().split(/\s{3,}/), c = n[n.length - 1]; if (code(c)) return c; }
+    }
+    return v;
+  }
+
+  // ---------- the SI, unit by unit (a line of a cell, or a cell of a line) ----------
+  // Each unit: { g (group = the heading above), f (its own label), raw, val, P | cns | sum }. Tables: a header row of labels and rows under
+  // it — a container table goes to the container check; value columns are details; weight / package columns are checked by their sum.
+  const BL_ROWNO921 = /^(S\.?\s*NO|SL\.?\s*NO|SR\.?\s*NO|SERIAL(\s+NO)?|NO|NOS|#|S\/N|ITEM|SR|SL)\.?$/;
+  const BL_QTY921 = /WEIGHT|\bWT\b|\bWGT\b|\bPKGS?\b|PACKAGES?|\bQTY\b|QUANTITY|\bCBM\b|VOLUME|MEASUREMENT|^MT$|\bKGS?\b|\bTONS?\b/;
+  function blUnits921(pages) {
+    const U = [], tables = [];
+    const unit = (g, raw, opt) => {
+      raw = String(raw || '').trim(); if (!raw || blNorm919(raw).length < 1) return;
+      const up = blUp921(raw);
+      if (BL_CHAT921.test(up)) return;
+      const { lab, val } = blLab921(raw);
+      if (!val || (lab && BL_SKIP921.test(blUp921(lab))) || (g && BL_SKIP921.test(blUp921(g)))) return;
+      if (BL_PTR921.test(blUp921(val)) && blNorm919(blUp921(val).replace(new RegExp(BL_PTR921.source, 'g'), '').replace(/\b(ON|IN|THE|AS|PER|NO)\b/g, '')).length < 4) return;
+      if (blForm921(val)) return;
+      const cns = blCns919(val);
+      U.push(Object.assign({ g: g || '', f: lab, raw, val }, cns.length ? { cns } : { P: blParts921(val, BL_PHL921.test(blUp921(lab)) || /^\+\s?\d/.test(val)) }, opt || {}));
+    };
+    const table = (g, heads, rows, totals) => {   // heads: [text], rows: [[cell]] in the same columns
+      if (rows.some((r) => r.some((c) => blCns919(c).length))) { rows.forEach((r) => unit(g, r.filter(Boolean).join('   '))); return; }
+      const kind = heads.map((h) => { const u = blUp921(h); return BL_ROWNO921.test(u) ? 'no' : BL_QTY921.test(u) ? 'qty' : 'val'; });
+      const vh = heads.filter((h, i) => kind[i] === 'val');
+      const tg = vh.length ? vh.map((h) => blPretty921(h, rows.length > 1)).join(' · ') : g ? blPretty921(g) : 'Table';
+      const T = { g: tg, n: rows.length };
+      tables.push(T);
+      heads.forEach((h, i) => {
+        if (kind[i] === 'val') rows.forEach((r) => { if (r[i]) unit(tg, r[i], { f: h, gp: true }); });
+        if (kind[i] === 'qty') {
+          const vals = rows.map((r) => blNum919(String(r[i] || '').replace(/[^\d.,]+.*$/, ''))).filter((n) => n !== null);
+          if (!vals.length) return;
+          const sum = Math.round(vals.reduce((a, b) => a + b, 0) * 1000) / 1000;
+          const tot = (totals || []).flat().map((c) => blNum919(String(c || '').replace(/[^\d.,]+.*$/, ''))).find((n) => n !== null && Math.abs(n - sum) < 1e-6);
+          U.push({ g: tg, gp: true, f: h, raw: h, val: String(sum), sum, vals, rows: rows.length, total: tot !== undefined });
+        }
+      });
+      (totals || []).flat().filter(Boolean).forEach((c) => {   // a total that is not a column's sum is a detail of its own
+        const n = blNum919(String(c).replace(/[^\d.,]+.*$/, ''));
+        if (n === null || !U.some((u) => u.sum !== undefined && u.g === tg && Math.abs(u.sum - n) < 1e-6)) unit(tg, c, { f: 'Total', gp: true });
+      });
+    };
+    pages.forEach((p) => {
+      if (p.grid) {   // an Excel SI or cells pasted with tabs: the heading above, in the same column
+        const G = p.grid.map((r) => (r || []).map((c) => blFold920(c).replace(/\r/g, '').trim())), head = [], lastV = [];
+        for (let r = 0; r < G.length; r++) {
+          const cells = G[r].map((c, i) => [c, i]).filter(([c]) => c);
+          if (!cells.length) continue;
+          if (cells.length >= 2 && cells.every(([c]) => blIsLab921(c))) {   // a table header? rows under it with values in its columns
+            const cols = cells.map(([, i]) => i), rows = [];
+            let k = r + 1;
+            for (; k < G.length; k++) {
+              const row = G[k] || [], vals = cols.map((i) => row[i] || '');
+              if (!vals.some(Boolean) || row.some((c, i) => c && !cols.includes(i)) || vals.some((c) => c && blIsLab921(c))) break;
+              rows.push(vals);
+            }
+            if (rows.length >= 2 && rows.filter((v) => v.filter(Boolean).length >= 2).length >= Math.ceil(rows.length / 2)) {
+              const tot = []; let t = k;
+              while (t < G.length && t <= k + 4) { const row = G[t] || []; const vals = cols.map((i) => row[i] || ''); if (!row.some(Boolean)) { t++; continue; } if (row.some((c, i) => c && !cols.includes(i)) || !vals.some((c) => /\d/.test(c))) break; tot.push(vals); t++; }
+              table(head[cols[0]] || '', cells.map(([c]) => c), rows, tot);
+              r = (tot.length ? t : k) - 1;
+              continue;
+            }
+          }
+          cells.forEach(([c, i]) => (/\n/.test(c) && blIsLab921(c.replace(/\s*\n\s*/g, ' ')) ? [c.replace(/\s*\n\s*/g, ' / ')] : c.split('\n')).map((x) => x.trim()).filter(Boolean).forEach((line) => {   // a heading on two lines is one heading
+            if (blIsLab921(line)) { if (!(lastV[i] === r - 1 && blUp921(line).split(' ').length === 1)) head[i] = line; return; }   // one form word right under a value is part of it
+            lastV[i] = r;
+            let h = head[i]; if (h === undefined) for (let j = i - 1; j >= 0; j--) if (head[j] !== undefined) { h = head[j]; break; }
+            unit(h || '', line);
+          }));
+        }
+        return;
+      }
+      // a text SI (pasted, or a PDF's text): sections under a heading line; tables (headings one per line, or side by side)
+      const L = blTx919(p).replace(/\r/g, '').split('\n').map((l) => l.replace(/ /g, ' ').trim());
+      let sec = '', broke = false, inSec = 0;
+      for (let i = 0; i < L.length; i++) {
+        const l = L[i];
+        if (!l) { if (inSec) broke = true; continue; }
+        if (BL_END921.test(blUp921(l))) break;   // the email's signature
+        const cells = l.split(/\t|\s{3,}/).map((c) => c.trim()).filter(Boolean);
+        if (cells.length >= 2 && cells.every(blIsLab921)) {   // headings side by side, rows under them
+          const rows = []; let k = i + 1;
+          while (k < L.length && L[k]) { const cs = L[k].split(/\t|\s{3,}/).map((c) => c.trim()); if (cs.length !== cells.length || cs.every(blIsLab921)) break; rows.push(cs); k++; }
+          if (rows.length >= 2) { table(sec, cells, rows, []); i = k - 1; sec = ''; inSec = 0; broke = false; continue; }
+          if (rows.length === 1) { rows[0].forEach((c, q) => unit(cells[q] || sec, c)); i = k - 1; sec = ''; inSec = 0; broke = false; continue; }
+        }
+        if (cells.length === 1 && blIsLab921(l)) {
+          let k = i; while (k + 1 < L.length && L[k + 1] && blIsLab921(L[k + 1]) && L[k + 1].split(/\t|\s{3,}/).length === 1) k++;
+          const n = k - i + 1;
+          if (n >= 2) {   // headings one per line (cells copied from a table): the values follow in the same order, row by row
+            const vals = []; let j = k + 1;
+            while (j < L.length && L[j] && !blIsLab921(L[j])) { vals.push(L[j]); j++; }
+            const rows = []; for (let q = 0; q + n <= vals.length; q += n) rows.push(vals.slice(q, q + n));
+            const cls = (v) => (blNum919(v) !== null ? 'n' : /\d/.test(v) ? blShape921(v) : 't');   // a column keeps one kind: numbers, one code shape, or words
+            const kinds = L.slice(i, k + 1).map((h, c) => (rows.every((r) => cls(r[c]) === cls(rows[0][c])) ? cls(rows[0][c]) : null));
+            const steady = rows.length >= 2 && vals.length % n === 0 && kinds.every((x) => x !== null) && kinds.some((x) => x !== 't');
+            if (steady) {
+              const tot = []; let t = j;
+              while (t < L.length && tot.length < n && (!L[t] || blNum919(L[t].replace(/\s*(KGS?|PKGS?|PACKAGES|MT)$/i, '')) !== null)) { if (L[t]) tot.push(L[t]); t++; }
+              table(sec, L.slice(i, k + 1), rows, [tot]);
+              i = t - 1; sec = ''; inSec = 0; broke = false; continue;
+            }
+          }
+          sec = l; inSec = 0; broke = false; continue;
+        }
+        const { lab } = blLab921(cells[0]);
+        if (broke && lab && !/DESCRIPTION|COMMODITY|GOODS/.test(blUp921(sec))) sec = '';
+        broke = false;
+        cells.forEach((c) => unit(sec, c));
+        inSec++;
+      }
+    });
+    return { U, tables };
+  }
+
+  // ---------- dangerous goods: UN numbers, classes, flash points, packing groups ----------
+  function blDg921(T) {
+    const U = blFold920(T).toUpperCase(), o = { un: [], cls: [], fp: [], pg: [], mark: /\b(IMO|IMDG|IMCO|HAZARDOUS|DANGEROUS\s+GOODS|DG\s+CARGO)\b/.test(U) };
+    const add = (a, v, line) => { if (!a.some((x) => x.v === v)) a.push({ v, line }); };
+    U.split('\n').forEach((l) => {
+      for (const m of l.matchAll(/\bUN\s*(?:NO\.?|NUMBER|#)?\s*[:.-]?\s*(\d{4})\b/g)) add(o.un, m[1], l);
+      for (const m of l.matchAll(/\b(?:CLASS|CLS)\.?\s*(?:NO\.?)?\s*[:.-]?\s*(\d(?:\.\d)?)(?![\d.])/g)) add(o.cls, m[1], l);
+      for (const m of l.matchAll(/\bFLASH\s*(?:POINT|PT)\.?\s*[:.-]?\s*([<>]?\s*-?\d+(?:\.\d+)?)\s*(?:°|DEG(?:REES?)?\.?)?\s*(C|F)?\b/g)) add(o.fp, { n: Number(m[1].replace(/[<>\s]/g, '')), u: m[2] || '', t: m[1].replace(/\s/g, '') + (m[2] ? ' °' + m[2] : '') }, l);
+      for (const m of l.matchAll(/\b(?:PACKING\s*GROUP|PKG\.?\s*GRP\.?)\s*[:.-]?\s*(III|II|I|[123])\b|\bP\.?\s?G\.?\s*[:.-]?\s*(III|II|I)\b/g)) add(o.pg, { 1: 'I', 2: 'II', 3: 'III' }[m[1] || m[2]] || m[1] || m[2], l);
+    });
+    o.fp = o.fp.filter((x, i, a) => a.findIndex((y) => y.v.t === x.v.t) === i);
+    return o;
+  }
+
+  // ---------- the BL's packages: in the box, in the description ----------
+  function blPkFigs921(T) {
+    const L = String(T || '').toUpperCase().split('\n'), out = [];
+    L.forEach((l, i) => {
+      const d = l.match(/\bTOTAL\s+(?:NO\.?\s+OF\s+|NUMBER\s+OF\s+)?(?:PACKAGES|PKGS)\s*[:.-]?\s*(\d[\d,]*)\b|\bTOTAL\s*[:.-]?\s*(\d[\d,]*)\s*(?:PACKAGES|PKGS)\b/);
+      if (d) out.push({ n: blNum919(d[1] || d[2]), where: 'desc', line: l.trim() });
+      const cs = l.trim().split(/\s{3,}/);
+      if (!cs.some((c) => /^(NUMBER OF PACKAGES|NO\.?\s*OF\s*(PKGS|PACKAGES)|TOTAL\s+PACKAGES)\b/.test(c.trim()))) return;
+      for (let k = i + 1; k <= i + 3 && k < L.length; k++) {
+        if (blCns919(L[k]).length) break;
+        const c = L[k].trim().split(/\s{3,}/).find((x) => /^\d[\d,]*(\s+[A-Z]{2,12})?$/.test(x.trim()));
+        if (c) { out.push({ n: blNum919(c.trim().split(/\s+/)[0]), where: 'box', line: c.trim() }); break; }
+      }
+    });
+    return out.filter((x) => x.n !== null && x.n > 0);
+  }
+
+  // ---------- draft against draft: only what changed ----------
+  const blDn921 = (s) => blFold920(s).toUpperCase().replace(/(\d),(?=\d{3}(?!\d))/g, '$1').replace(/(\d+\.\d*?)0+(?!\d)/g, '$1').replace(/(\d)\.(?!\d)/g, '$1');
+  function blCells921(D) {   // a draft as cells, compared by their words (numbers by value: 86,295 = 86295.000; punctuation and spacing aside)
+    const out = [];
+    D.T.split('\n').forEach((l, i) => l.trim().split(/\s{3,}/).map((c) => c.trim()).filter(Boolean).forEach((t) => {
+      const K = blWords920(blDn921(t)).map((x) => x.k);
+      if (K.length) out.push({ t, k: K.join(' '), i, ix: out.length, T: t.split(/\s+/).filter(Boolean).map((w) => ({ w, k: blWords920(blDn921(w)).map((x) => x.k).join(' ') || w })) });
+    }));
+    return out;
+  }
+  function blDraftDiff921(A, B) {   // → [{ type: 'chg' | 'add' | 'del', ctx, seq: [{ w, s: '=' | '-' | '+' }], two, was, now }]
+    const a = blCells921(A), b = blCells921(B), P = blLcs920(a.map((x) => x.k), b.map((x) => x.k));
+    const gaps = []; let pi = 0, pj = 0;
+    const flush = (i1, j1) => { if (i1 > pi || j1 > pj) gaps.push({ a: a.slice(pi, i1), b: b.slice(pj, j1) }); };
+    P.forEach(([i, j]) => { flush(i, j); pi = i + 1; pj = j + 1; }); flush(a.length, b.length);
+    // a cell taken out in one place and printed again in another has only moved — not a change
+    const cA = new Map(), cB = new Map(); gaps.forEach((g) => { g.a.forEach((x) => cA.set(x.k, (cA.get(x.k) || 0) + 1)); g.b.forEach((x) => cB.set(x.k, (cB.get(x.k) || 0) + 1)); });
+    const left = new Map(); cA.forEach((n, k) => { if (cB.has(k)) left.set(k, Math.min(n, cB.get(k))); });
+    const lA = new Map(left), lB = new Map(left);
+    const keep = (L) => (x) => { const n = L.get(x.k) || 0; if (n) { L.set(x.k, n - 1); return false; } return true; };
+    gaps.forEach((g) => { g.a = g.a.filter(keep(lA)); g.b = g.b.filter(keep(lB)); });
+    // one change per printed line: the k-th changed line of the earlier draft against the k-th of the newer
+    const byL = (cs) => { const o = []; cs.forEach((c) => { const l = o[o.length - 1]; if (l && l[0].i === c.i) l.push(c); else o.push([c]); }); return o; };
+    const S = [];
+    gaps.filter((g) => g.a.length || g.b.length).forEach((g) => { const A = byL(g.a), Bl = byL(g.b); for (let k = 0; k < Math.max(A.length, Bl.length); k++) S.push({ a: A[k] || [], b: Bl[k] || [] }); });
+    const M = [];   // changes on the same line are one change, with the unchanged cells between them
+    S.forEach((x) => {
+      const p = M[M.length - 1], la = (y) => y.a[y.a.length - 1], lb = (y) => y.b[y.b.length - 1];
+      const same = p && (p.b.length && x.b.length ? lb(p).i === x.b[0].i : !p.b.length && !x.b.length && la(p).i === x.a[0].i);
+      if (!same) { M.push({ a: x.a.slice(), b: x.b.slice() }); return; }
+      p.b = p.b.concat(p.b.length && x.b.length ? b.slice(lb(p).ix + 1, x.b[0].ix) : [], x.b);
+      p.a = p.a.concat(p.a.length && x.a.length ? a.slice(la(p).ix + 1, x.a[0].ix) : [], x.a);
+    });
+    return M.map((g) => {
+      const oW = g.a.flatMap((x) => x.T), nW = g.b.flatMap((x) => x.T);
+      const pr = oW.length && nW.length ? blLcs920(oW.map((x) => x.k), nW.map((x) => x.k)) : [];
+      const seq = []; let i = 0, j = 0;
+      pr.forEach(([x, y]) => { while (i < x) seq.push({ w: oW[i++].w, s: '-' }); while (j < y) seq.push({ w: nW[j++].w, s: '+' }); seq.push({ w: nW[j].w, s: '=' }); i++; j++; });
+      while (i < oW.length) seq.push({ w: oW[i++].w, s: '-' }); while (j < nW.length) seq.push({ w: nW[j++].w, s: '+' });
+      const type = g.a.length && g.b.length ? 'chg' : g.b.length ? 'add' : 'del';
+      const c0 = g.b.length ? g.b[0] : g.a[0], src = g.b.length ? b : a, mine = g.b.length ? g.b : g.a;
+      const lead = src.find((x) => x.i === c0.i);
+      const words = seq.some((w) => w.s !== '=' && !/^[\d.,:/-]+$/.test(w.w));   // a line of figures stays inline; words that changed a lot: was / now
+      return { type, ctx: lead && !mine.includes(lead) ? lead.t : '', seq, two: type === 'chg' && words && pr.length < 0.34 * Math.max(oW.length, nW.length), was: g.a.map((x) => x.t).join('  '), now: g.b.map((x) => x.t).join('  ') };
+    });
+  }
+  function blPair921(files) {   // two BL drafts: [earlier, newer] — by the number at the end of the file name, else as they were added; Swap turns it round
+    if (files.length < 2) return null;
+    let [a, b] = files.slice(-2);
+    const num = (f) => String(f.name).replace(/\.[a-z0-9]+$/i, '').match(/^(.*?)(\d+)\D*$/);
+    const x = num(a), y = num(b);
+    if (x && y && x[1] === y[1] && +x[2] > +y[2]) [a, b] = [b, a];
+    RD.sw921 = RD.sw921 || {};
+    if (RD.sw921[[a.id, b.id].sort().join(':')]) [a, b] = [b, a];
+    return [a, b];
+  }
+
   // ---------- the check ----------
   function blBuild919(M) {
     const done = rdDone915(), K = (p) => blKind919(p);
     const blFiles = [...new Set(done.filter((p) => K(p) === 'bill of lading').map((p) => p.f))];
     if (!blFiles.length) return { bl: null };
-    const blP = done.filter((p) => p.f === blFiles[0] && !['invoice', 'packing list', 'eir', 'si'].includes(K(p)));   // its annexure pages too
+    const pair = blPair921(blFiles), blF = pair ? pair[1] : blFiles[0];   // v2.9.21: two drafts → the newer one is checked and compared with the earlier
+    const blPg = (f) => done.filter((p) => p.f === f && !['invoice', 'packing list', 'eir', 'si'].includes(K(p)));   // its annexure pages too
+    const blP = blPg(blF);
     const siP = done.filter((p) => K(p) === 'si'), eirP = done.filter((p) => K(p) === 'eir');
     const ciP = done.filter((p) => K(p) === 'invoice' || K(p) === 'packing list');
     const B = blDoc919(blP), useSi = siP.length > 0, refP = useSi ? siP : ciP, R = refP.length ? blDoc919(refP) : null;
     const refW = useSi ? 'the SI' : ciP.some((p) => K(p) === 'packing list') ? 'the packing list' : 'the invoice';
     const refS = useSi ? 'SI' : ciP.some((p) => K(p) === 'packing list') ? 'PACKING LIST' : 'INVOICE';
-    const blNo = (blCellLab919(B.T, /^(B\s*\/\s*L\s*(NO|NUMBER)|BILL OF LADING\s*(NO|NUMBER))/) || (B.U.match(/B\s*\/\s*L\s*(?:NO|NUMBER)\.?\s*[:.]?\s*([A-Z0-9][A-Z0-9\/-]{5,30})/) || [])[1] || '').replace(/\(?DRAFT\)?/i, '').trim().split(/\s{2,}/)[0];
-    const issues = [], ok = [];
+    const blNo = blBlNo921(B);
+    const issues = [], ok = [], notes = [];
     const say = (...parts) => issues.push(parts);
     const V = (s) => ({ v: String(s) });
+    const seen = new Map(), mark = (l, good, rep) => { const k = blNorm919(l); if (k) seen.set(k, { ok: good, rep, l }); };   // v2.9.21: SI lines already judged
+    const rescue = (r, line) => {   // v2.9.21: the same detail written another way (phone spacing, 13,468.700 = 13468.70) is the same
+      if (r.ok || (r.b && r.b.add && r.b.add.length)) return r.ok;
+      const { lab, val } = blLab921(line);
+      return !blMiss921(B, blParts921(val, BL_PHL921.test(blUp921(lab)) || /^\+\s?\d/.test(val))).length;
+    };
+    const lineOk = (r, l) => (!r.ok && rescue(r, l) ? { ok: true, b: r.b } : r);
     // EIRs
     const eirs = eirP.map((p) => {
       const t = blTx919(p).toUpperCase(), L = t.split('\n'); let cn = '', seal = '';
@@ -9873,17 +10211,20 @@
       else if (x.onBl && bs && (es || rs)) { sealOk.push(x.cn); if (es) sealEir.push(x.cn); }
       if (x.onBl && !bs && (es || rs)) { x.bad = true; say('No seal number could be read for ', V(x.cn), ' on the BL draft — ' + (es ? 'the EIR says ' : refW + ' says '), V(es || rs), '.'); }
     });
-    const noEir = eirs.length ? rows.filter((x) => x.onBl && !x.eir).map((x) => x.cn) : [];
-    const eirOff = rows.filter((x) => x.eir && !x.onBl).map((x) => x.cn);
     const andL = (a) => a.length <= 1 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
-    if (noEir.length) say('No EIR for ', V(andL(noEir)), ' — ' + (noEir.length === 1 ? 'its seal' : 'their seals') + (R ? (noEir.length === 1 ? ' was' : ' were') + ' checked against ' + refW + ' only.' : ' could not be checked.'));
+    // v2.9.21: a seal with no EIR is not checked — a note (like spelling), not a thing
+    const nOnBl = rows.filter((x) => x.onBl).length, ncs = rows.filter((x) => x.onBl && !x.eir).map((x) => x.cn);
+    rows.forEach((x) => { x.nc = x.onBl && !x.eir; });
+    if (ncs.length) notes.push(eirs.length ? ['Seals: ' + ncs.length + ' of ' + nOnBl + ' not checked — no EIR for ', V(andL(ncs)), '.'] : ['Seals: not checked — no EIR added. Add the EIRs to check them.']);
+    const eirOff = rows.filter((x) => x.eir && !x.onBl).map((x) => x.cn);
     if (eirOff.length) say('The EIR' + (eirOff.length > 1 ? 's' : '') + ' for ', V(andL(eirOff)), (eirOff.length > 1 ? ' are for containers' : ' is for a container') + ' not on the BL draft.');
     if (R) {
       const miss = rows.filter((x) => x.onRef && !x.onBl).map((x) => x.cn), extra = rows.filter((x) => x.onBl && !x.onRef && refC.length).map((x) => x.cn);
       if (miss.length) { miss.forEach((cn) => { const x = rows.find((y) => y.cn === cn); x.bad = true; }); say('On ' + refW + ' but not on the BL draft: ', V(andL(miss)), '.'); }
       if (extra.length) { extra.forEach((cn) => { const x = rows.find((y) => y.cn === cn); x.bad = true; }); say('On the BL draft but not on ' + refW + ': ', V(andL(extra)), '.'); }
     }
-    rows.filter((x) => !x.cd && (x.onBl || x.onRef)).forEach((x) => { x.bad = true; say(V(x.cn), ': the last digit does not fit the rest — the container number has a typo (on ' + [x.onBl ? 'the BL draft' : '', x.onRef ? refW : ''].filter(Boolean).join(' and ') + ').'); });
+    // v2.9.21: the check digit (ISO 6346) — on the SI and on the BL
+    rows.filter((x) => !x.cd && (x.onBl || x.onRef)).forEach((x) => { x.bad = true; say('Container ', V(x.cn), ': the check digit is wrong (should end in ' + blCdWant921(x.cn) + ') — a typo?'); });
     // per container: packages and weights
     rows.filter((x) => x.bl && x.ref).forEach((x) => {
       const d = [];
@@ -9892,27 +10233,47 @@
       if (x.bl.net !== null && x.ref.net !== null && Math.abs(x.bl.net - x.ref.net) > 0.5) d.push(['net ', V(blKgS919(x.ref.net)), ' on ' + refW + ', ', V(blKgS919(x.bl.net)), ' on the BL draft']);
       if (d.length) { x.bad = true; say(V(x.cn), ': ', ...d.flatMap((p, i) => (i ? ['; ', ...p] : p)), '.'); }
     });
-    // totals
+    // totals — v2.9.21: the BL against itself first (the box, the description, the table must agree), then against the SI
     const sum = (D, k) => { const r = [...D.rows.values()]; return r.length && r.every((x) => x[k] !== null) ? r.reduce((n, x) => n + x[k], 0) : null; };
     const fromF = (f) => { const m = String((f && f.v) || '').toUpperCase().match(/(\d[\d,]*(?:\.\d+)?)\s*(KGS?|MTS?|M\.?T\.?|TONS?)?/); if (!m) return null; const n = blNum919(m[1]); return n === null ? null : /^(MT|MTS|M\.?T\.?|TONS?)$/.test(m[2] || '') ? n * 1000 : n; };
-    const tot = { gross: 0, net: 0 };
+    const PL = ['box', 'desc', 'table'], AT = { box: 'the box', desc: 'the description', table: 'the table' };
+    const inP = (ps) => 'in ' + andL(ps.slice().sort((a, b) => PL.indexOf(a) - PL.indexOf(b)).map((p) => AT[p]));
+    const self = (figs, ref, fmt, kind) => {   // → true when the BL disagrees with itself (one sentence said); kind: gross · net · packages
+      const grp = [];
+      figs.forEach((f) => { const g = grp.find((x) => Math.abs(x.n - f.n) <= (kind === 'packages' ? 0 : 1)); if (g) { if (!g.ps.includes(f.where)) g.ps.push(f.where); g.f.push(f); } else grp.push({ n: f.n, ps: [f.where], f: [f] }); });
+      if (grp.length < 2) return false;
+      const pr = (g) => (ref !== null && Math.abs(g.n - ref) <= 1 ? 100 : 0) + g.ps.length * 10 - Math.min(...g.ps.map((p) => PL.indexOf(p)));
+      grp.sort((a, b) => pr(b) - pr(a));
+      const twice = grp.filter((g) => g.ps.includes('desc')).length > 1;
+      const q = (g) => (twice && g.ps.includes('desc') ? ' (“' + String((g.f.find((f) => f.where === 'desc') || {}).line || '').replace(/\s{2,}/g, ' ').slice(0, 60) + '”)' : '');
+      say('The BL draft says ' + (kind === 'packages' ? '' : kind + ' '), V(fmt(grp[0].n)), (kind === 'packages' ? ' packages ' : ' ') + inP(grp[0].ps) + q(grp[0]), ' but ',
+        ...grp.slice(1).flatMap((g, i) => [i ? ' and ' : '', V(fmt(g.n)), ' ' + inP(g.ps) + q(g)]), ...(ref !== null ? [' — ' + refW + ' says ', V(fmt(ref)), '.'] : ['.']));
+      return true;
+    };
+    const tot = { gross: 0, net: 0 }, wIss = { gross: false, net: false };
     ['gross', 'net'].forEach((k) => {
       const lab = k === 'gross' ? 'Gross' : 'Net';
       const ref = R ? (sum(R, k) !== null ? sum(R, k) : R.w[k].length ? R.w[k][0].kg : !useSi && M && M.F[k] ? fromF(M.F[k]) : null) : null;
-      const tb = sum(B, k), seen = new Set(), bad = [];
-      const figs = (tb !== null ? [{ kg: tb, line: 'the container rows add up to' }] : []).concat(B.w[k].map((x) => ({ kg: x.kg, line: x.line })));
+      const tb = sum(B, k), seenK = new Set(), bad = [];
+      const figs = (tb !== null ? [{ kg: tb, line: 'the container rows add up to', where: 'table' }] : []).concat(B.w[k].map((x) => ({ kg: x.kg, line: x.line, where: x.where || 'desc' })));
+      if (self(figs.map((f) => ({ n: f.kg, where: f.where, line: f.line })), ref, blKgS919, k)) { wIss[k] = true; return; }
       const want = ref !== null ? ref : tb;
       if (want === null) return;
-      figs.forEach((f) => { const key = Math.round(f.kg); if (Math.abs(f.kg - want) > 1 && !seen.has(key)) { seen.add(key); bad.push(f); } });
+      figs.forEach((f) => { const key = Math.round(f.kg); if (Math.abs(f.kg - want) > 1 && !seenK.has(key)) { seenK.add(key); bad.push(f); } });
       if (bad.length) {
+        wIss[k] = true;
         const ofRef = ref !== null ? refW + ' says ' : 'the container rows add up to ';
         say(lab + ' weight: ' + ofRef, V(blKgS919(want)), ' — the BL draft says ', ...bad.flatMap((f, i) => [i ? ' and ' : '', V(blKgS919(f.kg)), f.line === 'the container rows add up to' ? ' (its container rows added up)' : /TOTAL/.test(f.line) ? ' (“' + f.line.replace(/\s{2,}/g, ' ').slice(0, 60) + '”)' : '']), '.');
       } else tot[k] = want;
     });
+    if (R) ['gross', 'net'].forEach((k) => R.w[k].forEach((x) => mark(x.line, !wIss[k], wIss[k])));
     const gB = B.w.gross.map((x) => x.kg).concat(sum(B, 'gross') !== null ? [sum(B, 'gross')] : []), nB = B.w.net.map((x) => x.kg).concat(sum(B, 'net') !== null ? [sum(B, 'net')] : []);
-    if (gB.length && nB.length && Math.max(...nB) > Math.min(...gB) + 1 && !issues.some((s) => /weight:/.test(String(s[0])))) say('On the BL draft the net weight (', V(blKgS919(Math.max(...nB))), ') is more than the gross weight (', V(blKgS919(Math.min(...gB))), ').');
-    // packages, HS code
-    if (R && R.pk !== null && B.pk !== null) { if (R.pk !== B.pk) say('Packages: ' + refW + ' says ', V(R.pk), ' — the BL draft says ', V(B.pk), '.'); else ok.push(R.pk + ' packages'); }
+    if (gB.length && nB.length && Math.max(...nB) > Math.min(...gB) + 1 && !wIss.gross && !wIss.net) say('On the BL draft the net weight (', V(blKgS919(Math.max(...nB))), ') is more than the gross weight (', V(blKgS919(Math.min(...gB))), ').');
+    // packages (v2.9.21: the BL against itself first), HS code
+    const pkF = blPkFigs921(B.T), tpk = sum(B, 'pk');
+    if (tpk !== null) pkF.push({ n: tpk, where: 'table' });
+    const pkSelf = self(pkF, R ? R.pk : null, (n) => String(n), 'packages');
+    if (!pkSelf && R && R.pk !== null && B.pk !== null) { if (R.pk !== B.pk) say('Packages: ' + refW + ' says ', V(R.pk), ' — the BL draft says ', V(B.pk), '.'); else ok.push(R.pk + ' packages'); }
     const hsR = R ? (R.hs.length ? R.hs : !useSi && M ? [...new Set(M.lines.map((l) => l.hs.slice(0, 8)).filter((h) => h.length >= 6))] : []) : [];
     if (hsR.length && B.hs.length) {
       const offB = B.hs.filter((h) => !hsR.some((r) => r.startsWith(h) || h.startsWith(r))), offR = hsR.filter((h) => !B.hs.some((b) => b.startsWith(h) || h.startsWith(b)));
@@ -9936,8 +10297,9 @@
     if (R) ['shipper', 'consignee', 'notify'].forEach((k) => {
       const lines = refLab(k, true).filter((l) => blNorm919(l).length >= 3 && !/^SAME AS/i.test(l));
       if (!lines.length) return;
-      const res = lines.map((l, i) => blLine920(B, PN[k], refW, l, near(lines, i)));
+      const res = lines.map((l, i) => lineOk(blLine920(B, PN[k], refW, l, near(lines, i)), l));
       const bad = res.filter((r) => !r.ok);
+      lines.forEach((l, i) => mark(l, res[i].ok, !res[i].ok));
       if (!bad.length) { ok.push(PN[k].toLowerCase()); return; }
       if (bad.length === lines.length && lines.length > 1 && res.every((r) => !r.b || !r.b.m || r.b.score < 0.5)) {
         const n0 = blNear919(B, lines[0]);
@@ -9949,7 +10311,8 @@
     if (R) [['vessel', 'Vessel / voyage'], ['pol', 'Port of loading'], ['pod', 'Port of discharge'], ['fdest', 'Place of delivery']].forEach(([k, name]) => {
       const v = refLab(k, false)[0]; if (!v || blNorm919(v).length < 3) return;
       const has = blCellLab919(B.T, blLabRe[k]);
-      const r = blLine920(B, name, refW, v, null, has && blWords920(has).length ? has : '');
+      const r = lineOk(blLine920(B, name, refW, v, null, has && blWords920(has).length ? has : ''), v);
+      mark(v, r.ok, !r.ok);
       if (r.ok) { ok.push(name.toLowerCase()); return; }
       if (r.b && r.b.label && !r.b.m) say(name + ': ' + refW + ' says ', V(blFold920(v).trim()), ' — the BL draft has ', V(has), '.');
       else say(...r.say);
@@ -9957,8 +10320,10 @@
     if (useSi) {
       const all = refLab('desc', true).filter((l) => blNorm919(l).length >= 2);
       const desc = all.filter((l) => blNorm919(l).length >= 4 && !/^H\.?\s*S\.?\s*CODE|WEIGHT|^\d[\d,.]*\s*(KGS?|MT)$/i.test(l));
-      const res = desc.map((l, i) => blLine920(B, 'Description', refW, l, near(desc, i)));
-      res.filter((r) => !r.ok).slice(0, 6).forEach((r) => say(...r.say));
+      const res = desc.map((l, i) => lineOk(blLine920(B, 'Description', refW, l, near(desc, i)), l));
+      const badD = res.filter((r) => !r.ok);
+      badD.slice(0, 6).forEach((r) => say(...r.say));
+      desc.forEach((l, i) => mark(l, res[i].ok, !res[i].ok && badD.indexOf(res[i]) < 6));
       if (desc.length && res.every((r) => r.ok)) ok.push('description');
       // spelling: the SI's description and the BL lines it was matched to
       all.forEach((l) => blWords920(l).forEach((x) => { const t = blSpell920(x.w); if (t) spell.si.push([x.w.toUpperCase(), t]); }));
@@ -9974,19 +10339,183 @@
       const a = fr(R), b = fr(B);
       if (a && b && a !== b) say('Freight: ' + refW + ' says ', V('FREIGHT ' + a), ' — the BL draft says ', V('FREIGHT ' + b), '.'); else if (a && a === b) ok.push('freight ' + a.toLowerCase());
     }
+    // ---------- v2.9.21: THE SI IS THE TRUTH — every other detail of the SI, wherever the BL prints it ----------
+    let checked = null;
+    if (useSi) {
+      const { U } = blUnits921(siP), ix = blIdx921(B), items = [], late = [];
+      const vals = issues.flatMap((s) => s.filter((x) => typeof x !== 'string').map((x) => x.v));
+      const said = new Set(vals.map(blNorm919)), saidN = vals.map((v) => blNum919(String(v).replace(/\s*kg$/, ''))).filter((n) => n !== null);
+      const siCodes = new Set(U.flatMap((u) => (u.P ? u.P.code.map((c) => c.c) : [])));
+      const dgKey = (t) => { const d = blDg921(t); return [...d.un.map((x) => 'UN' + x.v), ...d.cls.map((x) => 'CL' + x.v), ...d.fp.map((x) => 'FP' + x.v.n), ...d.pg.map((x) => 'PG' + x.v)]; };
+      const dgSaid = new Set([...seen.values()].filter((x) => x.rep).flatMap((x) => dgKey(x.l)));
+      const cnDone = new Set(), codeMiss = [];
+      const gOf = (u) => (u.gp ? u.g : u.g ? blPretty921(u.g) : 'Other details');
+      U.forEach((u) => {
+        const g = gOf(u);
+        if (u.cns) {   // a container line: the container check above has it
+          u.cns.forEach((cn) => { if (cnDone.has(cn)) return; cnDone.add(cn); const x = rows.find((y) => y.cn === cn); items.push({ g, f: 'Container', v: cn + (x && x.ref && x.ref.seal ? ' · seal ' + x.ref.seal : ''), ok: !!(x && x.onBl && !x.bad) }); });
+          return;
+        }
+        if (u.sum !== undefined) {   // a table's weights / packages: their sum
+          const good = blNumOn921(ix, u.sum) || u.vals.every((n) => blNumOn921(ix, n));
+          const f = blPretty921(u.f);
+          items.push({ g, f: f + ' · ' + u.rows + ' rows added up', v: blNumS921(u.sum), ok: good });
+          if (!good && !saidN.some((n) => Math.abs(n - u.sum) < 1e-6)) late.push([f + ': the ' + u.rows + ' rows on ' + refW + ' add up to ', V(blNumS921(u.sum)), ' — the BL draft does not have it.']);
+          return;
+        }
+        const rec = seen.get(blNorm919(u.raw)) || seen.get(blNorm919(u.val));
+        const field = blPretty921(u.f || u.g) || 'Other detail';
+        const miss = rec && rec.rep ? null : blMiss921(B, u.P, !!(rec && rec.ok)).filter((m) => !(m.k === 'code' && /^UN\d{4}$/.test(m.c)));   // UN numbers: the dangerous-goods check
+        const good = miss ? !miss.length : false;
+        if (u.P.code.length >= 2 && !u.P.w.length && !u.P.num.length && !u.P.em.length && !u.P.ph.length) u.P.code.forEach((c) => items.push({ g, f: blPretty921(u.f || u.g), v: c.t, ok: !(rec && rec.rep) && ix.code.has(c.c) }));
+        else items.push({ g, f: u.f ? blPretty921(u.f) : '', v: u.val, ok: good });
+        if (!miss || !miss.length) return;
+        if (dgKey(u.val).length) return;   // dangerous goods: the dangerous-goods check tells it
+        if (miss.some((m) => m.k === 'w')) {   // words missing: v2.9.20's word-by-word sentence
+          if (said.has(blNorm919(u.val))) return;
+          const r = blLine920(B, field, refW, u.val, null);
+          late.push(r.ok || !r.say ? [field + ': ' + refW + ' says ', V(u.val), ' — the BL draft does not have it.'] : r.say);
+          return;
+        }
+        miss.forEach((m) => {
+          if (said.has(blNorm919(m.v)) || (m.k === 'num' && saidN.some((n) => Math.abs(n - blNum919(m.v)) < 1e-6))) return;
+          if (m.k === 'code') codeMiss.push(Object.assign({ field, raw: u.f || u.g || '', fk: blNorm919(u.f || u.g) }, m));
+          else late.push([field + ': ' + refW + ' says ', V(m.v), m.near ? ' — the BL draft has ' : ' — the BL draft does not have it.', ...(m.near ? [V(m.near), '.'] : [])]);
+        });
+      });
+      // codes exactly: a list ("ED numbers: the SI has 7 — the BL draft has 6 · not on the BL: …"), or one sentence each
+      const grp = new Map(); codeMiss.forEach((m) => { const k = m.fk + '|' + m.sh; if (!grp.has(k)) grp.set(k, []); grp.get(k).push(m); });
+      grp.forEach((ms, k) => {
+        const sh = k.slice(k.indexOf('|') + 1), fk = k.slice(0, k.indexOf('|'));
+        const siAll = new Set(U.filter((u) => u.P && blNorm919(u.f || u.g) === fk).flatMap((u) => u.P.code.filter((c) => c.sh === sh).map((c) => c.c)));
+        const blSame = ix.toks.filter((t) => t.sh === sh);
+        ms.forEach((m) => { const x = blSame.find((t) => !siCodes.has(t.c) && blLev919(t.c, m.c) <= 2); m.near = x ? x.t : ''; });
+        if (siAll.size >= 2) {
+          const notOn = ms.filter((m) => !m.near), diff = ms.filter((m) => m.near);
+          late.push([(blPretty921(ms[0].raw, true) || 'Codes') + ': ' + refW + ' has ' + siAll.size + ' — the BL draft has ' + new Set(blSame.map((t) => t.c)).size,
+            ...(notOn.length ? [' · not on the BL: ', ...notOn.flatMap((m, i) => [i ? ', ' : '', V(m.v)])] : []),
+            ...(diff.length ? [' · different: ', ...diff.flatMap((m, i) => [i ? ', ' : '', V(m.v), ' → ', V(m.near)])] : []), '.']);
+        } else ms.forEach((m) => late.push([m.field + ': ' + refW + ' says ', V(m.v), m.near ? ' — the BL draft has ' : ' — the BL draft does not have it.', ...(m.near ? [V(m.near), '.'] : [])]));
+      });
+      // dangerous goods: every UN number, class, flash point and packing group on the SI must be on the BL
+      const dS = blDg921(siP.map(blTx919).join('\n')), dB = blDg921(B.T), dgMiss = [];
+      const dg = (f, key, t, good, has) => { items.push({ g: 'Dangerous goods', f, v: t, ok: good }); if (!good && !dgSaid.has(key)) dgMiss.push({ t, has }); };
+      dS.un.forEach((x) => dg('UN number', 'UN' + x.v, 'UN ' + x.v, dB.un.some((y) => y.v === x.v), dB.un.map((y) => 'UN ' + y.v)));
+      dS.cls.forEach((x) => dg('Class', 'CL' + x.v, 'class ' + x.v, dB.cls.some((y) => y.v === x.v), dB.cls.map((y) => 'class ' + y.v)));
+      dS.fp.forEach((x) => dg('Flash point', 'FP' + x.v.n, 'flash point ' + x.v.t, dB.fp.some((y) => Math.abs(y.v.n - x.v.n) < 1e-6 || (x.v.u && y.v.u && x.v.u !== y.v.u && Math.abs((x.v.u === 'F' ? (x.v.n - 32) * 5 / 9 : x.v.n * 9 / 5 + 32) - y.v.n) < 1)), dB.fp.map((y) => 'flash point ' + y.v.t)));
+      dS.pg.forEach((x) => dg('Packing group', 'PG' + x.v, 'packing group ' + x.v, dB.pg.some((y) => y.v === x.v), dB.pg.map((y) => 'packing group ' + y.v)));
+      if (dS.mark && !dS.un.length && !dS.cls.length) dg('Dangerous goods', 'MARK', 'dangerous goods (IMO / IMDG)', dB.mark || dB.un.length > 0 || dB.cls.length > 0, []);
+      const noDg = !dB.un.length && !dB.cls.length && !dB.fp.length && !dB.pg.length && !dB.mark;
+      if (dgMiss.length > 1 && noDg) late.push(['Dangerous goods: ' + refW + ' says ', ...dgMiss.flatMap((m, i) => [i ? (i === dgMiss.length - 1 ? ' and ' : ', ') : '', V(m.t)]), ' — the BL draft has no dangerous-goods details.']);
+      else dgMiss.forEach((m) => late.push(['Dangerous goods: ' + refW + ' says ', V(m.t), m.has.length ? ' — the BL draft has ' : ' — the BL draft does not have it.', ...(m.has.length ? [V(m.has.join(', ')), '.'] : [])]));
+      late.forEach((s) => issues.push(s));
+      checked = { items, found: items.filter((x) => x.ok).length };
+    }
     // what matched
     const nOn = rows.filter((x) => x.onBl).length;
     if (R && refC.length && rows.every((x) => !(x.onRef && !x.onBl) && !(x.onBl && !x.onRef)) && nOn) ok.push(rdPl915(nOn, 'container'));
-    if (sealOk.length) ok.push((sealOk.length === nOn ? (sealOk.length === 1 ? 'the seal' : 'all ' + sealOk.length + ' seals') : rdPl915(sealOk.length, 'seal')) + (sealEir.length === sealOk.length ? ' (checked with the EIR' + (sealEir.length > 1 ? 's' : '') + ')' : sealEir.length ? ' (' + sealEir.length + ' checked with the EIR)' : ''));
+    if (sealOk.length) {
+      const w = sealOk.length === nOn ? (sealOk.length === 1 ? 'the seal' : 'all ' + sealOk.length + ' seals') : rdPl915(sealOk.length, 'seal');
+      ok.push(w + (sealEir.length === sealOk.length ? ' (checked with the EIR' + (sealEir.length > 1 ? 's' : '') + ')' : sealEir.length ? ' (' + sealEir.length + ' checked with the EIR)' : ' on the BL and ' + (useSi ? 'SI' : refW.replace(/^the /, ''))));
+    }
     if (tot.gross) ok.push('gross ' + blKgS919(tot.gross)); if (tot.net) ok.push('net ' + blKgS919(tot.net));
     if (!rows.some((x) => x.onBl)) say('No container numbers could be read on the BL draft.');
-    const n = issues.length;
-    const head = n ? 'BL ' + (blNo || 'draft') + ' — ' + (n === 1 ? '1 thing' : n + ' things') + ' to look at' : 'BL ' + (blNo || 'draft') + ' — everything matches';
     const against = [R ? (useSi ? 'the SI' : refW) : '', eirs.length ? rdPl915(eirs.length, 'EIR') : ''].filter(Boolean);
-    const okLine = ok.length ? (n ? 'Everything else matches: ' : 'Matches: ') + andL(ok) + '.' : '';
-    const plain = (s) => s.map((x) => (typeof x === 'string' ? x : x.v)).join('');
-    const text = [head, ...issues.map((s, i) => (i + 1) + '. ' + plain(s)), ...spellS.map(plain), okLine].filter(Boolean).join('\n');
-    return { spell: spellS, bl: B, blNo, blFile: blFiles[0], more: blFiles.length - 1, si: siP, eir: eirs, ci: ciP, R, refS, refW, useSi, issues, ok, okLine, head, against, text, rows: rows.filter((x) => x.onBl || x.onRef || x.eir) };
+    const okLine = ok.length ? (issues.length ? 'Everything else matches: ' : 'Matches: ') + andL(ok) + '.' : '';
+    const drafts = pair ? { a: pair[0], b: pair[1], ch: blDraftDiff921(blDoc919(blPg(pair[0])), B) } : null;   // v2.9.21: draft against draft
+    const C = { spell: spellS, notes, checked, drafts, bl: B, blNo, blFile: blF, more: blFiles.length - (pair ? 2 : 1), si: siP, eir: eirs, ci: ciP, R, refS, refW, useSi, issues, ok, okLine, against, rows: rows.filter((x) => x.onBl || x.onRef || x.eir) };
+    const n = issues.length;
+    C.head = 'BL ' + (blNo || 'draft') + ' — ' + (n ? (n === 1 ? '1 thing' : n + ' things') + ' to look at' : 'everything matches');
+    C.text = blText921(C, issues.map(blPlain921));
+    return C;
+  }
+  const blNumS921 = (n) => n.toLocaleString('en-US', { maximumFractionDigits: 3 });
+  const blPlain921 = (s) => s.map((x) => (typeof x === 'string' ? x : x.v)).join('');
+  const blSame921 = (a, b) => String(a || '').replace(/\s+/g, ' ').trim() === String(b || '').replace(/\s+/g, ' ').trim();
+  function blText921(C, vis) {   // Copy message: the headline, the things (numbered), the notes, spelling, what matches — then what changed
+    const L = [C.head, ...vis.map((t, i) => (i + 1) + '. ' + t), ...C.notes.map(blPlain921), ...C.spell.map(blPlain921), C.okLine].filter(Boolean);
+    if (C.drafts) L.push('', 'What changed — ' + C.drafts.a.name + ' → ' + C.drafts.b.name + ':', ...(C.drafts.ch.length ? C.drafts.ch.map((x) => '• ' + { chg: 'Changed: ', add: 'Added: ', del: 'Removed: ' }[x.type] + (x.type === 'chg' ? x.was + ' → ' + x.now : x.type === 'add' ? x.now : x.was) + (x.ctx ? ' (' + x.ctx + ')' : '')) : ['• Nothing changed.']));
+    return L.join('\n');
+  }
+
+  // ---------- v2.9.21: "Not a problem" — one list for the whole team, per BL number (Code.gs) ----------
+  const blKey921 = (no) => { const k = String(no || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); return k.length >= 4 ? k : ''; };
+  function blOkOf921(C) {
+    const key = blKey921(C.blNo); if (!key || !canEdit()) return null;
+    RD.ok921 = RD.ok921 || {};
+    let o = RD.ok921[key];
+    if (!o || (!o.busy && Date.now() - o.at > 120000)) {
+      o = RD.ok921[key] = Object.assign(o || { items: [] }, { busy: true, at: Date.now() });
+      api.call('ethixBlOk', [C.blNo]).then((d) => { o.items = (d && d.items) || []; o.off = false; }).catch(() => { o.off = true; })
+        .finally(() => { o.busy = false; o.at = Date.now(); if (state.route && state.route.name === 'reader' && RD.tab === 'bl') rerender(); });
+    }
+    return o;
+  }
+  const blWhen921 = (t) => { const d = dxb(t), h = d.getHours(); return d.getDate() + ' ' + MON91[d.getMonth()] + ' · ' + ((h + 11) % 12 + 1) + ':' + String(d.getMinutes()).padStart(2, '0') + (h < 12 ? ' AM' : ' PM'); };
+  function blAct921(a, b) {
+    const C = RD.BL; if (!C || !C.bl) return;
+    if (a === 'blck') { RD.ck921 = !RD.ck921; rerender(); const x = $('.bl921-ckb'); if (x) x.focus({ preventScroll: true }); return; }
+    if (a === 'blsw') {
+      if (!C.drafts) return;
+      RD.sw921 = RD.sw921 || {}; const k = [C.drafts.a.id, C.drafts.b.id].sort().join(':'); RD.sw921[k] = !RD.sw921[k];
+      rerender(); toast('Swapped — ' + C.drafts.a.name + ' is now the newer draft'); return;
+    }
+    const o = blOkOf921(C); if (!o) return;
+    const s = C.issues[+b.dataset.i]; if (!s) return;
+    const t = blPlain921(s), on = a === 'blok', before = o.items.slice();
+    o.items = on ? o.items.filter((x) => !blSame921(x.t, t)).concat([{ t, u: state.user, at: Date.now() }]) : o.items.filter((x) => !blSame921(x.t, t));
+    rerender();
+    api.call('ethixBlOkSet', [C.blNo, t, on]).then((d) => { if (d && d.items) o.items = d.items; toast(on ? 'Marked not a problem — for everyone checking ' + (C.blNo || 'this BL') : 'Back on the list'); })
+      .catch((e) => { o.items = before; toast(/not available|unknown/i.test(e.message || '') ? '“Not a problem” needs the v2.9.21 Code.gs.' : e.message, { error: true }); })
+      .finally(() => { if (state.route && state.route.name === 'reader' && RD.tab === 'bl') rerender(); });
+  }
+  // admin · System health: every mark, with Undo
+  const BK921 = { list: null, busy: false, err: '', at: 0 };
+  function blOkAll921() {
+    if (BK921.busy) return; BK921.busy = true; BK921.err = '';
+    api.call('ethixBlOkAll', []).then((d) => { BK921.list = d || []; BK921.at = Date.now(); })
+      .catch((e) => { BK921.err = /not available|unknown/i.test(e.message || '') ? 'This list needs the v2.9.21 Code.gs.' : e.message; })
+      .finally(() => { BK921.busy = false; if (state.route && state.route.name === 'health') rerender(); });
+  }
+  function blOkCard921(anim) {
+    if (!isAdmin()) return '';
+    if ((!BK921.list && !BK921.busy && !BK921.err) || (anim && !BK921.busy && Date.now() - BK921.at > 60000)) setTimeout(blOkAll921, 0);
+    const L = (BK921.list || []).flatMap((b) => b.items.map((x) => ({ b: b.bl, x }))).sort((p, q) => q.x.at - p.x.at);
+    BK921.rows = L;
+    const body = BK921.err ? '<div class="hl913-none">' + icon('alert', 18) + '<span>' + esc(BK921.err) + '</span></div>'
+      : !BK921.list ? '<div class="bk921-sk"><span class="rd915-sk"></span><span class="rd915-sk"></span></div>'
+      : !L.length ? '<div class="hl913-none">' + icon('check', 18) + '<span>Nothing is marked as not a problem.</span></div>'
+      : '<ul class="bk921-l">' + L.map((r, i) => '<li><div class="bk921-m"><b>BL ' + esc(r.b) + '</b><span>' + esc(nice(r.x.u)) + ' · ' + esc(blWhen921(r.x.at)) + '</span></div><p>' + esc(r.x.t) + '</p>' +
+          '<button type="button" class="hl913-link" data-bk921="undo" data-i="' + i + '">Undo</button></li>').join('') + '</ul>';
+    return '<div class="' + anim.trim() + '" style="--d:160ms"><section class="hl913-card bk921"><div class="hl913-h"><b>BL CHECK · NOT A PROBLEM</b><span>one list for the team · kept 60 days</span>' +
+      (L.length ? '<em class="bk921-n">' + L.length + '</em>' : '') + '</div>' + body + '</section></div>';
+  }
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest && e.target.closest('[data-bk921]'); if (!b || !state.signedIn || !isAdmin() || !(state.route && state.route.name === 'health')) return;
+    const r = (BK921.rows || [])[+b.dataset.i]; if (!r) return;
+    b.disabled = true;
+    api.call('ethixBlOkSet', [r.b, r.x.t, false]).then(() => { toast('Undone — back on BL ' + r.b + '’s check'); blOkAll921(); }).catch((x) => { b.disabled = false; toast(x.message, { error: true }); });
+  });
+
+  // ---------- the screen ----------
+  function blWcHtml921(d) {   // v2.9.21: What changed — draft against draft
+    const n = d.ch.length;
+    const seq = (x) => (x.two ? '<p class="bl921-two"><small>WAS</small><del>' + esc(x.was) + '</del></p><p class="bl921-two"><small>NOW</small><ins>' + esc(x.now) + '</ins></p>'
+      : '<p class="bl921-sq">' + x.seq.reduce((r, w) => { const l = r[r.length - 1]; if (l && l.s === w.s) l.w += ' ' + w.w; else r.push({ s: w.s, w: w.w }); return r; }, [])   // neighbouring changed words share one mark
+          .map((w) => (w.s === '=' ? esc(w.w) : w.s === '-' ? '<del>' + esc(w.w) + '</del>' : '<ins>' + esc(w.w) + '</ins>')).join(' ') + '</p>');
+    return '<section class="bl921-wc"><header class="bl921-wh"><span class="bl921-wi">' + icon('diff921', 19) + '</span><div><h3>What changed</h3><small><span>' + esc(d.a.name) + '</span><i>→</i><span>' + esc(d.b.name) + '</span></small></div>' +
+      '<span class="bl921-wn' + (n ? '' : ' is-0') + '">' + (n ? n + (n === 1 ? ' change' : ' changes') : 'No changes') + '</span>' +
+      '<button type="button" class="bl921-sw" data-rd915="blsw" aria-label="Swap — the other draft is the newer one">' + icon('swap', 14) + '<span>Swap</span></button></header>' +
+      (n ? '<ol class="bl921-wl">' + d.ch.map((x) => '<li class="is-' + x.type + '"><span class="bl921-tag">' + { chg: 'CHANGED', add: 'ADDED', del: 'REMOVED' }[x.type] + '</span><div class="bl921-wb">' + (x.ctx ? '<em class="bl921-cx">' + esc(x.ctx) + '</em>' : '') + seq(x) + '</div></li>').join('') + '</ol>'
+        : '<p class="bl921-same">' + icon('ok915', 13) + '<span>The two drafts read the same — nothing was changed.</span></p>') + '</section>';
+  }
+  function blCkHtml921(K) {   // v2.9.21: Show what was checked — every SI detail, ✓ / ✗
+    const n = K.items.length, miss = n - K.found;
+    const groups = []; K.items.forEach((x) => { let g = groups.find((y) => y.name === x.g); if (!g) groups.push(g = { name: x.g, items: [] }); g.items.push(x); });
+    return '<div class="bl921-ck' + (RD.ck921 ? ' is-open' : '') + '"><button type="button" class="bl921-ckb" data-rd915="blck" aria-expanded="' + !!RD.ck921 + '">' + icon('list921', 16) +
+      '<span>' + (RD.ck921 ? 'Hide what was checked' : 'Show what was checked') + '</span><em>' + n + ' details · ' + K.found + ' found' + (miss ? ' · <b>' + miss + ' not on the BL</b>' : '') + '</em>' + icon('chevron', 14) + '</button>' +
+      (RD.ck921 ? '<div class="bl921-ckp">' + groups.map((g) => '<section class="bl921-cg"><h4><span>' + esc(g.name.toUpperCase()) + '</span><em>' + g.items.filter((x) => x.ok).length + ' / ' + g.items.length + '</em></h4><ul>' +
+        g.items.map((x) => '<li class="' + (x.ok ? 'is-ok' : 'is-no') + '"><i aria-label="' + (x.ok ? 'found' : 'not on the BL') + '">' + (x.ok ? icon('ok915', 10) : '<b>×</b>') + '</i><div>' + (x.f ? '<small>' + esc(x.f) + '</small>' : '') + '<span>' + esc(x.v) + '</span></div></li>').join('') + '</ul></section>').join('') + '</div>' : '') + '</div>';
   }
   function rdBlHtml919(M) {
     const C = blBuild919(M); RD.BL = C;
@@ -9996,33 +10525,45 @@
     if (!C.bl) {
       if (RD.busy) return '<div class="bl919"><div class="bl919-card is-sk"><span class="rd915-sk"></span><span class="rd915-sk"></span><span class="rd915-sk"></span></div></div>';
       return '<div class="bl919"><div class="bl919-empty"><span class="bl919-eic">' + icon('doc915', 22) + '</span><b>Check a BL draft</b>' +
-        '<p>Drop the BL draft with the EIRs and the SI — Excel, PDF or pasted text — or with the invoice and packing list. EWS tells you everything that does not match.</p>' +
+        '<p>Drop the BL draft with the EIRs and the SI — Excel, PDF or pasted text — or with the invoice and packing list. Drop two drafts to see what changed. EWS tells you everything that does not match.</p>' +
         '<div class="bl919-need"><span>BL DRAFT</span><span>EIRs</span><span>SI · EXCEL, PDF OR TEXT</span><span>OR INVOICE + PACKING LIST</span></div>' + pasteBtn + '</div>' + pasteBox + '</div>';
     }
+    // "Not a problem": the team's marks for this BL number move a thing out of the list
+    const o = blOkOf921(C), marks = (o && o.items) || [];
+    const vis = [], hid = [];
+    C.issues.forEach((s, i) => { const t = blPlain921(s), m = marks.find((x) => blSame921(x.t, t)); (m ? hid : vis).push({ s, i, t, m }); });
+    const n = vis.length, who = 'BL ' + (C.blNo || 'draft');
+    C.head = who + ' — ' + (n ? (n === 1 ? '1 thing' : n + ' things') + ' to look at' : hid.length ? 'nothing left to look at' : 'everything matches');
+    C.text = blText921(C, vis.map((x) => x.t));
     const chip = (label, val, on) => '<span class="bl919-src' + (on ? '' : ' is-off') + '"><small>' + label + '</small><b>' + esc(val) + '</b></span>';
     const siName = C.si.length ? [...new Set(C.si.map((p) => p.f.name))].join(' · ') : '';
-    const srcs = '<div class="bl919-srcs">' + chip('BL DRAFT', C.blNo || C.blFile.name, true) +
+    const srcs = '<div class="bl919-srcs">' + chip('BL DRAFT', C.blNo || C.blFile.name, true) + (C.drafts ? chip('EARLIER DRAFT', C.drafts.a.name, true) : '') +
       chip('SI', siName || 'not added', !!siName) + chip('EIR', C.eir.length ? rdPl915(C.eir.length, 'container') : 'not added', C.eir.length > 0) +
       (!C.useSi && C.ci.length ? chip(C.refS, rdPl915(new Set(C.ci.map((p) => p.f)).size, 'file'), true) : '') + (C.si.length ? '' : pasteBtn) + '</div>';
-    const n = C.issues.length;
     const sent = (s) => s.map((x) => (typeof x === 'string' ? esc(x) : '<b class="bl919-v">' + esc(x.v) + '</b>')).join('');
+    const np = (i) => (o ? '<button type="button" class="bl921-np" data-rd915="blok" data-i="' + i + '" aria-label="Not a problem" title="Not a problem — hides it for everyone checking this BL">' + icon('np921', 14) + '</button>' : '');
+    const fold = hid.length ? '<div class="bl921-hd"><p class="bl921-hk">' + icon('np921', 13) + '<span>MARKED NOT A PROBLEM · ' + hid.length + '</span></p>' +
+      hid.map((x) => '<div class="bl921-hi"><p>' + sent(x.s) + '</p><small>' + esc(nice(x.m.u)) + ' · ' + esc(blWhen921(x.m.at)) + '</small><button type="button" class="bl921-un" data-rd915="blun" data-i="' + x.i + '">Undo</button></div>').join('') + '</div>' : '';
     const msg = '<section class="bl919-card' + (n ? ' is-bad' : ' is-ok') + '">' +
       '<header class="bl919-hd"><span class="bl919-st">' + (n ? '<b>' + n + '</b>' : icon('ok915', 18)) + '</span><div><h3>' + esc(C.head) + '</h3>' +
-        '<small>' + (C.against.length ? 'Checked against ' + esc(C.against.join(' and ')) : 'Nothing to check against yet — add the SI, the EIRs or the invoice and packing list') + (C.more ? ' · only the first BL draft is checked' : '') + '</small></div>' + '</header>' +
-      (n ? '<ol class="bl919-is">' + C.issues.map((s) => '<li>' + sent(s) + '</li>').join('') + '</ol>' : '') +
+        '<small>' + (C.against.length ? 'Checked against ' + esc(C.against.join(' and ')) : 'Nothing to check against yet — add the SI, the EIRs or the invoice and packing list') + (C.drafts ? ' · the newer draft' : '') + (C.more > 0 ? ' · ' + (C.drafts ? 'the last two drafts are compared' : 'only the first BL draft is checked') : '') + '</small></div>' + '</header>' +
+      (n ? '<ol class="bl919-is' + (o ? ' has-np921' : '') + '">' + vis.map((x) => '<li>' + sent(x.s) + np(x.i) + '</li>').join('') + '</ol>' : '') + fold +
+      (C.notes.length ? '<div class="bl921-nts">' + C.notes.map((s) => '<p><span class="bl921-ntk">' + icon('nc921', 15) + '</span><span>' + sent(s) + '</span></p>').join('') + '</div>' : '') +
       (C.spell.length ? '<div class="bl920-sp">' + C.spell.map((s) => '<p><span class="bl920-spk">Aa</span><span>' + sent(s) + '</span></p>').join('') + '</div>' : '') +
       (C.okLine ? '<p class="bl919-ok">' + icon('ok915', 13) + '<span>' + esc(C.okLine) + '</span></p>' : '') + '</section>';
+    const ck = C.checked && C.checked.items.length ? blCkHtml921(C.checked) : '';
     const R = C.rows;
     const sc = (v, bad, l) => '<td data-l="' + l + '" class="m' + (bad ? ' is-bad' : '') + '">' + (v ? esc(v) : '<span class="bl919-na">—</span>') + '</td>';
     const tbl = R.length ? '<section class="dt917-s"><h3><span>CONTAINERS AND SEALS</span><em>' + R.filter((x) => x.onBl).length + ' on the BL</em></h3><div class="bl919-tw"><table class="bl919-tb"><thead><tr><th></th><th>CONTAINER</th><th>SEAL · EIR</th><th>SEAL · BL DRAFT</th><th>SEAL · ' + (C.useSi ? 'SI' : C.refS) + '</th><th>GROSS · BL</th><th>NET · BL</th></tr></thead><tbody>' +
       R.map((x) => {
         const es = x.eir ? x.eir.seal : '', bs = x.bl ? x.bl.seal : '', rs = x.ref ? x.ref.seal : '', truth = es || rs;
-        return '<tr class="' + (x.bad ? 'is-bad' : '') + '"><td class="bl919-ic">' + (x.bad ? '<i class="bl919-x">!</i>' : '<i class="bl919-k">' + icon('ok915', 10) + '</i>') + '</td>' +
+        const mk = x.bad ? '<i class="bl919-x">!</i>' : x.nc ? '<i class="bl921-nc" title="Seal not checked — no EIR">' + icon('nc921', 16) + '</i>' : '<i class="bl919-k">' + icon('ok915', 10) + '</i>';
+        return '<tr class="' + (x.bad ? 'is-bad' : x.nc ? 'is-nc' : '') + '"><td class="bl919-ic">' + mk + '</td>' +
           '<td class="m bl919-cn' + (!x.cd || !x.onBl ? ' is-bad' : '') + '">' + esc(x.cn) + (!x.onBl ? '<em>NOT ON BL</em>' : '') + '</td>' +
-          sc(es, false, 'SEAL · EIR') + sc(bs, !!(bs && truth && bs !== truth), 'SEAL · BL DRAFT') + sc(rs, !!(rs && es && rs !== es), 'SEAL · ' + (C.useSi ? 'SI' : C.refS)) +
+          (x.nc ? '<td data-l="SEAL · EIR" class="m"><span class="bl921-ne">No EIR</span></td>' : sc(es, false, 'SEAL · EIR')) + sc(bs, !!(bs && truth && bs !== truth), 'SEAL · BL DRAFT') + sc(rs, !!(rs && es && rs !== es), 'SEAL · ' + (C.useSi ? 'SI' : C.refS)) +
           '<td data-l="GROSS · BL" class="m">' + (x.bl && x.bl.gross !== null ? esc(blKgS919(x.bl.gross)) : '<span class="bl919-na">—</span>') + '</td><td data-l="NET · BL" class="m">' + (x.bl && x.bl.net !== null ? esc(blKgS919(x.bl.net)) : '<span class="bl919-na">—</span>') + '</td></tr>';
       }).join('') + '</tbody></table></div></section>' : '';
-    return '<div class="bl919">' + srcs + pasteBox + msg + tbl + '</div>';
+    return '<div class="bl919">' + srcs + pasteBox + (C.drafts ? blWcHtml921(C.drafts) : '') + msg + ck + tbl + '</div>';
   }
   function renderReader915(first) {
     if (RD.user !== state.user && !RD.busy) rd915Clear();
@@ -10185,6 +10726,7 @@
       else if (a === 'dtl') { const x = (RD.D || dtBuild917(M)).lines.flatMap((g) => g.items)[+b.dataset.i]; if (x) rdCopy915(dtLineText917(x), b); }
       else if (a === 'blp') { RD.paste = true; rerender(); const t = $('#bl919Si'); if (t) t.focus(); }   // v2.9.19: BL CHECK
       else if (a === 'blx') { RD.paste = false; rerender(); }
+      else if (a === 'blok' || a === 'blun' || a === 'blck' || a === 'blsw') blAct921(a, b);   // v2.9.21: Not a problem · Undo · Show what was checked · Swap
       else if (a === 'blu') { const t = $('#bl919Si'); if (blPaste919(t && t.value)) { RD.paste = false; RD.tab = 'bl'; RD.tabSet = true; rerender(); toast('SI added — checking the BL against it.'); } else { toast('Paste the SI text first.'); if (t) t.focus(); } }
       else if (a === 'all') {
         const t = RD.tab === 'bl' ? (RD.BL || blBuild919(M)).text || '' : RD.tab === 'boe' ? dtAllText917(RD.D || dtBuild917(M)) : RD.tab === 'text' ? M.text.map((x) => '— ' + x.kind.toUpperCase() + ' · ' + x.p.f.name + ' · p' + x.p.n + ' —\n' + x.text).join('\n\n') : rdSiText915(M);
