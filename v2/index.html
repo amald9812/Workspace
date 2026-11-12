@@ -65,9 +65,24 @@
         </div>
         <div class="pin-msg" id="loginMsg" role="alert"></div>
         <button type="submit" class="neu-cta" id="loginBtn">SIGN IN</button>
-        <button type="button" class="link-btn quiet" id="forgotBtn" aria-controls="forgotNote">Forgot your password?</button>
+        <div class="signin-alt920"><button type="button" class="link-btn quiet" id="forgotBtn" aria-controls="forgotNote">Forgot your password?</button><button type="button" class="neu-pill code920-btn" id="codeBtn"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>Sign in with a code</button></div>
         <p class="card-note" id="forgotNote" hidden>Ask your admin to reset it. You’ll get a temporary password and choose your own as soon as you sign in.</p>
         <div class="card-note" id="cardNote" hidden></div>
+      </form>
+
+      <!-- v2.9.20: sign in with a code — view only -->
+      <form class="step" id="stepCode" hidden novalidate>
+        <div class="card-head">
+          <div class="kicker">VIEW ONLY</div>
+          <h2 class="card-title">Sign in with a code</h2>
+        </div>
+        <div class="neu-field">
+          <label for="loginCode">Code</label>
+          <input id="loginCode" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" spellcheck="false" maxlength="7" placeholder="Enter the 6-digit code" aria-describedby="codeMsg">
+        </div>
+        <div class="pin-msg" id="codeMsg" role="alert"></div>
+        <button type="submit" class="neu-cta" id="codeGo">VIEW JOBS</button>
+        <button type="button" class="link-btn quiet" id="codeBack">Sign in with your password</button>
       </form>
 
       <!-- Step 2: first sign-in — choose your own password -->
@@ -96,7 +111,7 @@
 
       <div class="card-foot">
         <span class="foot-lock"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg> Private workspace</span>
-        <span class="mono small">V2.9.19</span>
+        <span class="mono small">V2.9.20</span>
       </div>
     </div>
   </section>

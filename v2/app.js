@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders, cover, system health, arrange Home, document reader, for Dubai Trade, BL check — v2.9.19)
+   enquiries, follow-ups, delays, close & archive, costing, reminders, cover, system health, arrange Home, document reader, for Dubai Trade, BL check, view access — v2.9.20)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -27,6 +27,7 @@
     token: null,
     connected: /^https:\/\/script\.google\.com\/.+\/exec$/.test(API_URL),
     async call(fn, args = [], opts = {}) {
+      if (state.role === 'VIEW' && !['ethixBootstrap', 'ethixJobStory', 'ethixCosting', 'ethixArchiveSearch', 'ethixArchivedJob', 'ethixPing'].includes(fn)) return null;   // v2.9.20: a viewer only reads
       if (!this.connected) throw new ApiError('App not connected yet — paste your Apps Script /exec link into config.js.', 'config');
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), opts.timeout || 45000);
@@ -410,12 +411,110 @@
   const SHIP = (w = 30) => '<svg class="art track-ship-svg" viewBox="0 0 64 30" width="' + w + '" height="' + (w / 2) + '" aria-hidden="true"><path d="M2 19 H62 L55 28 H9 Z" fill="#0B1B2B"/><rect x="7" y="8" width="9" height="11" fill="#0B1B2B"/><rect x="19" y="12" width="9" height="7" fill="#48BEBF"/><rect x="30" y="12" width="9" height="7" fill="#1C5179"/><rect x="41" y="12" width="9" height="7" fill="#A9DEDD"/></svg>';
   const PLANE = (s = 22) => '<svg class="art" viewBox="0 0 24 24" width="' + s + '" height="' + s + '" aria-hidden="true"><path transform="rotate(90 12 12)" fill="#1C5179" d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>';
 
+  // ==================================================================== v2.9.20 — VIEW ACCESS
+  // A Customer Service user gives a one-time code (My account → VIEW ACCESS); whoever signs in with it sees only that user's
+  // jobs, read only, until 6 PM Dubai (6 hours after a code given at / after 6 PM). The server refuses every change; the page
+  // also never asks for anything a viewer may not read (no notifications, reminders, seen marks, lists, search in remarks).
+  const isView = () => state.role === 'VIEW';
+  const VW920 = { d: null, off: 0, busy: false, t: 0 };   // the code on screen (Customer Service)
+  const EYE920 = (s) => '<svg viewBox="0 0 24 24" width="' + s + '" height="' + s + '" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+  function vwInfo920() { const v = state.view920 || {}; return { g: v.g || state.user || '', code: v.code || '', until: v.untilText || '' }; }
+  function vwBand920() {   // VIEW ONLY · AMAL’S JOBS · code 482 913
+    let b = $('#vwBand920');
+    if (!isView()) { if (b) b.remove(); document.body.classList.remove('is-view920'); return; }
+    const v = vwInfo920();
+    if (!b) { b = document.createElement('div'); b.id = 'vwBand920'; b.className = 'vw920-band'; b.setAttribute('role', 'status'); $('#shell').prepend(b); b.addEventListener('click', (e) => { if (e.target.closest('[data-vw920="leave"]')) confirmLogout(); }); }
+    document.body.classList.add('is-view920');
+    b.innerHTML = '<span class="vw920-eye">' + EYE920(16) + '</span>' +
+      '<span class="vw920-txt"><span class="vw920-l1"><b>VIEW ONLY</b><i aria-hidden="true"> · </i><span>' + esc(v.g) + '’S JOBS</span><i class="vw920-sep" aria-hidden="true"> · </i></span><span class="vw920-c">code ' + esc(v.code) + '</span></span>' +
+      (v.until ? '<span class="vw920-until">Until ' + esc(v.until) + ' Dubai</span>' : '') +
+      '<button type="button" class="vw920-leave" data-vw920="leave">Leave</button>';
+  }
+  function vwAcct920() {   // My account for a viewer
+    const v = vwInfo920();
+    return '<div class="vw920-acct"><span class="vw920-acc-ic">' + EYE920(22) + '</span><div class="acct-name" id="drawerTitle">View only</div>' +
+      '<dl class="vw920-dl"><dt>JOBS</dt><dd>' + esc(v.g) + '</dd><dt>CODE</dt><dd class="m">' + esc(v.code) + '</dd><dt>UNTIL</dt><dd>' + esc(v.until) + ' Dubai</dd></dl></div>' +
+      '<button type="button" class="btn-ghost acct-logout" data-vw920="leave">' + icon('logout', 16) + 'Leave</button>';
+  }
+  // ---------- Customer Service: give view access ----------
+  function vwLeft920() { if (!VW920.d) return 0; return Math.max(0, VW920.d.useBy - (Date.now() + VW920.off)); }
+  const vwMmss920 = (ms) => { const s = Math.ceil(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+  function vwGiveHtml920() {
+    const d = VW920.d, left = vwLeft920();
+    const head = '<h3 class="tile-title">VIEW ACCESS</h3>';
+    if (!d) return head + '<p class="vw920-lead">A one-time code shows your jobs to someone — view only, until ' + (dxb().getHours() < 18 ? '6:00 PM' : 'six hours from now') + ' Dubai.</p>' +
+      '<button type="button" class="btn-brutal vw920-go" data-vw920="new"' + (VW920.busy ? ' disabled' : '') + '>' + EYE920(16) + '<span>' + (VW920.busy ? 'MAKING A CODE…' : 'GIVE VIEW ACCESS') + '</span></button>';
+    const live = d.viewing > 0 ? '<span class="vw920-live"><i></i>' + d.viewing + ' viewing now</span>' : '<span class="vw920-live is-off"><i></i>Nobody viewing now</span>';
+    return head +
+      '<div class="vw920-codebox' + (left ? '' : ' is-dead') + '"><span class="vw920-big" aria-label="Code ' + esc(d.code.split('').join(' ')) + '">' + esc(d.code.slice(0, 3)) + '<i></i>' + esc(d.code.slice(3)) + '</span>' +
+        '<button type="button" class="icon-btn vw920-copy" data-vw920="copy" aria-label="Copy the code">' + icon('copy', 16) + '</button></div>' +
+      '<div class="vw920-meta"><span>' + (left ? 'Use within <b id="vw920Left">' + vwMmss920(left) + '</b>' : '<b>Expired</b> — make a new code') + '</span><span>Access until <b>' + esc(d.untilText) + '</b> Dubai</span></div>' +
+      '<div class="vw920-foot">' + live + '<span class="vw920-acts"><button type="button" class="btn-ghost" data-vw920="new"' + (VW920.busy ? ' disabled' : '') + '>New code</button>' +
+        '<button type="button" class="btn-ghost is-danger" data-vw920="end"' + (VW920.busy ? ' disabled' : '') + '>End view access</button></span></div>';
+  }
+  function vwDraw920() { const t = $('#vw920Give'); if (t) t.innerHTML = vwGiveHtml920(); }
+  function vwTick920() {
+    clearInterval(VW920.t);
+    VW920.t = setInterval(() => {
+      const el = $('#vw920Left'); if (!$('#vw920Give')) { clearInterval(VW920.t); return; }
+      if (!vwLeft920()) { vwDraw920(); clearInterval(VW920.t); return; }
+      if (el) el.textContent = vwMmss920(vwLeft920());
+    }, 1000);
+  }
+  async function vwAct920(a) {
+    if (a === 'leave') { confirmLogout(); return; }
+    if (a === 'copy' && VW920.d) { copyText93(VW920.d.code.slice(0, 3) + ' ' + VW920.d.code.slice(3), $('.vw920-copy')); return; }
+    if (VW920.busy) return;
+    VW920.busy = true; vwDraw920();
+    try {
+      if (a === 'new') { const r = await api.call('ethixViewCode'); if (r && r.ok) { VW920.d = r; VW920.off = (r.serverTime || Date.now()) - Date.now(); } }
+      else if (a === 'end') { const r = await api.call('ethixViewEnd'); if (r && r.ok) { VW920.d = null; toast(r.ended ? 'View access ended — ' + r.ended + (r.ended === 1 ? ' viewer' : ' viewers') + ' signed out.' : 'View access ended.'); } }
+    } catch (e) { if (e.kind !== 'auth') toast(e.message, { error: true }); }
+    VW920.busy = false; vwDraw920(); if (VW920.d) vwTick920();
+  }
+  // ---------- the sign-in card: Sign in with a code ----------
+  function codeShow920(on, msg) {
+    $('#stepLogin').hidden = on; $('#stepCode').hidden = !on;
+    setLoginMsg($('#codeMsg'), msg || '', msg ? 'error' : '');
+    if (on) { $('#loginCode').value = ''; setTimeout(() => $('#loginCode').focus(), 30); } else $(store.get(LAST_USER, '') && !state.forgetKnown ? '#loginPass' : '#loginUser').focus();
+  }
+  async function codeSubmit920(e) {
+    e.preventDefault();
+    if (state.busy) return;
+    const code = $('#loginCode').value.replace(/\D/g, ''), msg = $('#codeMsg'), btn = $('#codeGo');
+    if (code.length !== 6) { setLoginMsg(msg, 'Enter the 6-digit code.', 'error'); $('#loginCode').focus(); return; }
+    state.busy = true; btn.disabled = true; btn.textContent = 'OPENING…'; setLoginMsg(msg, '');
+    try {
+      const res = await api.call('ethixViewSignIn', [code, true], { timeout: 60000 });
+      if (res && res.success && res.token && res.boot) {
+        api.token = res.token;
+        const user = (res.boot.me && res.boot.me.user) || 'VIEW';
+        keepSession(user, 'VIEW');
+        $('#signinCard').classList.add('leaving');
+        setTimeout(() => enterApp(res.boot, user, 'VIEW'), 280);
+        return;
+      }
+      shakeCard(); $('#loginCode').value = '';
+      setLoginMsg(msg, (res && res.message) || 'Wrong code. Check it and try again.', res && res.locked ? 'locked' : 'error');
+      $('#loginCode').focus();
+    } catch (err) { setLoginMsg(msg, err.message, 'error'); }
+    finally { state.busy = false; if (!$('#signinCard').classList.contains('leaving')) { btn.disabled = false; btn.textContent = 'VIEW JOBS'; } }
+  }
+  function codeInit920() {
+    $('#codeBtn').addEventListener('click', () => codeShow920(true));
+    $('#codeBack').addEventListener('click', () => codeShow920(false));
+    $('#stepCode').addEventListener('submit', codeSubmit920);
+    $('#loginCode').addEventListener('input', (e) => { const d = e.target.value.replace(/\D/g, '').slice(0, 6); e.target.value = d.length > 3 ? d.slice(0, 3) + ' ' + d.slice(3) : d; });
+    let ended = false; try { ended = sessionStorage.getItem('ethix.vw920') === '1'; sessionStorage.removeItem('ethix.vw920'); } catch (e) { /* private mode */ }
+    if (ended) codeShow920(true, 'View access has ended. Ask for a new code.');
+  }
+
   // ============================================================== SIGN IN
   // Username + password. Nothing about the team is shown before sign-in; a
   // device only remembers the last username used on it.
   const LAST_USER = 'ethix.v2.lastUser';
   ['ethix.v2.team', 'ethix.v2.tab', 'ethix.v2.recent'].forEach((k) => { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } });
-  const ROLE_NAMES = { CS: 'CUSTOMER SERVICE', SALES: 'SALES', ADMIN: 'ADMIN' };
+  const ROLE_NAMES = { CS: 'CUSTOMER SERVICE', SALES: 'SALES', ADMIN: 'ADMIN', VIEW: 'VIEW ONLY' };
   const initials = (n) => { const p = String(n || '?').trim().split(/\s+/); return (p.length > 1 ? p[0][0] + p[p.length - 1][0] : String(n || '?').slice(0, 1)).toUpperCase(); };
   const EYE = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
   function pwProblem(pw, user) {
@@ -515,6 +614,7 @@
     showKnown();
     $('#stepLogin').addEventListener('submit', submitLogin);
     $('#stepNewPw').addEventListener('submit', submitNewPassword);
+    codeInit920();   // v2.9.20: sign in with a code
     $('#knownUser').addEventListener('click', (e) => {
       if (e.target.closest('#notYou')) { state.forgetKnown = true; showKnown(); $('#loginUser').value = ''; $('#loginUser').focus(); return; }
       $('#loginPass').focus();
@@ -677,7 +777,7 @@
   function normRole(r, user) {
     r = String(r || '').toUpperCase().trim();
     if (user === 'MASTER' || ['ADMIN', 'CO-ADMIN', 'MASTER'].includes(r)) return 'ADMIN';
-    if (r === 'SALES') return r;
+    if (r === 'SALES' || r === 'VIEW') return r;   // v2.9.20: VIEW = signed in with a code
     return 'CS';
   }
 
@@ -746,6 +846,7 @@
   function enterApp(boot, name, role) {
     state.user = (boot.me && boot.me.user) || name;
     state.role = normRole((boot.me && boot.me.role) || role, state.user);
+    state.view920 = (boot.me && boot.me.view) || null;   // v2.9.20
     applyBoot(boot);
     state.scope = canEdit() ? 'mine' : 'all';   // v2.8: Customer Service sees their own jobs only
     stopVoyage();
@@ -769,7 +870,7 @@
     let r = m ? { name: 'job', jobNo: m[1].trim() } : mc ? { name: 'costjob', jobNo: mc[1].trim() } : h === '#/costing' ? { name: 'costing' } : h === '#/jobs' ? { name: 'jobs' } : h === '#/admin' ? { name: 'admin' } : h === '#/activity' ? { name: 'activity' } : h === '#/health' ? { name: 'health' } : h === '#/names' ? { name: 'names' } : h === '#/enquiries' ? { name: 'enquiries' } : h === '#/follow-ups' || h === '#/round' ? { name: 'round' } : h === '#/notifications' ? { name: 'notif' } : h === '#/cover' ? { name: 'cover' } : h === '#/reader' ? { name: 'reader' } : { name: 'home' };   // v2.9.15: + the Document reader
     const mh911 = h.match(/^#\/handover(?:\/(.+))?$/); if (mh911) r = { name: 'handover', jobNo: (mh911[1] || '').trim().toUpperCase() };   // v2.9.11: the leave hand-over
     if (isAdmin()) { if (!['activity', 'health', 'names'].includes(r.name)) r = { name: 'admin' }; }      // admin works with people, not jobs (v2.9.13: + System health, Customer names)
-    else if (r.name === 'admin' || r.name === 'activity' || r.name === 'health' || r.name === 'names' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote()) || ((r.name === 'costing' || r.name === 'costjob') && !canNote()) || ((r.name === 'cover' || r.name === 'handover' || r.name === 'reader') && !canEdit())) r = { name: 'home' };
+    else if (r.name === 'admin' || r.name === 'activity' || r.name === 'health' || r.name === 'names' || (r.name === 'round' && !canEdit()) || (r.name === 'enquiries' && !canNote()) || ((r.name === 'costing' || r.name === 'costjob') && !canNote() && !isView()) || ((r.name === 'cover' || r.name === 'handover' || r.name === 'reader') && !canEdit())) r = { name: 'home' };
     const want = r.name === 'admin' ? '#/admin' : r.name === 'activity' ? '#/activity' : r.name === 'home' && /^#\/(admin|activity|health|names|round|follow-ups|enquiries|costing|reader)$/.test(h) ? '#/home' : r.name === 'round' && h === '#/round' ? '#/follow-ups' : null;
     if (want && h !== want) history.replaceState(null, '', want);
     return r;
@@ -830,6 +931,7 @@
       { id: 'health', label: 'System health', icon: 'health913', href: '#/health' },   // v2.9.13
       { id: 'names', label: 'Customer names', icon: 'names913', href: '#/names' }
     ];
+    if (isView()) return [{ id: 'home', label: 'Home', icon: 'home', href: '#/home' }, { id: 'jobs', label: 'Jobs', icon: 'jobs', href: '#/jobs', count: active }, { id: 'costing', label: 'Costing', icon: 'costing', href: '#/costing', count: costRows().open }];   // v2.9.20
     const items = [
       { id: 'home', label: 'Home', icon: 'home', href: '#/home' },
       { id: 'jobs', label: isSales() ? 'My jobs' : 'Jobs', icon: 'jobs', href: '#/jobs', count: active },
@@ -861,9 +963,11 @@
     $('#bottomBar').innerHTML = isAdmin() ? tab('admin', '#/admin', 'users', 'People') + tab('activity', '#/activity', 'clock', 'Activity') + plus('adm-add', 'Add user') + more
       : canEdit() ? tab('home', '#/home', 'home', 'Home') + tab('jobs', '#/jobs', 'jobs', 'Jobs') + plus('new-job', 'New job') + bell + more
       : isSales() ? tab('home', '#/home', 'home', 'Home') + tab('jobs', '#/jobs', 'jobs', 'My jobs') + plus('new-enq', 'New enquiry') + bell + more
+      : isView() ? tab('home', '#/home', 'home', 'Home') + tab('jobs', '#/jobs', 'jobs', 'Jobs') + tab('costing', '#/costing', 'costing', 'Costing') + more   // v2.9.20
       : tab('home', '#/home', 'home', 'Home') + tab('jobs', '#/jobs', 'jobs', 'Jobs') + bell + more;
     $('#bottomBar').classList.toggle('is-4', !canEdit() && !isSales());
     drawBadges();
+    vwBand920();   // v2.9.20: VIEW ONLY · <USER>’S JOBS · code
   }
   function updateNav() {
     const r = state.route ? state.route.name : 'home';
@@ -926,7 +1030,7 @@
       '<div class="wrap home no-seg">' +
       '<header class="page-head' + anim + '" style="--d:0ms">' +
         '<div class="head-main"><div class="meta-line"><span>' + (isSales() ? 'SALES · ' : '') + esc(fmtLong(t0)) + '</span><span class="sync" id="sync"><span class="sync-dot"></span><span id="syncText">' + syncText() + '</span></span>' + homeChips() + '</div>' +
-        '<h1 class="greeting">' + greeting() + ', ' + esc(state.user === 'MASTER' ? 'Admin' : nice(state.user)) + '</h1></div>' +
+        '<h1 class="greeting">' + (isView() ? esc(nice(state.user)) + '’s jobs' : greeting() + ', ' + esc(state.user === 'MASTER' ? 'Admin' : nice(state.user))) + '</h1></div>' +   // v2.9.20: a viewer is not the owner
         '<div class="head-actions">' +
           '<div class="search-wrap"><label class="search">' + icon('search') + '<input id="searchInput" type="search" placeholder="Job no, customer, port…" aria-label="Search jobs" autocomplete="off" value="' + esc(searchVal) + '"><kbd>/</kbd></label><div class="search-results glass" id="searchResults" hidden></div></div>' +
           '<button type="button" class="btn-ghost" id="refreshBtn" data-act="refresh" aria-label="Refresh"><span class="spin">' + icon('refresh', 16) + '</span><span class="btn-label">Refresh</span></button>' + arrBtn914() +
@@ -1926,11 +2030,13 @@
 
   // ---------- my account ----------
   function accountPanel() {
+    if (isView()) return vwAcct920();   // v2.9.20
     const go2 = (href, ic, label, n) => '<button type="button" class="acct-go" data-href="' + href + '">' + icon(ic, 18) + '<span>' + label + '</span>' + (n ? '<b>' + n + '</b>' : '') + '</button>';
     const shortcuts = canEdit() ? go2('#/follow-ups', 'check', 'Follow-ups', roundRows(today0()).due.length + remDueCount()) + go2('#/enquiries', 'enq', 'Enquiries', enqNew().length) + go2('#/costing', 'costing', 'Costing', costRows().open) + go2('#/cover', 'swap', 'Cover', covIncoming98().length) + go2('#/reader', 'reader915', 'Document reader') + arrGo914()   // v2.9.14: Arrange Home (phone) · v2.9.15: Document reader
       : isSales() ? go2('#/enquiries', 'enq', 'My enquiries', enqOpen().length) + go2('#/costing', 'costing', 'Costing', costRows().open) + arrGo914()
       : isAdmin() ? go2('#/health', 'health913', 'System health') + go2('#/names', 'names913', 'Customer names') : '';   // v2.9.13
     return (shortcuts ? '<div class="acct-shortcuts">' + shortcuts + '</div>' : '') + '<div class="acct"><span class="avatar">' + esc(initials(state.user)) + '</span><div><div class="acct-name" id="drawerTitle">' + esc(state.user === 'MASTER' ? 'ADMIN' : state.user) + '</div><div class="mono small">' + esc(ROLE_NAMES[state.role] || state.role) + '</div></div></div>' +
+      (canEdit() ? '<section class="tile vw920-give" id="vw920Give">' + vwGiveHtml920() + '</section>' : '') +   // v2.9.20: give view access
       '<form class="tile pw-form" id="pwForm" novalidate><h3 class="tile-title">CHANGE PASSWORD</h3>' +
         '<input type="text" name="username" autocomplete="username" value="' + esc(state.user) + '" class="sr-only" tabindex="-1" aria-hidden="true" readonly>' +
         '<label class="pop-label" for="pwCurrent">Current password</label><div class="pw-wrap is-plain"><input id="pwCurrent" type="password" autocomplete="current-password"><button type="button" class="pw-eye" data-eye="pwCurrent" aria-label="Show password">' + EYE + '</button></div>' +
@@ -1947,6 +2053,7 @@
     $('#drawerBody').innerHTML = accountPanel();
     showDrawer(opener);
     state.overlay = 'account';
+    if (VW920.d) vwTick920();   // v2.9.20
   }
   async function submitPwChange(form) {
     const cur = $('#pwCurrent', form).value, pw = $('#pwNew', form).value, pw2 = $('#pwNew2', form).value;
@@ -3077,7 +3184,7 @@
   const sellsNothing = (l) => !num6(l.sr);
   const newLineId = () => (Math.random().toString(36).slice(2, 10) + 'k0x9').slice(0, 8);
   const boxesOf = (j) => (j.c20 || 0) + (j.c40 || 0);
-  const canCostSee = (j) => !!j && (canEdit() || (isSales() && j.sales === state.user));
+  const canCostSee = (j) => !!j && (canEdit() || isView() || (isSales() && j.sales === state.user));   // v2.9.20: + a viewer (read only)
   const onCostPage = (K) => !!state.route && state.route.name === 'costjob' && String(state.route.jobNo).toUpperCase() === K;
 
   // ---------- what every list knows about a job's costing ----------
@@ -5663,7 +5770,9 @@
   let ending = false;
   function sessionLost(msg) {
     if (state.resuming) return;
-    if (ending) return; ending = true; api.token = null; dropSession();
+    if (ending) return; ending = true;
+    if (isView()) { msg = 'View access has ended. Ask for a new code.'; try { sessionStorage.setItem('ethix.vw920', '1'); } catch (e) { /* private mode */ } }   // v2.9.20
+    api.token = null; dropSession();
     toast(msg || 'Your session has ended. Please sign in again.', { error: true });
     setTimeout(() => window.location.reload(), 1800);
   }
@@ -5682,7 +5791,7 @@
 
   function confirmLogout() {
     closeOverlays(true);
-    $('#confirmTitle').textContent = 'Log out?'; $('#confirmText').textContent = 'You’ll need your password to come back in.'; $('#confirmYes').textContent = 'Log out';
+    $('#confirmTitle').textContent = isView() ? 'Leave view access?' : 'Log out?'; $('#confirmText').textContent = isView() ? 'You’ll need a new code to come back in.' : 'You’ll need your password to come back in.'; $('#confirmYes').textContent = isView() ? 'Leave' : 'Log out';
     const wrap = $('#confirmWrap'); wrap.hidden = false; $('#confirmNo').focus();
     const close = () => { wrap.hidden = true; };
     $('#confirmNo').onclick = close;
@@ -5758,6 +5867,7 @@
       if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) { const s = $('#searchInput') || $('#jobsSearch'); if (s) { e.preventDefault(); s.focus(); } }
     });
     $('#drawerBody').addEventListener('click', (e) => {
+      const vb920 = e.target.closest('[data-vw920]'); if (vb920 && state.overlay === 'account') { vwAct920(vb920.dataset.vw920); return; }   // v2.9.20
       if (['form', 'sheet', 'quick', 'admin', 'delay', 'enqform', 'close'].includes(state.overlay)) return;
       const jobBtn = e.target.closest('[data-job]'); if (jobBtn) { openJob(jobBtn.dataset.job); return; }
       if (e.target.closest('[data-act="logout"]')) { closeOverlays(true); confirmLogout(); }
@@ -9396,7 +9506,7 @@
     return '<div class="rd915-pages">' + M.text.map((x, i) => '<article class="rd915-pgx"><header><b>' + esc(x.kind.toUpperCase()) + '</b><em>' + esc(x.p.f.name) + ' · p' + x.p.n + '</em>' +
       '<button type="button" class="rd915-cp" data-rd915="page" data-i="' + i + '" aria-label="Copy the text of this page">' + icon('copy', 15) + '</button></header><pre>' + esc(x.text) + '</pre></article>').join('') + '</div>';
   }
-  // ==================================================================== v2.9.19 — BL CHECK
+  // ==================================================================== v2.9.19 — BL CHECK (v2.9.20: word by word, spelling, no false alarms)
   // The BL draft checked against the SI (Excel file, PDF or pasted text) — or the invoice / packing list when there is no SI —
   // and the EIRs: the port marks the seal after the physical check, so the EIR's seal is the correct one. EWS tells, in plain
   // sentences, everything that does not match; one Copy takes the whole message. Nothing is saved. (Amal, 12 Nov 2026.)
@@ -9455,7 +9565,8 @@
   }
 
   // ---------- reading a BL / SI / EIR ----------
-  const blTx919 = (p) => String(p.text || (typeof p.ocr === 'string' ? p.ocr : '') || (p.res && p.res.text) || '');
+  const blFold920 = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');   // v2.9.20: Ț → T, É → E everywhere
+  const blTx919 = (p) => blFold920(p.text || (typeof p.ocr === 'string' ? p.ocr : '') || (p.res && p.res.text) || '');
   function blKind919(p) {
     if (p.force) return p.force;
     const t = blTx919(p).slice(0, 1600).toUpperCase();
@@ -9468,7 +9579,7 @@
   const BL_CDV919 = '0123456789A?BCDEFGHIJK?LMNOPQRSTU?VWXYZ';
   function blCd919(c) { let s = 0; for (let i = 0; i < 10; i++) s += (/\d/.test(c[i]) ? +c[i] : BL_CDV919.indexOf(c[i])) * Math.pow(2, i); return (s % 11) % 10 === +c[10]; }
   const blSeal919 = (s) => String(s || '').toUpperCase().replace(/[\s-]/g, '');
-  const blNorm919 = (s) => String(s || '').toUpperCase().replace(/&/g, 'AND').replace(/[^A-Z0-9]/g, '');
+  const blNorm919 = (s) => blFold920(s).toUpperCase().replace(/&/g, 'AND').replace(/[^A-Z0-9]/g, '');
   const blKgS919 = (n) => Math.round(n * 1000) / 1000 === Math.round(n) ? Math.round(n).toLocaleString('en-US') + ' kg' : n.toLocaleString('en-US', { maximumFractionDigits: 3 }) + ' kg';
   const BL_TYPE919 = /^(\d{2}\s*('|’|FT|FEET)?\s*(GP|HC|HQ|DV|SD|STD|RF|RH|OT|FR|TK|PL|NOR)?|\d{2}[A-Z]\d|\d{4}\/[A-Z]{2,4}|GP|HC|HQ|DV|STD|DRY)$/;
   const BL_PKW919 = /^(JUMBO|BAGS?|JBGS?|JBS|BGS|DRUMS?|DRS|DURMS|CARTONS?|CTNS?|PALLETS?|PLTS?|PKGS?|PACKAGES?|BOX(ES)?|ROLLS?|BALES?|CASES?|CRATES?|BUNDLES?|COILS?|IBCS?|PCS|PIECES|CANS?|BARRELS?|REELS?|TINS?|SACKS?)$/;
@@ -9545,14 +9656,18 @@
     shipper: /^(SHIPPER|EXPORTER|CONSIGNOR)\b/, consignee: /^CONSIGNEE\b/, notify: /^NOTIFY\b/, vessel: /^(OCEAN\s+)?(VESSEL|VSL)\b/,
     pol: /^(PORT OF LOADING|LOADING PORT|POL\b)/, pod: /^(PORT OF DISCHARGE|DISCHARGE PORT|POD\b)/, fdest: /^(FINAL DESTINATION|PLACE OF DELIVERY)/,
     desc: /^DESCRIPTION\b/ };
-  const BL_ANYLAB919 = /^(SHIPPER|EXPORTER|CONSIGNOR|CONSIGNEE|NOTIFY|ALSO NOTIFY|OCEAN VESSEL|VESSEL|PORT OF|PLACE OF|POL\b|POD\b|FINAL DESTINATION|PRE[- ]?CARRIAGE|BOOKING|BILLS? OF LADING|B\/L|EXPORT REFERENCES|FORWARDING AGENT|POINT AND COUNTRY|DESCRIPTION|CONTAINER NO|MARKS|QUANTITY|NET WEIGHT|GROSS WEIGHT|MEASUREMENT|BASIC INSTRUCTIONS|OTHER INSTRUCTIONS|PLACE & DATE|PLACE AND DATE|TYPE OF MOVEMENT|ETD|ORIGINALS|PARTICULARS|FREIGHT PAYABLE|NO\.? OF ORIGINAL|TO OBTAIN DELIVERY|BUYER|SELLER|SOLD TO|BILL TO|SHIP TO|INVOICE|PL NO|DATE\b|PAYMENT|TERMS|COUNTRY OF)/;
+  const BL_ANYLAB919 = /^(SHIPPER|EXPORTER|CONSIGNOR|CONSIGNEE|NOTIFY|ALSO NOTIFY|OCEAN VESSEL|VESSEL|PORT OF|PLACE OF|POL\b|POD\b|FINAL DESTINATION|PRE[- ]?CARRIAGE|BOOKING|BILLS? OF LADING|B\/L|EXPORT REFERENCES|FORWARDING AGENT|POINT AND COUNTRY|DESCRIPTION|CONTAINER NO|MARKS|QUANTITY|NET WEIGHT|GROSS WEIGHT|MEASUREMENT|BASIC INSTRUCTIONS|OTHER INSTRUCTIONS|PLACE & DATE|PLACE AND DATE|TYPE OF MOVEMENT|ETD|ORIGINALS|PARTICULARS|FREIGHT PAYABLE|NO\.? OF ORIGINAL|TO OBTAIN DELIVERY|BUYER|SELLER|SOLD TO|BILL TO|SHIP TO|INVOICE|PL NO|DATE\b|PAYMENT|TERMS|COUNTRY OF|SL\.?\s?NO\b|S\.\s?NO\b|SR\.?\s?NO\b|SERIAL\s+NO\b)/;
+  // v2.9.20: a container table ends a description / party block — a row with a container number, or 2+ table headings
+  const BL_TBLW920 = [/\bS[LR]?\.?\s?NO\b/, /\bCONTAINER\s*(NO|NUMBER|#)/, /\bSEAL\s*(NO|NUMBER|#)/, /\bQTY\b|\bQUANTITY\b/, /\bGROSS\b/, /\bNET\b/];
+  const blTbl920 = (line) => { const u = blFold920(line).toUpperCase(); return blCns919(u).length > 0 || (!/\d{3}/.test(u) && BL_TBLW920.filter((re) => re.test(u)).length >= 2); };
   function blGridLab919(grid, re, block) {   // an Excel SI: the cells under a label, in its column
     for (let r = 0; r < grid.length; r++) for (let c = 0; c < (grid[r] || []).length; c++) {
       const s = String(grid[r][c] || '').toUpperCase().trim(); if (!s || !re.test(s)) continue;
       const out = []; let gap = 0;
-      const same = s.split(':').slice(1).join(':').trim(); if (same && !block) return [grid[r][c].split(':').slice(1).join(':').trim()];
+      const same = s.split(':').slice(1).join(':').trim(); if (same && !block) return [blFold920(grid[r][c]).split(':').slice(1).join(':').trim()];
       for (let k = r + 1; k < grid.length && k <= r + (block ? 40 : 3); k++) {
-        const v = String((grid[k] || [])[c] || '').trim();
+        const v = blFold920((grid[k] || [])[c] || '').trim();
+        if (blTbl920((grid[k] || []).join('   '))) break;
         if (!v) { if (out.length && ++gap > 3) break; continue; }
         if (BL_ANYLAB919.test(v.toUpperCase())) break;
         gap = 0; out.push(...v.split('\n').map((x) => x.trim()).filter(Boolean)); if (!block) break;
@@ -9569,9 +9684,12 @@
       const after = cells[0].includes(':') ? cells[0].split(':').slice(1).join(':').trim() : cells[1] && !BL_ANYLAB919.test(cells[1].toUpperCase()) ? cells[1].trim() : '';
       const out = after ? [after] : [];
       if (!block && out.length) return out;
-      for (let k = i + 1; k < L.length && k <= i + (block ? 14 : 2); k++) {
+      let gap = 0;   // v2.9.20: a description (block 2) runs on over blank lines until a label or a container table
+      for (let k = i + 1; k < L.length && k <= i + (block === 2 ? 40 : block ? 14 : 2); k++) {
         const v = L[k].split(/\s{3,}/)[0].trim();
-        if (!v) { if (out.length) break; continue; }
+        if (blTbl920(L[k])) break;
+        if (!v) { if (out.length && (block !== 2 || ++gap > 2)) break; continue; }
+        gap = 0;
         if (BL_ANYLAB919.test(v.toUpperCase())) break;
         out.push(v); if (!block) break;
       }
@@ -9603,7 +9721,7 @@
   function blDoc919(pages) {
     const T = pages.map(blTx919).join('\n'), U = T.toUpperCase(), rows = blRows919(T);
     const cells = U.split('\n').flatMap((l) => l.trim().split(/\s{3,}/)).map((c) => c.trim()).filter((c) => c.length >= 3 && c.length <= 90);
-    return { pages, T, U, N: blNorm919(T), tok: new Set(U.split(/[^A-Z0-9]+/).filter(Boolean)), cells, rows, cns: [...new Set([...rows.keys(), ...blCns919(U)])], hs: blHs919(U), pk: blPk919(U, rows), w: blWts919(T) };
+    return { pages, T, U, N: blNorm919(T), tok: new Set(U.split(/[^A-Z0-9]+/).filter(Boolean)), cells, keys: new Set(blWords920(T).map((x) => x.k)), rows, cns: [...new Set([...rows.keys(), ...blCns919(U)])], hs: blHs919(U), pk: blPk919(U, rows), w: blWts919(T) };
   }
   function blHas919(D, line) {   // is this line on the BL? word for word, or every word of it (the BL wraps lines its own way)
     const n = blNorm919(line); if (!n) return true;
@@ -9615,6 +9733,102 @@
     const n = line.toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim(); let best = null;
     D.cells.forEach((c) => { const m = c.replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim(); if (Math.abs(m.length - n.length) > n.length * 0.5 + 4) return; const r = 1 - blLev919(n, m) / Math.max(n.length, m.length); if (r >= 0.6 && (!best || r > best.r)) best = { r, c }; });
     return best ? best.c : '';
+  }
+
+  // ---------- v2.9.20: word by word ----------
+  // Every SI line is compared word by word with the BL's closest line (one cell, or a cell and the next line's — the BL may wrap).
+  // Short forms are the same word (one list, here). Only what really differs is told; lines only on the BL are never listed.
+  const BL_SAME920 = { CLS: 'CLASS', NO: 'NUMBER', NUM: 'NUMBER', NBR: 'NUMBER', KGS: 'KG', KILOS: 'KG', KILO: 'KG', KILOGRAMS: 'KG', KGM: 'KG',
+    PKGS: 'PACKAGES', CTNS: 'CARTONS', INTL: 'INTERNATIONAL', CO: 'COMPANY', LTD: 'LIMITED', '&': 'AND' };
+  function blWords920(s) {   // the words of a line: as written (w) and the key they are compared by (k)
+    return [...blFold920(s).matchAll(/\+?[A-Za-z0-9]+|&/g)].map((m) => { const k0 = m[0].replace(/^\+/, '').toUpperCase(); return { w: m[0], k: BL_SAME920[k0] || k0 }; });
+  }
+  function blLcs920(A, B) {   // the matched pairs of two key lists, in order
+    const n = A.length, m = B.length, T = Array.from({ length: n + 1 }, () => new Int16Array(m + 1)), out = [];
+    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) T[i][j] = A[i] === B[j] ? T[i + 1][j + 1] + 1 : Math.max(T[i + 1][j], T[i][j + 1]);
+    let i = 0, j = 0;
+    while (i < n && j < m) { if (A[i] === B[j]) { out.push([i, j]); i++; j++; } else if (T[i + 1][j] >= T[i][j + 1]) i++; else j++; }
+    return out;
+  }
+  const blLike920 = (a, b) => (/\d/.test(a) && /\d/.test(b)) || (!/\d/.test(a + b) && 1 - blLev919(a, b) / Math.max(a.length, b.length) >= 0.5);
+  function blDiff920(S, C, o) {   // S = the SI line's words, C = a BL candidate's; o: { tok (keys on the whole BL), skip (keys of the lines around), edge (one cell) }
+    const P = blLcs920(S.map((x) => x.k), C.map((x) => x.k));
+    const miss = [], add = [], diff = [];
+    let subs = 0;
+    const gap = (i0, i1, j0, j1, inner) => {
+      const a = S.slice(i0, i1), b = C.slice(j0, j1);
+      for (let q = 0; q < Math.min(a.length, b.length); q++) if (blLike920(a[q].k, b[q].k)) subs++;
+      const a2 = a.filter((x) => !o.tok.has(x.k));   // a word that is on the BL somewhere else is not missing (its column is elsewhere)
+      const b2 = b.filter((x) => inner || o.edge).filter((x) => !o.skip.has(x.k) && !S.some((y) => y.k === x.k));
+      let q = 0;
+      for (; q < Math.min(a2.length, b2.length) && blLike920(a2[q].k, b2[q].k); q++) diff.push([a2[q].w, b2[q].w]);
+      miss.push(...a2.slice(q).map((x) => x.w)); if (inner || o.edge) add.push(...b2.slice(q).map((x) => x.w));
+    };
+    let pi = 0, pj = 0;
+    P.forEach(([i, j], n) => { gap(pi, i, pj, j, n > 0); pi = i + 1; pj = j + 1; });
+    gap(pi, S.length, pj, C.length, false);
+    if (!P.length) return { m: 0, score: subs ? 0.5 * subs / Math.max(S.length, C.length) : 0, miss: [], add: [], diff: [] };
+    return { m: P.length, score: (P.length + 0.5 * subs) / Math.max(S.length, C.length), miss, add, diff };
+  }
+  function blCands920(D) {   // the BL's cells (and each cell + the next line's cells), with their words — once per document
+    if (D.cand) return D.cand;
+    const L = D.T.split('\n').map((l) => l.trim().split(/\s{3,}/).map((c) => c.trim()).filter(Boolean));
+    const cells = []; L.forEach((row, i) => row.forEach((c) => cells.push({ t: c, i, W: blWords920(c) })));
+    D.cand = { cells, byLine: L.map((_, i) => cells.filter((c) => c.i === i)) };
+    return D.cand;
+  }
+  function blBest920(D, line, skip) {   // the BL's closest line to an SI line, compared word by word
+    const S = blWords920(line); if (!S.length) return null;
+    const ks = new Set(S.map((x) => x.k)), { cells, byLine } = blCands920(D), o = { tok: D.keys, skip: skip || new Set() };
+    let best = null;
+    const tryC = (t, C, edge) => { const r = blDiff920(S, C, Object.assign({ edge }, o)); if (r.score > 0 && (!best || r.score > best.score + 1e-9)) best = Object.assign(r, { t, C, edge }); };
+    cells.forEach((c) => {
+      if (!c.W.some((x) => ks.has(x.k)) && !(c.W.some((x) => /\d{4}/.test(x.k)) && S.some((x) => /\d{4}/.test(x.k)))) return;
+      tryC(c.t, c.W, true);
+      (byLine[c.i + 1] || []).forEach((d) => tryC(c.t + ' ' + d.t, c.W.concat(d.W), false));
+      (byLine[c.i - 1] || []).forEach((d) => { if (d.W.some((x) => ks.has(x.k))) return; tryC(d.t + ' ' + c.t, d.W.concat(c.W), false); });
+    });
+    return best ? Object.assign(best, { S }) : { S, score: 0 };
+  }
+  // compare one SI line: null when it is on the BL, else the sentence parts
+  function blLine920(D, field, refW, line, skip, blLine) {
+    const S = blWords920(line); if (!S.length) return null;
+    const lax = S.every((x) => D.keys.has(x.k)) || D.N.includes(blNorm919(line));
+    let b = blBest920(D, line, skip);
+    if (blLine) { const r = blDiff920(S, blWords920(blLine), { tok: D.keys, skip: skip || new Set(), edge: true }); b = Object.assign(r, { t: blLine, S, C: blWords920(blLine), edge: true, label: true }); }
+    const V = (s) => ({ v: String(s) }), shown = blFold920(line).replace(/\s+/g, ' ').trim().replace(/,\s*$/, '');
+    if (lax && !(b && b.score >= 0.5 && b.m === S.length)) return { ok: true, b };
+    if (lax && b && b.m === S.length && !b.add.length) return { ok: true, b };
+    if (!b || !b.t || (b.score < 0.5 && !b.label)) return { ok: false, b, say: [field + ': ' + refW + ' says ', V(shown), ' — the BL draft does not have it.'] };
+    const parts = [];
+    if (b.m) {
+      if (b.miss.length) parts.push(' · not on the BL: ', V(b.miss.join(' ')));
+      if (b.add.length) parts.push(' · added on the BL: ', V(b.add.join(' ')));
+      if (b.diff.length) parts.push(' · different: ', ...b.diff.flatMap(([x, y], i) => [i ? ', ' : '', V(x), ' → ', V(y)]));
+      if (!parts.length) return { ok: true, b };
+    }
+    return { ok: false, b, say: [field + ': ' + refW + ' says ', V(shown), ' — the BL draft has ', V(b.t.replace(/\s+/g, ' ').trim()), ...parts, '.'] };
+  }
+  // ---------- v2.9.20: spelling — common trade words only (never names, addresses or company names) ----------
+  const BL_DICT920 = ('FREE DRUM PORT DRUMS DETENTION DEMURRAGE CONTAINER CONTAINERS PREPAID COLLECT PALLET PALLETS GROSS WEIGHT CONSIGNEE SHIPPER ' +
+    'SHIPPED NOTIFY DESTINATION DISCHARGE LOADING TRANSIT INTERNATIONAL TRANSPORTATION CUSTOMS INDUSTRIAL GRADE CHEMICAL FREIGHT PACKAGES ' +
+    'PACKAGE BOARD TOTAL COMPANY LIMITED TRADING GENERAL CARGO GOODS DANGEROUS HAZARDOUS FLAMMABLE DESCRIPTION QUANTITY MEASUREMENT ORIGIN ' +
+    'ORIGINAL PACKING INVOICE SHIPPING CARTON CARTONS BUNDLES PIECES TARIFF TERMINAL CHARGES ACCOUNT VESSEL VOYAGE DELIVERY RECEIPT CARRIAGE ' +
+    'TRANSSHIPMENT PAYABLE LIQUID POWDER MARINE POLLUTANT TEMPERATURE VENTILATION NUMBER CLASS CONTAIN CONTAINS KILOS NETT').split(' ');
+  const BL_DSET920 = new Set(BL_DICT920);
+  const BL_REAL920 = new Set(('PAID POST PART SORT FORT PORK PORE TREE FLEE FREED DRUG DRUGS CROSS GLOSS GROSSE HEIGHT EIGHT WEIGHS FRIGHT LADING ' +
+    'LEADING SHOPPER SKIPPER CHIPPER CONSIGNER RETENTION TRADE GRATE GRADING CARTOON MARINA MARINER GLASS CLASP LUMBER NUMBED FOODS WOODS ' +
+    'HOODS POWER MARRIAGE MALLET BALLET ABOARD PICKING BACKING CHIPPING SPORT PORTS TOTEM CONTAINED HOARD').split(' '));
+  function blSpell920(word) {   // → the list word it should be, or ''
+    const w = String(word || '').toUpperCase();
+    if (w.length < 4 || /[^A-Z]/.test(w) || BL_DSET920.has(w) || BL_REAL920.has(w)) return '';
+    if (BL_DSET920.has(w.replace(/E?S$/, '')) || BL_DSET920.has(w + 'S') || BL_DSET920.has(w.replace(/E?D$/, ''))) return '';
+    for (const d of BL_DICT920) {
+      if (Math.abs(d.length - w.length) > 1 || (d.length === 4 && w.length !== 4)) continue;
+      if (d.length === w.length && d.slice(0, -1) === w.slice(0, -1) && /[SDRY]/.test(d.slice(-1)) && /[SDRY]/.test(w.slice(-1))) continue;   // an inflection (PACKAGED / PACKAGES)
+      if (blLev919(w, d) === 1) return d;
+    }
+    return '';
   }
 
   // ---------- the check ----------
@@ -9709,34 +9923,52 @@
     const grids = refP.filter((p) => p.grid).map((p) => p.grid);
     const refLab = (k, block) => {
       for (const g of grids) { const v = blGridLab919(g, BL_LAB919[k], block); if (v.length) return v; }
-      if (R) { const v = blTextLab919(R.T, BL_LAB919[k], block); if (v.length) return v; }
+      if (R) { const v = blTextLab919(R.T, BL_LAB919[k], k === 'desc' ? 2 : block); if (v.length) return v; }
       if (!useSi && M && { shipper: 1, consignee: 1, notify: 1 }[k] && M.F[k] && M.F[k].v) return String(M.F[k].v).split('\n');
       return [];
     };
     const blLabRe = { vessel: /^(OCEAN\s+)?VESSEL/, pol: /^PORT OF LOADING|^POL\b/, pod: /^PORT OF DISCHARGE|^POD\b/, fdest: /^PLACE OF DELIVERY|^FINAL DESTINATION/ };
     const PN = { shipper: 'Shipper', consignee: 'Consignee', notify: 'Notify party' };
+    // v2.9.20: every SI line word by word against the BL's closest line — "<Field>: the SI says … — the BL draft has … · not on the BL: …"
+    const keysOf = (ls) => new Set(ls.flatMap((l) => blWords920(l).map((x) => x.k)));
+    const near = (ls, i) => keysOf([ls[i - 1] || '', ls[i + 1] || '']);
+    const spell = { si: [], bl: [] };
     if (R) ['shipper', 'consignee', 'notify'].forEach((k) => {
       const lines = refLab(k, true).filter((l) => blNorm919(l).length >= 3 && !/^SAME AS/i.test(l));
       if (!lines.length) return;
-      const miss = lines.filter((l) => !blHas919(B, l));
-      if (!miss.length) { ok.push(PN[k].toLowerCase()); return; }
-      if (miss.length === lines.length && !blHas919(B, lines[0])) { say(PN[k] + ': ', V(lines[0].replace(/,\s*$/, '')), ' (' + refW + ') is not on the BL draft' + (blNear919(B, lines[0]) ? ' — the closest it has is ' : '.'), ...(blNear919(B, lines[0]) ? [V(blNear919(B, lines[0])), '.'] : [])); return; }
-      miss.slice(0, 4).forEach((l) => { const near = blNear919(B, l); say(PN[k] + ': ' + refW + ' has ', V(l.replace(/\s+/g, ' ')), near ? ' — the BL draft has ' : ' — the BL draft does not have it.', ...(near ? [V(near.replace(/\s+/g, ' ')), '.'] : [])); });
-      if (miss.length > 4) say(PN[k] + ': ' + (miss.length - 4) + ' more lines from ' + refW + ' are not on the BL draft.');
+      const res = lines.map((l, i) => blLine920(B, PN[k], refW, l, near(lines, i)));
+      const bad = res.filter((r) => !r.ok);
+      if (!bad.length) { ok.push(PN[k].toLowerCase()); return; }
+      if (bad.length === lines.length && lines.length > 1 && res.every((r) => !r.b || !r.b.m || r.b.score < 0.5)) {
+        const n0 = blNear919(B, lines[0]);
+        say(PN[k] + ': ', V(blFold920(lines[0]).replace(/,\s*$/, '')), ' (' + refW + ') is not on the BL draft' + (n0 ? ' — the closest it has is ' : '.'), ...(n0 ? [V(n0), '.'] : [])); return;
+      }
+      bad.slice(0, 4).forEach((r) => say(...r.say));
+      if (bad.length > 4) say(PN[k] + ': ' + (bad.length - 4) + ' more lines from ' + refW + ' are not on the BL draft.');
     });
     if (R) [['vessel', 'Vessel / voyage'], ['pol', 'Port of loading'], ['pod', 'Port of discharge'], ['fdest', 'Place of delivery']].forEach(([k, name]) => {
       const v = refLab(k, false)[0]; if (!v || blNorm919(v).length < 3) return;
-      const n = blNorm919(v);
-      if (B.N.includes(n) || blHas919(B, v)) { ok.push(name.toLowerCase()); return; }
       const has = blCellLab919(B.T, blLabRe[k]);
-      say(name + ': ' + refW + ' says ', V(v), has ? ' — the BL draft says ' : ' — the BL draft does not show it.', ...(has ? [V(has), '.'] : []));
+      const r = blLine920(B, name, refW, v, null, has && blWords920(has).length ? has : '');
+      if (r.ok) { ok.push(name.toLowerCase()); return; }
+      if (r.b && r.b.label && !r.b.m) say(name + ': ' + refW + ' says ', V(blFold920(v).trim()), ' — the BL draft has ', V(has), '.');
+      else say(...r.say);
     });
     if (useSi) {
-      const desc = refLab('desc', true).filter((l) => blNorm919(l).length >= 4 && !/^H\.?\s*S\.?\s*CODE|WEIGHT|^\d[\d,.]*\s*(KGS?|MT)$/i.test(l));
-      const miss = desc.filter((l) => !blHas919(B, l));
-      miss.slice(0, 4).forEach((l) => { const near = blNear919(B, l); say('Description: the SI has ', V(l), near ? ' — the BL draft has ' : ' — the BL draft does not have it.', ...(near ? [V(near), '.'] : [])); });
-      if (desc.length && !miss.length) ok.push('description');
+      const all = refLab('desc', true).filter((l) => blNorm919(l).length >= 2);
+      const desc = all.filter((l) => blNorm919(l).length >= 4 && !/^H\.?\s*S\.?\s*CODE|WEIGHT|^\d[\d,.]*\s*(KGS?|MT)$/i.test(l));
+      const res = desc.map((l, i) => blLine920(B, 'Description', refW, l, near(desc, i)));
+      res.filter((r) => !r.ok).slice(0, 6).forEach((r) => say(...r.say));
+      if (desc.length && res.every((r) => r.ok)) ok.push('description');
+      // spelling: the SI's description and the BL lines it was matched to
+      all.forEach((l) => blWords920(l).forEach((x) => { const t = blSpell920(x.w); if (t) spell.si.push([x.w.toUpperCase(), t]); }));
+      res.forEach((r) => { if (r.b && r.b.C && r.b.score >= 0.5) r.b.C.forEach((x) => { const t = blSpell920(x.w); if (t) spell.bl.push([x.w.toUpperCase(), t]); }); });
     }
+    const spellS = [];
+    [...new Set(spell.si.concat(spell.bl).map((x) => x[0]))].forEach((w) => {
+      const t = (spell.si.concat(spell.bl).find((x) => x[0] === w) || [])[1], a = spell.si.some((x) => x[0] === w), b = spell.bl.some((x) => x[0] === w);
+      spellS.push(['Spelling: ', V(w), ' on ' + (a && b ? refW + ' and the BL draft' : a ? refW : 'the BL draft') + ' — should it be ', V(t), '?']);
+    });
     if (R) {
       const fr = (D) => /FREIGHT\s+PREPAID|\bPREPAID\b/.test(D.U) ? 'PREPAID' : /FREIGHT\s+COLLECT|\bCOLLECT\b/.test(D.U) ? 'COLLECT' : '';
       const a = fr(R), b = fr(B);
@@ -9753,8 +9985,8 @@
     const against = [R ? (useSi ? 'the SI' : refW) : '', eirs.length ? rdPl915(eirs.length, 'EIR') : ''].filter(Boolean);
     const okLine = ok.length ? (n ? 'Everything else matches: ' : 'Matches: ') + andL(ok) + '.' : '';
     const plain = (s) => s.map((x) => (typeof x === 'string' ? x : x.v)).join('');
-    const text = [head, ...issues.map((s, i) => (i + 1) + '. ' + plain(s)), okLine].filter(Boolean).join('\n');
-    return { bl: B, blNo, blFile: blFiles[0], more: blFiles.length - 1, si: siP, eir: eirs, ci: ciP, R, refS, refW, useSi, issues, ok, okLine, head, against, text, rows: rows.filter((x) => x.onBl || x.onRef || x.eir) };
+    const text = [head, ...issues.map((s, i) => (i + 1) + '. ' + plain(s)), ...spellS.map(plain), okLine].filter(Boolean).join('\n');
+    return { spell: spellS, bl: B, blNo, blFile: blFiles[0], more: blFiles.length - 1, si: siP, eir: eirs, ci: ciP, R, refS, refW, useSi, issues, ok, okLine, head, against, text, rows: rows.filter((x) => x.onBl || x.onRef || x.eir) };
   }
   function rdBlHtml919(M) {
     const C = blBuild919(M); RD.BL = C;
@@ -9778,6 +10010,7 @@
       '<header class="bl919-hd"><span class="bl919-st">' + (n ? '<b>' + n + '</b>' : icon('ok915', 18)) + '</span><div><h3>' + esc(C.head) + '</h3>' +
         '<small>' + (C.against.length ? 'Checked against ' + esc(C.against.join(' and ')) : 'Nothing to check against yet — add the SI, the EIRs or the invoice and packing list') + (C.more ? ' · only the first BL draft is checked' : '') + '</small></div>' + '</header>' +
       (n ? '<ol class="bl919-is">' + C.issues.map((s) => '<li>' + sent(s) + '</li>').join('') + '</ol>' : '') +
+      (C.spell.length ? '<div class="bl920-sp">' + C.spell.map((s) => '<p><span class="bl920-spk">Aa</span><span>' + sent(s) + '</span></p>').join('') + '</div>' : '') +
       (C.okLine ? '<p class="bl919-ok">' + icon('ok915', 13) + '<span>' + esc(C.okLine) + '</span></p>' : '') + '</section>';
     const R = C.rows;
     const sc = (v, bad, l) => '<td data-l="' + l + '" class="m' + (bad ? ' is-bad' : '') + '">' + (v ? esc(v) : '<span class="bl919-na">—</span>') + '</td>';
