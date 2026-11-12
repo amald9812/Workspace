@@ -1,6 +1,6 @@
 /* =============================================================================
    ETHIX v2 — APP (sign-in, Home, Jobs, voyage, new job, people, notifications,
-   enquiries, follow-ups, delays, close & archive, costing, reminders, cover, system health, arrange Home, document reader, for Dubai Trade — v2.9.18)
+   enquiries, follow-ups, delays, close & archive, costing, reminders, cover, system health, arrange Home, document reader, for Dubai Trade, BL check — v2.9.19)
    Talks to the same Apps Script backend as the current app. Nothing is stored
    on the device except the names on the sign-in screen and a few view choices.
    ============================================================================= */
@@ -8447,10 +8447,10 @@
   const RD = { user: null, files: [], tab: 'si', busy: false, stop: false, msg: null, n: 0, until: 0, tick: null, tries: 0,
     tpm: 8000, rem: null, at: 0, q: Promise.resolve(), lib: null, done: 0, stage: '', how: null, gapOnly: false, fill: 0, fillN: 0 };
   try { const g = JSON.parse(localStorage.getItem('ethix.v2.groq915') || 'null'); if (g && g.tpm > 1000) RD.tpm = g.tpm; } catch (e) { /* private mode */ }
-  const RD_KIND915 = { 'invoice': 'Invoice', 'packing list': 'Packing list', 'bill of lading': 'BL', 'certificate of origin': 'Certificate of origin' };
+  const RD_KIND915 = { 'invoice': 'Invoice', 'packing list': 'Packing list', 'bill of lading': 'BL', 'eir': 'EIR', 'si': 'SI', 'certificate of origin': 'Certificate of origin' };
   const rdPl915 = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
   function rd915Clear() {   // Log out / another person / Start again: everything read is forgotten
-    RD.stop = true; RD.files = []; RD.msg = null; RD.tab = 'si'; RD.D = null; RD.user = state.user || null; RD.until = 0; RD.done = 0; RD.how = null; RD.stage = ''; RD.gapOnly = false;
+    RD.stop = true; RD.files = []; RD.msg = null; RD.tab = 'si'; RD.D = null; RD.tabSet = false; RD.paste = false; RD.BL = null; RD.user = state.user || null; RD.until = 0; RD.done = 0; RD.how = null; RD.stage = ''; RD.gapOnly = false;
     clearInterval(RD.tick); RD.tick = null;
   }
 
@@ -8505,11 +8505,13 @@
     return null;
   }
   function ruKind916(L) {
-    const title = (s) => (/PACKING\s+(LIST|SLIP)|WEIGHT\s+LIST|PACKING\s*\/\s*WEIGHT/i.test(s) && !/INVOICE\s*(&|AND|CUM)\s*PACKING/i.test(s) ? 'packing list'
+    const title = (s) => (/EQUIPMENT\s+INTERCHANGE/i.test(s) ? 'eir' : /SHIPPING\s+INSTRUCTIONS?\b/i.test(s) ? 'si' : /PACKING\s+(LIST|SLIP)|WEIGHT\s+LIST|PACKING\s*\/\s*WEIGHT/i.test(s) && !/INVOICE\s*(&|AND|CUM)\s*PACKING/i.test(s) ? 'packing list'
       : /\bINVOI[CV]E\b/i.test(s) && !/INVOICE\s*(NO|DATE|NUMBER|VALUE|AMT|AMOUNT|#|REF)/i.test(s) ? 'invoice'
       : /BILL\s+OF\s+LADING|SEA\s?WAY\s?BILL|AIR\s?WAY\s?BILL/i.test(s) ? 'bill of lading' : /CERTIFICATE\s+OF\s+ORIGIN/i.test(s) ? 'certificate of origin' : '');
     for (let i = 0; i < Math.min(L.length, 14); i++) { const s = L[i].s.trim(); if (s.length <= 60) { const k = title(s); if (k) return k; } }
     for (let i = 0; i < L.length; i++) { const s = L[i].s.trim(); if (s.length <= 46) { const k = title(s); if (k) return k; } }
+    const all = L.map((x) => x.s).join('\n');   // v2.9.19: a BL draft printed on the line's form (no title) — its B/L number and containers
+    if (/\bB\s*\/\s*L\s*(NO|NUMBER)\b|BILLS?\s+OF\s+LADING|SHIPPED\s+ON\s+BOARD/i.test(all) && /\b[A-Z]{3}[UJZ]\s?\d{6}\s?\d\b/.test(all)) return 'bill of lading';
     return 'other';
   }
   function rdRules916(text, cols) {
@@ -8792,16 +8794,17 @@
     try {
       const isPdf = /pdf/i.test(file.type) || /\.pdf$/i.test(f.name);
       const isImg = /^image\//i.test(file.type) || /\.(jpe?g|png|webp|heic|heif|gif|bmp|tiff?)$/i.test(f.name);
-      if (!isPdf && !isImg) throw new Error('Only PDFs and photos can be read.');
+      const isXls = /\.(xlsx?|xlsm|xlsb|csv)$/i.test(f.name) || /spreadsheet|ms-excel|text\/csv/i.test(file.type);   // v2.9.19: the SI in Excel
+      if (!isPdf && !isImg && !isXls) throw new Error('Only PDFs, photos and Excel files can be read.');
       if (rdPages915() >= RD_MAXP915) throw new Error('Thirty pages at a time — read these first, or Start again.');
-      if (isPdf) await rdPdf915(f, file); else await rdImg915(f, file);
+      if (isXls && !isPdf) await rdSheet919(f, file); else if (isPdf) await rdPdf915(f, file); else await rdImg915(f, file);
       f.st = 'ready';
     } catch (e) {
       f.st = 'err'; f.pages = [];
       const m = String(e && (e.message || e.name) || '');
       f.err = /password/i.test(m + (e && e.name)) ? 'This PDF has a password — open it, save it without one, and add it again.'
         : /Invalid PDF|corrupt|bad XRef|Missing PDF/i.test(m) ? 'This PDF could not be opened — it may be damaged.'
-        : /photo type|decode|load|image/i.test(m) && !/PDF reader/.test(m) ? 'This photo type cannot be opened here — save it as JPG and add it again.'
+        : /photo type|decode|load|image/i.test(m) && !/PDF reader|Excel/.test(m) ? 'This photo type cannot be opened here — save it as JPG and add it again.'
         : m.length < 140 && /[a-z]/.test(m) && !/^(TypeError|Error)\b/.test(m) ? m : 'This file could not be opened.';
     }
     rdDraw915();
@@ -9038,8 +9041,8 @@
     if (total) return (k || p.f.name.replace(/\.[a-z0-9]+$/i, '').slice(0, 22)) + ' total';
     return (k || p.f.name.replace(/\.[a-z0-9]+$/i, '').slice(0, 22)) + ' p' + p.n;
   }
-  const RD_PARTY915 = ['invoice', 'packing list', 'bill of lading', 'certificate of origin', 'other'];
-  const RD_PACK915 = ['packing list', 'invoice', 'bill of lading', 'certificate of origin', 'other'];
+  const RD_PARTY915 = ['invoice', 'packing list', 'bill of lading', 'certificate of origin', 'other', 'si', 'eir'];
+  const RD_PACK915 = ['packing list', 'invoice', 'bill of lading', 'certificate of origin', 'other', 'si', 'eir'];
   function rdRank915(list, order) { return list.map((x, i) => [x, i]).sort((a, b) => (order.indexOf(a[0].p.res.kind) - order.indexOf(b[0].p.res.kind)) || a[1] - b[1]).map((x) => x[0]); }
   function rdCands915(key) { return rdDone915().filter((p) => p.res.fields[key] && p.res.fields[key].v).map((p) => ({ p, v: String(p.res.fields[key].v), sure: p.res.fields[key].sure !== false && !p.gap })); }
   const rdKey915 = (v) => String(v || '').toUpperCase().split('\n')[0].replace(/\b(LLC|L\.L\.C|FZE|FZCO|FZC|FZ|LTD|LIMITED|PVT|CO|INC)\b\.?/g, '').replace(/[^A-Z0-9]/g, '').slice(0, 24);
@@ -9206,8 +9209,8 @@
         (!prep && (todo.length || canAgain) ? '<button type="button" class="rd916-alt" data-rd915="read">' + (todo.length ? 'Read with Groq' : 'Read again with Groq') + '<small>' + (todo.length ? rdEta915(todo) : rdEta915(rdOn916().filter((p) => p.st === 'done' && p.by !== 'groq'))) + (RD.tpm <= 12000 ? ' on its free plan' : '') + '</small></button>' : '');
     }
     return '<section class="rd915-card">' +
-      '<button type="button" class="rd915-drop" data-rd915="pick" aria-label="Add invoices or packing lists"><span class="rd915-dic">' + icon('doc915', 19) + '</span>' +
-        '<b>' + (ph ? 'Add invoice, packing list…' : 'Drop invoice, packing list…') + '</b><small>' + (ph ? 'PDF, scan or take a photo · several at once' : 'PDF, scan or phone photo · several at once') + '</small></button>' +
+      '<button type="button" class="rd915-drop" data-rd915="pick" aria-label="Add invoices, packing lists, BL drafts, EIRs or the SI"><span class="rd915-dic">' + icon('doc915', 19) + '</span>' +
+        '<b>' + (ph ? 'Add invoice, packing list, BL…' : 'Drop invoice, packing list, BL…') + '</b><small>' + (ph ? 'PDF, Excel, scan or take a photo · several at once' : 'PDF, Excel, scan or phone photo · several at once') + '</small></button>' +
       (RD.files.length ? '<div class="rd915-files">' + RD.files.map(rdFileRow915).join('') + '</div>' : '') +
       (act ? '<div class="rd915-act">' + act + '</div>' : '') +
       '<div class="rd915-safe">' + icon('lock', 14) + '<span>Nothing is saved. Scans are read in the EWS Google account and deleted at once; Groq sees only the pages Read cannot finish.</span></div>' +
@@ -9393,20 +9396,416 @@
     return '<div class="rd915-pages">' + M.text.map((x, i) => '<article class="rd915-pgx"><header><b>' + esc(x.kind.toUpperCase()) + '</b><em>' + esc(x.p.f.name) + ' · p' + x.p.n + '</em>' +
       '<button type="button" class="rd915-cp" data-rd915="page" data-i="' + i + '" aria-label="Copy the text of this page">' + icon('copy', 15) + '</button></header><pre>' + esc(x.text) + '</pre></article>').join('') + '</div>';
   }
+  // ==================================================================== v2.9.19 — BL CHECK
+  // The BL draft checked against the SI (Excel file, PDF or pasted text) — or the invoice / packing list when there is no SI —
+  // and the EIRs: the port marks the seal after the physical check, so the EIR's seal is the correct one. EWS tells, in plain
+  // sentences, everything that does not match; one Copy takes the whole message. Nothing is saved. (Amal, 12 Nov 2026.)
+  const SHEETJS919 = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+  let RD_XLS919 = null;
+  function rdXlsLib919() {
+    if (RD_XLS919) return RD_XLS919;
+    RD_XLS919 = new Promise((ok, no) => {
+      if (window.XLSX) return ok(window.XLSX);
+      const s = document.createElement('script'); s.src = SHEETJS919; s.async = true;
+      s.onload = () => (window.XLSX ? ok(window.XLSX) : no(new Error('xls')));
+      s.onerror = () => { RD_XLS919 = null; no(new Error('The Excel reader could not load — check the internet and add the file again.')); };
+      document.head.appendChild(s);
+    });
+    return RD_XLS919;
+  }
+  function rdSheetThumb919(paste) {   // a small sheet / note picture for the file row and the page strip
+    const c = document.createElement('canvas'); c.width = 66; c.height = 88; const g = c.getContext('2d');
+    g.fillStyle = '#FFFFFF'; g.fillRect(0, 0, 66, 88);
+    g.fillStyle = '#0E7C7B'; g.fillRect(0, 0, 66, 12);
+    g.strokeStyle = 'rgba(11,27,43,.14)'; g.lineWidth = 1;
+    if (paste) { for (let y = 22; y < 84; y += 9) { g.beginPath(); g.moveTo(7, y + .5); g.lineTo(y % 2 ? 46 : 59, y + .5); g.stroke(); } }
+    else {
+      for (let y = 20; y < 88; y += 8) { g.beginPath(); g.moveTo(0, y + .5); g.lineTo(66, y + .5); g.stroke(); }
+      [17, 38].forEach((x) => { g.beginPath(); g.moveTo(x + .5, 12); g.lineTo(x + .5, 88); g.stroke(); });
+    }
+    return c.toDataURL('image/png');
+  }
+  async function rdSheet919(f, file) {   // an Excel / CSV SI: one page per sheet, its cells kept as a grid
+    const X = await rdXlsLib919();
+    const wb = X.read(new Uint8Array(await file.arrayBuffer()), { type: 'array' });
+    let n = 0;
+    for (const name of wb.SheetNames.slice(0, 6)) {
+      if (!RD.files.includes(f) || rdPages915() >= RD_MAXP915) break;
+      const rows = X.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false, defval: '', blankrows: true });
+      const grid = rows.map((r) => (r || []).map((c) => String(c === null || c === undefined ? '' : c).replace(/\r/g, '').trim()));
+      if (!grid.some((r) => r.some(Boolean))) continue;
+      const text = grid.map((r) => r.filter(Boolean).map((c) => c.replace(/\s*\n\s*/g, ' ')).join('   ')).filter(Boolean).join('\n');
+      n++;
+      f.pages.push({ id: f.id + '.' + n, f, n, img: null, text, grid, st: 'new', res: null, on: true, kind: 'si', force: 'si', thumb: rdSheetThumb919(), sheet: name });
+    }
+    if (!n) throw new Error('This Excel file is empty.');
+    f.thumb = f.pages[0].thumb; f.total = n; f.meta = 'Excel · ' + rdPl915(n, 'sheet');
+  }
+  function blPaste919(text) {   // the SI pasted as text (from the email, or cells copied from Excel)
+    text = String(text || '').replace(/\r/g, '').replace(/ /g, ' ').trim();
+    if (text.replace(/\s/g, '').length < 20) return false;
+    if (RD.files.length >= RD_MAXF915) { toast('Twelve files at a time — Start again first.'); return false; }
+    const grid = /\t/.test(text) ? text.split('\n').map((l) => l.split('\t').map((c) => c.trim())) : null;
+    const flat = grid ? grid.map((r) => r.filter(Boolean).join('   ')).filter(Boolean).join('\n') : text;
+    const f = { id: ++RD.n, name: 'SI · pasted text', st: 'ready', pages: [], meta: 'pasted text', thumb: rdSheetThumb919(true), err: '', total: 1 };
+    const r = rdRules916(flat, !!grid); r.kind = 'si';
+    f.pages.push({ id: f.id + '.1', f, n: 1, img: null, text: flat, grid, st: 'done', res: r, on: true, kind: 'si', force: 'si', thumb: f.thumb, by: 'ews' });
+    RD.files.push(f); RD.msg = null;
+    return true;
+  }
+
+  // ---------- reading a BL / SI / EIR ----------
+  const blTx919 = (p) => String(p.text || (typeof p.ocr === 'string' ? p.ocr : '') || (p.res && p.res.text) || '');
+  function blKind919(p) {
+    if (p.force) return p.force;
+    const t = blTx919(p).slice(0, 1600).toUpperCase();
+    if (/EQUIPMENT\s+INTERCHANGE|\bEIR\s*NO\b/.test(t)) return 'eir';
+    if (/SHIPPING\s+INSTRUCTIONS?\b/.test(t.slice(0, 500))) return 'si';
+    return p.res ? p.res.kind : p.kind;
+  }
+  const BL_CN919 = /\b([A-Z]{3}[UJZ])\s?(\d{6})\s?(\d)\b/;
+  const blCns919 = (s) => [...String(s || '').toUpperCase().matchAll(new RegExp(BL_CN919.source, 'g'))].map((m) => m[1] + m[2] + m[3]);
+  const BL_CDV919 = '0123456789A?BCDEFGHIJK?LMNOPQRSTU?VWXYZ';
+  function blCd919(c) { let s = 0; for (let i = 0; i < 10; i++) s += (/\d/.test(c[i]) ? +c[i] : BL_CDV919.indexOf(c[i])) * Math.pow(2, i); return (s % 11) % 10 === +c[10]; }
+  const blSeal919 = (s) => String(s || '').toUpperCase().replace(/[\s-]/g, '');
+  const blNorm919 = (s) => String(s || '').toUpperCase().replace(/&/g, 'AND').replace(/[^A-Z0-9]/g, '');
+  const blKgS919 = (n) => Math.round(n * 1000) / 1000 === Math.round(n) ? Math.round(n).toLocaleString('en-US') + ' kg' : n.toLocaleString('en-US', { maximumFractionDigits: 3 }) + ' kg';
+  const BL_TYPE919 = /^(\d{2}\s*('|’|FT|FEET)?\s*(GP|HC|HQ|DV|SD|STD|RF|RH|OT|FR|TK|PL|NOR)?|\d{2}[A-Z]\d|\d{4}\/[A-Z]{2,4}|GP|HC|HQ|DV|STD|DRY)$/;
+  const BL_PKW919 = /^(JUMBO|BAGS?|JBGS?|JBS|BGS|DRUMS?|DRS|DURMS|CARTONS?|CTNS?|PALLETS?|PLTS?|PKGS?|PACKAGES?|BOX(ES)?|ROLLS?|BALES?|CASES?|CRATES?|BUNDLES?|COILS?|IBCS?|PCS|PIECES|CANS?|BARRELS?|REELS?|TINS?|SACKS?)$/;
+  const blNum919 = (t) => { const s = String(t || '').replace(/,/g, ''); return /^\d+(\.\d+)?$/.test(s) ? Number(s) : null; };
+  function blRows919(text) {   // the container rows: number · seal · packages · gross · net
+    const L = String(text || '').toUpperCase().split('\n'), out = new Map();
+    let order = 'gn';
+    L.forEach((l, i) => {
+      const hg = l.search(/\bGR(OSS)?\.?\s*(WEIGHT|WT|WGT)|\bGROSS\b/), hn = l.search(/\bN(ET|T)\.?\s*(WEIGHT|WT|WGT)|\bNET\b/);
+      const cs = blCns919(l);
+      if (hg >= 0 && hn >= 0 && !cs.length) order = hg < hn ? 'gn' : 'ng';
+      if (cs.length !== 1) return;
+      const m = BL_CN919.exec(l), cn = cs[0];
+      let rest = l.slice(m.index + m[0].length).replace(/^\s*\/\s*\S*/, ' ');
+      const tk = rest.trim().split(/\s+/).map((t) => t.replace(/[;,]+$/, '')).filter(Boolean);
+      let seal = '', pk = null, sealAt = -1, pkAt = -1;
+      const lab = rest.match(/SEAL\s*(?:NO\.?|NUMBER|#)?\s*[:.]?\s*([A-Z0-9][A-Z0-9-]{2,15})\b/);
+      if (lab) seal = lab[1];
+      for (let k = 0; k < tk.length; k++) {
+        const t = tk[k], nx = tk[k + 1] || '', nx2 = tk[k + 2] || '';
+        if (pkAt < 0 && /^\d[\d,]*$/.test(t) && (BL_PKW919.test(nx) || (/^(JUMBO|WOODEN|PLASTIC|STEEL|HDPE|PP)$/.test(nx) && BL_PKW919.test(nx2)))) { pk = blNum919(t); pkAt = k; continue; }
+        if (seal || pkAt >= 0) continue;
+        if (BL_TYPE919.test(t) || /^\d[\d,]*\.\d+$/.test(t) || /^\d{1,3}$/.test(t) || BL_PKW919.test(t) || /^(KGS?|MTS?|SEAL|NO\.?|STC|X|CBM)$/.test(t)) continue;
+        if (/^\d+$/.test(t) && /^(KGS?|MTS?)$/.test(nx)) continue;
+        if (/\d/.test(t) && /^[A-Z0-9][A-Z0-9-]{3,15}$/.test(t)) { seal = t; sealAt = k; }
+      }
+      if (!seal && L[i + 1] && !blCns919(L[i + 1]).length) { const s2 = L[i + 1].match(/SEAL\s*(?:NO\.?|NUMBER|#)?\s*[:.]?\s*([A-Z0-9][A-Z0-9-]{2,15})\b/); if (s2) seal = s2[1]; }
+      const W = tk.map((t, k) => ({ t, k })).filter((x) => x.k > Math.max(sealAt, pkAt) && x.k !== pkAt && !BL_PKW919.test(tk[x.k + 1] || '') && blNum919(x.t) !== null && blNum919(x.t) >= 100).map((x) => blNum919(x.t));
+      let gross = null, net = null;
+      if (W.length >= 2) { const a = W[W.length - 2], b = W[W.length - 1]; if (order === 'gn') { gross = a; net = b; } else { net = a; gross = b; } }
+      else if (W.length === 1) gross = W[0];
+      const o = out.get(cn);
+      if (!o) out.set(cn, { cn, seal: blSeal919(seal), pk, gross, net });
+      else { if (!o.seal && seal) o.seal = blSeal919(seal); if (o.pk === null) o.pk = pk; if (o.gross === null) o.gross = gross; if (o.net === null) o.net = net; }
+    });
+    return out;
+  }
+  function blWts919(text) {   // weights with a label: "TOTAL GROSS WEIGHT: 92400 KGS" · "NET WEIGHT IN MT : 190.670 MT" · "NET WT" over "190,670.000 KGS"
+    const L = String(text || '').toUpperCase().split('\n'), out = { gross: [], net: [] };
+    const kg = (n, u) => (/^(MTS?|M\.?T\.?|TONS?|TONNES?)$/.test(u || '') ? n * 1000 : n);
+    const LAB = /\b(GROSS|GR\.?|NET|NT\.?)\s*(?:WEIGHT|WT\.?|WGT)\b/g;
+    L.forEach((l, i) => {
+      if (/PER\s+(CONTAINER|CNTR|CTNR|UNIT|BAG|DRUM|PALLET)/.test(l)) return;
+      const labs = [...l.matchAll(LAB)];
+      labs.forEach((m, j) => {
+        const which = /^G/.test(m[1]) ? 'gross' : 'net';
+        const rest = l.slice(m.index + m[0].length, j + 1 < labs.length ? labs[j + 1].index : undefined);
+        const v = rest.match(/^[^0-9\n]{0,24}?(\d[\d,]*(?:\.\d+)?) ?(KGS?|KILOS?|MTS?|M\.?T\.?|TONS?|TONNES?)?\b/);
+        const labU = (rest.match(/^[^0-9]*\b(KGS?|MTS?)\b/) || [])[1] || '';
+        const cell = (l.split(/\s{3,}/).find((c) => c.includes(m[0])) || l).trim();
+        if (v) { const n = blNum919(v[1]); if (n !== null && (n >= 100 || /MT/.test(v[2] || labU))) out[which].push({ kg: kg(n, v[2] || labU), line: cell }); return; }
+        if (labs.length > 1) return;   // a table heading (GROSS and NET side by side)
+        for (let k = i + 1; k <= i + 2 && k < L.length; k++) {
+          if (blCns919(L[k]).length || /(GROSS|GR\.?|NET|NT\.?)\s*(WEIGHT|WT)/.test(L[k])) continue;
+          const w = L[k].match(/(\d[\d,]*(?:\.\d+)?) ?(KGS?|KILOS?|MTS?|M\.?T\.?)\b/); if (w) { out[which].push({ kg: kg(blNum919(w[1]), w[2]), line: L[k].trim() }); break; }
+        }
+      });
+    });
+    return out;
+  }
+  function blHs919(text) {
+    const s = new Set();
+    for (const m of String(text || '').toUpperCase().matchAll(/\bH\.?\s*S\.?\s*(?:CODE|NO\.?|#)?\s*[:.]?\s*(\d{4}[.\s]?\d{2}[.\s]?\d{0,4})\b/g)) { const d = m[1].replace(/\D/g, ''); if (d.length >= 6) s.add(d.slice(0, 8)); }
+    return [...s];
+  }
+  function blPk919(text, rows) {   // the packages in all: the rows added up, else the biggest count printed
+    const R = [...rows.values()];
+    if (R.length && R.every((r) => r.pk !== null)) return R.reduce((n, r) => n + r.pk, 0);
+    let best = null;
+    for (const m of String(text || '').toUpperCase().matchAll(/(\d[\d,]*)\s*(?:X\s*)?(?:(?:JUMBO|WOODEN|PLASTIC|STEEL|HDPE|PP)\s+)?([A-Z]+)\b/g)) if (BL_PKW919.test(m[2]) && m[2] !== 'PALLETS' && m[2] !== 'PALLET' && m[2] !== 'PLTS') { const n = blNum919(m[1]); if (n && n < 100000 && (best === null || n > best)) best = n; }
+    return best;
+  }
+  const BL_LAB919 = {
+    shipper: /^(SHIPPER|EXPORTER|CONSIGNOR)\b/, consignee: /^CONSIGNEE\b/, notify: /^NOTIFY\b/, vessel: /^(OCEAN\s+)?(VESSEL|VSL)\b/,
+    pol: /^(PORT OF LOADING|LOADING PORT|POL\b)/, pod: /^(PORT OF DISCHARGE|DISCHARGE PORT|POD\b)/, fdest: /^(FINAL DESTINATION|PLACE OF DELIVERY)/,
+    desc: /^DESCRIPTION\b/ };
+  const BL_ANYLAB919 = /^(SHIPPER|EXPORTER|CONSIGNOR|CONSIGNEE|NOTIFY|ALSO NOTIFY|OCEAN VESSEL|VESSEL|PORT OF|PLACE OF|POL\b|POD\b|FINAL DESTINATION|PRE[- ]?CARRIAGE|BOOKING|BILLS? OF LADING|B\/L|EXPORT REFERENCES|FORWARDING AGENT|POINT AND COUNTRY|DESCRIPTION|CONTAINER NO|MARKS|QUANTITY|NET WEIGHT|GROSS WEIGHT|MEASUREMENT|BASIC INSTRUCTIONS|OTHER INSTRUCTIONS|PLACE & DATE|PLACE AND DATE|TYPE OF MOVEMENT|ETD|ORIGINALS|PARTICULARS|FREIGHT PAYABLE|NO\.? OF ORIGINAL|TO OBTAIN DELIVERY|BUYER|SELLER|SOLD TO|BILL TO|SHIP TO|INVOICE|PL NO|DATE\b|PAYMENT|TERMS|COUNTRY OF)/;
+  function blGridLab919(grid, re, block) {   // an Excel SI: the cells under a label, in its column
+    for (let r = 0; r < grid.length; r++) for (let c = 0; c < (grid[r] || []).length; c++) {
+      const s = String(grid[r][c] || '').toUpperCase().trim(); if (!s || !re.test(s)) continue;
+      const out = []; let gap = 0;
+      const same = s.split(':').slice(1).join(':').trim(); if (same && !block) return [grid[r][c].split(':').slice(1).join(':').trim()];
+      for (let k = r + 1; k < grid.length && k <= r + (block ? 40 : 3); k++) {
+        const v = String((grid[k] || [])[c] || '').trim();
+        if (!v) { if (out.length && ++gap > 3) break; continue; }
+        if (BL_ANYLAB919.test(v.toUpperCase())) break;
+        gap = 0; out.push(...v.split('\n').map((x) => x.trim()).filter(Boolean)); if (!block) break;
+      }
+      if (out.length) return out;
+    }
+    return [];
+  }
+  function blTextLab919(text, re, block) {   // a text SI / PDF: the rest of the label's line, or the lines under it
+    const L = String(text || '').split('\n').map((l) => l.trim());
+    for (let i = 0; i < L.length; i++) {
+      const cells = L[i].split(/\s{3,}/), c0 = cells[0].toUpperCase();
+      if (!re.test(c0)) continue;
+      const after = cells[0].includes(':') ? cells[0].split(':').slice(1).join(':').trim() : cells[1] && !BL_ANYLAB919.test(cells[1].toUpperCase()) ? cells[1].trim() : '';
+      const out = after ? [after] : [];
+      if (!block && out.length) return out;
+      for (let k = i + 1; k < L.length && k <= i + (block ? 14 : 2); k++) {
+        const v = L[k].split(/\s{3,}/)[0].trim();
+        if (!v) { if (out.length) break; continue; }
+        if (BL_ANYLAB919.test(v.toUpperCase())) break;
+        out.push(v); if (!block) break;
+      }
+      if (out.length) return out;
+    }
+    return [];
+  }
+  function blCellLab919(text, re) {   // the BL's own value for a label: same cell, or the cell under it (for the message only)
+    const L = String(text || '').split('\n');
+    for (let i = 0; i < L.length; i++) {
+      const cells = L[i].trim().split(/\s{3,}/).filter(Boolean);
+      for (let c = 0; c < cells.length; c++) {
+        if (!re.test(cells[c].toUpperCase())) continue;
+        const same = cells[c].split(':').slice(1).join(':').trim(); if (same) return same;
+        if (cells[c + 1] && !BL_ANYLAB919.test(cells[c + 1].toUpperCase())) return cells[c + 1].trim();
+        const nx = String(L[i + 1] || '').trim().split(/\s{3,}/).filter(Boolean);
+        const v = nx.length === cells.length ? nx[c] : c === 0 && nx.length && !/^\s{3,}/.test(L[i + 1]) ? nx[0] : '';
+        if (v && !BL_ANYLAB919.test(v.toUpperCase())) return v.trim();
+      }
+    }
+    return '';
+  }
+  function blLev919(a, b) {   // edit distance (short strings only)
+    if (a === b) return 0; if (!a.length) return b.length; if (!b.length) return a.length;
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) { const cur = [i]; for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = cur; }
+    return prev[b.length];
+  }
+  function blDoc919(pages) {
+    const T = pages.map(blTx919).join('\n'), U = T.toUpperCase(), rows = blRows919(T);
+    const cells = U.split('\n').flatMap((l) => l.trim().split(/\s{3,}/)).map((c) => c.trim()).filter((c) => c.length >= 3 && c.length <= 90);
+    return { pages, T, U, N: blNorm919(T), tok: new Set(U.split(/[^A-Z0-9]+/).filter(Boolean)), cells, rows, cns: [...new Set([...rows.keys(), ...blCns919(U)])], hs: blHs919(U), pk: blPk919(U, rows), w: blWts919(T) };
+  }
+  function blHas919(D, line) {   // is this line on the BL? word for word, or every word of it (the BL wraps lines its own way)
+    const n = blNorm919(line); if (!n) return true;
+    if (D.N.includes(n)) return true;
+    const w = line.toUpperCase().split(/[^A-Z0-9]+/).filter((x) => x.length >= 2);
+    return w.length > 0 && w.every((x) => D.tok.has(x));
+  }
+  function blNear919(D, line) {   // the BL's closest line (for "the BL has …")
+    const n = line.toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim(); let best = null;
+    D.cells.forEach((c) => { const m = c.replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim(); if (Math.abs(m.length - n.length) > n.length * 0.5 + 4) return; const r = 1 - blLev919(n, m) / Math.max(n.length, m.length); if (r >= 0.6 && (!best || r > best.r)) best = { r, c }; });
+    return best ? best.c : '';
+  }
+
+  // ---------- the check ----------
+  function blBuild919(M) {
+    const done = rdDone915(), K = (p) => blKind919(p);
+    const blFiles = [...new Set(done.filter((p) => K(p) === 'bill of lading').map((p) => p.f))];
+    if (!blFiles.length) return { bl: null };
+    const blP = done.filter((p) => p.f === blFiles[0] && !['invoice', 'packing list', 'eir', 'si'].includes(K(p)));   // its annexure pages too
+    const siP = done.filter((p) => K(p) === 'si'), eirP = done.filter((p) => K(p) === 'eir');
+    const ciP = done.filter((p) => K(p) === 'invoice' || K(p) === 'packing list');
+    const B = blDoc919(blP), useSi = siP.length > 0, refP = useSi ? siP : ciP, R = refP.length ? blDoc919(refP) : null;
+    const refW = useSi ? 'the SI' : ciP.some((p) => K(p) === 'packing list') ? 'the packing list' : 'the invoice';
+    const refS = useSi ? 'SI' : ciP.some((p) => K(p) === 'packing list') ? 'PACKING LIST' : 'INVOICE';
+    const blNo = (blCellLab919(B.T, /^(B\s*\/\s*L\s*(NO|NUMBER)|BILL OF LADING\s*(NO|NUMBER))/) || (B.U.match(/B\s*\/\s*L\s*(?:NO|NUMBER)\.?\s*[:.]?\s*([A-Z0-9][A-Z0-9\/-]{5,30})/) || [])[1] || '').replace(/\(?DRAFT\)?/i, '').trim().split(/\s{2,}/)[0];
+    const issues = [], ok = [];
+    const say = (...parts) => issues.push(parts);
+    const V = (s) => ({ v: String(s) });
+    // EIRs
+    const eirs = eirP.map((p) => {
+      const t = blTx919(p).toUpperCase(), L = t.split('\n'); let cn = '', seal = '';
+      L.forEach((l, i) => {
+        if (!cn && /CONTAINER/.test(l)) cn = blCns919(l)[0] || '';
+        if (!seal) { const m = l.match(/SEAL\s*(?:NO|NUMBER|#)\.?\s*[:.#-]?\s*([A-Z0-9][A-Z0-9\/-]{2,15})\b/); if (m && !/^(SEAL|PREFIX|DETAILS|STATUS|CRT)$/.test(m[1])) seal = m[1]; else if (/SEAL\s*NO\.?\s*$/.test(l.trim()) && L[i + 1]) seal = (L[i + 1].trim().match(/^([A-Z0-9][A-Z0-9\/-]{2,15})\b/) || [])[1] || ''; }
+      });
+      return { cn: cn || blCns919(t)[0] || '', seal: blSeal919(seal), p };
+    }).filter((e) => e.cn);
+    const E = new Map(); eirs.forEach((e) => { if (!E.has(e.cn)) E.set(e.cn, e); });
+    // containers and seals
+    const blC = B.cns, refC = R ? R.cns : [];
+    const all = [...new Set([...blC, ...refC, ...E.keys()])];
+    const rows = all.map((cn) => {
+      const b = B.rows.get(cn) || null, r = R ? R.rows.get(cn) || null : null, e = E.get(cn) || null;
+      return { cn, onBl: blC.includes(cn), onRef: refC.includes(cn), bl: b, ref: r, eir: e, bad: false, cd: blCd919(cn) };
+    });
+    const sealOk = [], sealEir = [];
+    rows.forEach((x) => {
+      const bs = x.bl && x.bl.seal, rs = x.ref && x.ref.seal, es = x.eir && x.eir.seal;
+      const lead = (a, b) => (a && b && a.replace(/^0+/, '') === b.replace(/^0+/, '') ? ' (only the leading 0 differs)' : '');
+      if (x.onBl && es && bs && bs !== es) { x.bad = true; say('Seal for ', V(x.cn), ': the EIR says ', V(es), ' — the BL draft says ', V(bs), lead(es, bs) + '.' + (rs && rs !== es ? ' ' + refW.replace(/^t/, 'T') + ' also has ' : ''), ...(rs && rs !== es ? [V(rs), '.'] : [])); }
+      else if (x.onBl && es && rs && rs !== es && bs === es) { x.bad = true; say('Seal for ', V(x.cn), ': ' + refW + ' says ', V(rs), ' — the EIR and the BL draft say ', V(es), '. The BL draft is right.'); }
+      else if (x.onBl && !es && rs && bs && rs !== bs) { x.bad = true; say('Seal for ', V(x.cn), ': ' + refW + ' says ', V(rs), ' — the BL draft says ', V(bs), lead(rs, bs) + '.'); }
+      else if (x.onBl && bs && (es || rs)) { sealOk.push(x.cn); if (es) sealEir.push(x.cn); }
+      if (x.onBl && !bs && (es || rs)) { x.bad = true; say('No seal number could be read for ', V(x.cn), ' on the BL draft — ' + (es ? 'the EIR says ' : refW + ' says '), V(es || rs), '.'); }
+    });
+    const noEir = eirs.length ? rows.filter((x) => x.onBl && !x.eir).map((x) => x.cn) : [];
+    const eirOff = rows.filter((x) => x.eir && !x.onBl).map((x) => x.cn);
+    const andL = (a) => a.length <= 1 ? a.join('') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
+    if (noEir.length) say('No EIR for ', V(andL(noEir)), ' — ' + (noEir.length === 1 ? 'its seal' : 'their seals') + (R ? (noEir.length === 1 ? ' was' : ' were') + ' checked against ' + refW + ' only.' : ' could not be checked.'));
+    if (eirOff.length) say('The EIR' + (eirOff.length > 1 ? 's' : '') + ' for ', V(andL(eirOff)), (eirOff.length > 1 ? ' are for containers' : ' is for a container') + ' not on the BL draft.');
+    if (R) {
+      const miss = rows.filter((x) => x.onRef && !x.onBl).map((x) => x.cn), extra = rows.filter((x) => x.onBl && !x.onRef && refC.length).map((x) => x.cn);
+      if (miss.length) { miss.forEach((cn) => { const x = rows.find((y) => y.cn === cn); x.bad = true; }); say('On ' + refW + ' but not on the BL draft: ', V(andL(miss)), '.'); }
+      if (extra.length) { extra.forEach((cn) => { const x = rows.find((y) => y.cn === cn); x.bad = true; }); say('On the BL draft but not on ' + refW + ': ', V(andL(extra)), '.'); }
+    }
+    rows.filter((x) => !x.cd && (x.onBl || x.onRef)).forEach((x) => { x.bad = true; say(V(x.cn), ': the last digit does not fit the rest — the container number has a typo (on ' + [x.onBl ? 'the BL draft' : '', x.onRef ? refW : ''].filter(Boolean).join(' and ') + ').'); });
+    // per container: packages and weights
+    rows.filter((x) => x.bl && x.ref).forEach((x) => {
+      const d = [];
+      if (x.bl.pk !== null && x.ref.pk !== null && x.bl.pk !== x.ref.pk) d.push(['packages ', V(x.ref.pk), ' on ' + refW + ', ', V(x.bl.pk), ' on the BL draft']);
+      if (x.bl.gross !== null && x.ref.gross !== null && Math.abs(x.bl.gross - x.ref.gross) > 0.5) d.push(['gross ', V(blKgS919(x.ref.gross)), ' on ' + refW + ', ', V(blKgS919(x.bl.gross)), ' on the BL draft']);
+      if (x.bl.net !== null && x.ref.net !== null && Math.abs(x.bl.net - x.ref.net) > 0.5) d.push(['net ', V(blKgS919(x.ref.net)), ' on ' + refW + ', ', V(blKgS919(x.bl.net)), ' on the BL draft']);
+      if (d.length) { x.bad = true; say(V(x.cn), ': ', ...d.flatMap((p, i) => (i ? ['; ', ...p] : p)), '.'); }
+    });
+    // totals
+    const sum = (D, k) => { const r = [...D.rows.values()]; return r.length && r.every((x) => x[k] !== null) ? r.reduce((n, x) => n + x[k], 0) : null; };
+    const fromF = (f) => { const m = String((f && f.v) || '').toUpperCase().match(/(\d[\d,]*(?:\.\d+)?)\s*(KGS?|MTS?|M\.?T\.?|TONS?)?/); if (!m) return null; const n = blNum919(m[1]); return n === null ? null : /^(MT|MTS|M\.?T\.?|TONS?)$/.test(m[2] || '') ? n * 1000 : n; };
+    const tot = { gross: 0, net: 0 };
+    ['gross', 'net'].forEach((k) => {
+      const lab = k === 'gross' ? 'Gross' : 'Net';
+      const ref = R ? (sum(R, k) !== null ? sum(R, k) : R.w[k].length ? R.w[k][0].kg : !useSi && M && M.F[k] ? fromF(M.F[k]) : null) : null;
+      const tb = sum(B, k), seen = new Set(), bad = [];
+      const figs = (tb !== null ? [{ kg: tb, line: 'the container rows add up to' }] : []).concat(B.w[k].map((x) => ({ kg: x.kg, line: x.line })));
+      const want = ref !== null ? ref : tb;
+      if (want === null) return;
+      figs.forEach((f) => { const key = Math.round(f.kg); if (Math.abs(f.kg - want) > 1 && !seen.has(key)) { seen.add(key); bad.push(f); } });
+      if (bad.length) {
+        const ofRef = ref !== null ? refW + ' says ' : 'the container rows add up to ';
+        say(lab + ' weight: ' + ofRef, V(blKgS919(want)), ' — the BL draft says ', ...bad.flatMap((f, i) => [i ? ' and ' : '', V(blKgS919(f.kg)), f.line === 'the container rows add up to' ? ' (its container rows added up)' : /TOTAL/.test(f.line) ? ' (“' + f.line.replace(/\s{2,}/g, ' ').slice(0, 60) + '”)' : '']), '.');
+      } else tot[k] = want;
+    });
+    const gB = B.w.gross.map((x) => x.kg).concat(sum(B, 'gross') !== null ? [sum(B, 'gross')] : []), nB = B.w.net.map((x) => x.kg).concat(sum(B, 'net') !== null ? [sum(B, 'net')] : []);
+    if (gB.length && nB.length && Math.max(...nB) > Math.min(...gB) + 1 && !issues.some((s) => /weight:/.test(String(s[0])))) say('On the BL draft the net weight (', V(blKgS919(Math.max(...nB))), ') is more than the gross weight (', V(blKgS919(Math.min(...gB))), ').');
+    // packages, HS code
+    if (R && R.pk !== null && B.pk !== null) { if (R.pk !== B.pk) say('Packages: ' + refW + ' says ', V(R.pk), ' — the BL draft says ', V(B.pk), '.'); else ok.push(R.pk + ' packages'); }
+    const hsR = R ? (R.hs.length ? R.hs : !useSi && M ? [...new Set(M.lines.map((l) => l.hs.slice(0, 8)).filter((h) => h.length >= 6))] : []) : [];
+    if (hsR.length && B.hs.length) {
+      const offB = B.hs.filter((h) => !hsR.some((r) => r.startsWith(h) || h.startsWith(r))), offR = hsR.filter((h) => !B.hs.some((b) => b.startsWith(h) || h.startsWith(b)));
+      if (offB.length || offR.length) say('HS code: ' + refW + ' says ', V(hsR.join(', ')), ' — the BL draft says ', V(B.hs.join(', ')), '.');
+      else ok.push('HS code ' + B.hs.join(', '));
+    } else if (hsR.length && !B.hs.length) say('HS code ', V(hsR.join(', ')), ' (' + refW + ') is not on the BL draft.');
+    // parties, ports, vessel, description, freight
+    const grids = refP.filter((p) => p.grid).map((p) => p.grid);
+    const refLab = (k, block) => {
+      for (const g of grids) { const v = blGridLab919(g, BL_LAB919[k], block); if (v.length) return v; }
+      if (R) { const v = blTextLab919(R.T, BL_LAB919[k], block); if (v.length) return v; }
+      if (!useSi && M && { shipper: 1, consignee: 1, notify: 1 }[k] && M.F[k] && M.F[k].v) return String(M.F[k].v).split('\n');
+      return [];
+    };
+    const blLabRe = { vessel: /^(OCEAN\s+)?VESSEL/, pol: /^PORT OF LOADING|^POL\b/, pod: /^PORT OF DISCHARGE|^POD\b/, fdest: /^PLACE OF DELIVERY|^FINAL DESTINATION/ };
+    const PN = { shipper: 'Shipper', consignee: 'Consignee', notify: 'Notify party' };
+    if (R) ['shipper', 'consignee', 'notify'].forEach((k) => {
+      const lines = refLab(k, true).filter((l) => blNorm919(l).length >= 3 && !/^SAME AS/i.test(l));
+      if (!lines.length) return;
+      const miss = lines.filter((l) => !blHas919(B, l));
+      if (!miss.length) { ok.push(PN[k].toLowerCase()); return; }
+      if (miss.length === lines.length && !blHas919(B, lines[0])) { say(PN[k] + ': ', V(lines[0].replace(/,\s*$/, '')), ' (' + refW + ') is not on the BL draft' + (blNear919(B, lines[0]) ? ' — the closest it has is ' : '.'), ...(blNear919(B, lines[0]) ? [V(blNear919(B, lines[0])), '.'] : [])); return; }
+      miss.slice(0, 4).forEach((l) => { const near = blNear919(B, l); say(PN[k] + ': ' + refW + ' has ', V(l.replace(/\s+/g, ' ')), near ? ' — the BL draft has ' : ' — the BL draft does not have it.', ...(near ? [V(near.replace(/\s+/g, ' ')), '.'] : [])); });
+      if (miss.length > 4) say(PN[k] + ': ' + (miss.length - 4) + ' more lines from ' + refW + ' are not on the BL draft.');
+    });
+    if (R) [['vessel', 'Vessel / voyage'], ['pol', 'Port of loading'], ['pod', 'Port of discharge'], ['fdest', 'Place of delivery']].forEach(([k, name]) => {
+      const v = refLab(k, false)[0]; if (!v || blNorm919(v).length < 3) return;
+      const n = blNorm919(v);
+      if (B.N.includes(n) || blHas919(B, v)) { ok.push(name.toLowerCase()); return; }
+      const has = blCellLab919(B.T, blLabRe[k]);
+      say(name + ': ' + refW + ' says ', V(v), has ? ' — the BL draft says ' : ' — the BL draft does not show it.', ...(has ? [V(has), '.'] : []));
+    });
+    if (useSi) {
+      const desc = refLab('desc', true).filter((l) => blNorm919(l).length >= 4 && !/^H\.?\s*S\.?\s*CODE|WEIGHT|^\d[\d,.]*\s*(KGS?|MT)$/i.test(l));
+      const miss = desc.filter((l) => !blHas919(B, l));
+      miss.slice(0, 4).forEach((l) => { const near = blNear919(B, l); say('Description: the SI has ', V(l), near ? ' — the BL draft has ' : ' — the BL draft does not have it.', ...(near ? [V(near), '.'] : [])); });
+      if (desc.length && !miss.length) ok.push('description');
+    }
+    if (R) {
+      const fr = (D) => /FREIGHT\s+PREPAID|\bPREPAID\b/.test(D.U) ? 'PREPAID' : /FREIGHT\s+COLLECT|\bCOLLECT\b/.test(D.U) ? 'COLLECT' : '';
+      const a = fr(R), b = fr(B);
+      if (a && b && a !== b) say('Freight: ' + refW + ' says ', V('FREIGHT ' + a), ' — the BL draft says ', V('FREIGHT ' + b), '.'); else if (a && a === b) ok.push('freight ' + a.toLowerCase());
+    }
+    // what matched
+    const nOn = rows.filter((x) => x.onBl).length;
+    if (R && refC.length && rows.every((x) => !(x.onRef && !x.onBl) && !(x.onBl && !x.onRef)) && nOn) ok.push(rdPl915(nOn, 'container'));
+    if (sealOk.length) ok.push((sealOk.length === nOn ? (sealOk.length === 1 ? 'the seal' : 'all ' + sealOk.length + ' seals') : rdPl915(sealOk.length, 'seal')) + (sealEir.length === sealOk.length ? ' (checked with the EIR' + (sealEir.length > 1 ? 's' : '') + ')' : sealEir.length ? ' (' + sealEir.length + ' checked with the EIR)' : ''));
+    if (tot.gross) ok.push('gross ' + blKgS919(tot.gross)); if (tot.net) ok.push('net ' + blKgS919(tot.net));
+    if (!rows.some((x) => x.onBl)) say('No container numbers could be read on the BL draft.');
+    const n = issues.length;
+    const head = n ? 'BL ' + (blNo || 'draft') + ' — ' + (n === 1 ? '1 thing' : n + ' things') + ' to look at' : 'BL ' + (blNo || 'draft') + ' — everything matches';
+    const against = [R ? (useSi ? 'the SI' : refW) : '', eirs.length ? rdPl915(eirs.length, 'EIR') : ''].filter(Boolean);
+    const okLine = ok.length ? (n ? 'Everything else matches: ' : 'Matches: ') + andL(ok) + '.' : '';
+    const plain = (s) => s.map((x) => (typeof x === 'string' ? x : x.v)).join('');
+    const text = [head, ...issues.map((s, i) => (i + 1) + '. ' + plain(s)), okLine].filter(Boolean).join('\n');
+    return { bl: B, blNo, blFile: blFiles[0], more: blFiles.length - 1, si: siP, eir: eirs, ci: ciP, R, refS, refW, useSi, issues, ok, okLine, head, against, text, rows: rows.filter((x) => x.onBl || x.onRef || x.eir) };
+  }
+  function rdBlHtml919(M) {
+    const C = blBuild919(M); RD.BL = C;
+    const pasteBox = RD.paste ? '<div class="bl919-paste"><label for="bl919Si">SI TEXT</label><textarea id="bl919Si" rows="7" spellcheck="false" placeholder="Paste the SI here — from the email, or the cells copied from Excel."></textarea>' +
+      '<div class="bl919-pa"><button type="button" class="btn-ghost" data-rd915="blx">Cancel</button><button type="button" class="btn-primary" data-rd915="blu">Use this SI</button></div></div>' : '';
+    const pasteBtn = !RD.paste && !RD.busy ? '<button type="button" class="bl919-pbtn" data-rd915="blp">' + icon('copy', 14) + '<span>Paste the SI text</span></button>' : '';
+    if (!C.bl) {
+      if (RD.busy) return '<div class="bl919"><div class="bl919-card is-sk"><span class="rd915-sk"></span><span class="rd915-sk"></span><span class="rd915-sk"></span></div></div>';
+      return '<div class="bl919"><div class="bl919-empty"><span class="bl919-eic">' + icon('doc915', 22) + '</span><b>Check a BL draft</b>' +
+        '<p>Drop the BL draft with the EIRs and the SI — Excel, PDF or pasted text — or with the invoice and packing list. EWS tells you everything that does not match.</p>' +
+        '<div class="bl919-need"><span>BL DRAFT</span><span>EIRs</span><span>SI · EXCEL, PDF OR TEXT</span><span>OR INVOICE + PACKING LIST</span></div>' + pasteBtn + '</div>' + pasteBox + '</div>';
+    }
+    const chip = (label, val, on) => '<span class="bl919-src' + (on ? '' : ' is-off') + '"><small>' + label + '</small><b>' + esc(val) + '</b></span>';
+    const siName = C.si.length ? [...new Set(C.si.map((p) => p.f.name))].join(' · ') : '';
+    const srcs = '<div class="bl919-srcs">' + chip('BL DRAFT', C.blNo || C.blFile.name, true) +
+      chip('SI', siName || 'not added', !!siName) + chip('EIR', C.eir.length ? rdPl915(C.eir.length, 'container') : 'not added', C.eir.length > 0) +
+      (!C.useSi && C.ci.length ? chip(C.refS, rdPl915(new Set(C.ci.map((p) => p.f)).size, 'file'), true) : '') + (C.si.length ? '' : pasteBtn) + '</div>';
+    const n = C.issues.length;
+    const sent = (s) => s.map((x) => (typeof x === 'string' ? esc(x) : '<b class="bl919-v">' + esc(x.v) + '</b>')).join('');
+    const msg = '<section class="bl919-card' + (n ? ' is-bad' : ' is-ok') + '">' +
+      '<header class="bl919-hd"><span class="bl919-st">' + (n ? '<b>' + n + '</b>' : icon('ok915', 18)) + '</span><div><h3>' + esc(C.head) + '</h3>' +
+        '<small>' + (C.against.length ? 'Checked against ' + esc(C.against.join(' and ')) : 'Nothing to check against yet — add the SI, the EIRs or the invoice and packing list') + (C.more ? ' · only the first BL draft is checked' : '') + '</small></div>' + '</header>' +
+      (n ? '<ol class="bl919-is">' + C.issues.map((s) => '<li>' + sent(s) + '</li>').join('') + '</ol>' : '') +
+      (C.okLine ? '<p class="bl919-ok">' + icon('ok915', 13) + '<span>' + esc(C.okLine) + '</span></p>' : '') + '</section>';
+    const R = C.rows;
+    const sc = (v, bad, l) => '<td data-l="' + l + '" class="m' + (bad ? ' is-bad' : '') + '">' + (v ? esc(v) : '<span class="bl919-na">—</span>') + '</td>';
+    const tbl = R.length ? '<section class="dt917-s"><h3><span>CONTAINERS AND SEALS</span><em>' + R.filter((x) => x.onBl).length + ' on the BL</em></h3><div class="bl919-tw"><table class="bl919-tb"><thead><tr><th></th><th>CONTAINER</th><th>SEAL · EIR</th><th>SEAL · BL DRAFT</th><th>SEAL · ' + (C.useSi ? 'SI' : C.refS) + '</th><th>GROSS · BL</th><th>NET · BL</th></tr></thead><tbody>' +
+      R.map((x) => {
+        const es = x.eir ? x.eir.seal : '', bs = x.bl ? x.bl.seal : '', rs = x.ref ? x.ref.seal : '', truth = es || rs;
+        return '<tr class="' + (x.bad ? 'is-bad' : '') + '"><td class="bl919-ic">' + (x.bad ? '<i class="bl919-x">!</i>' : '<i class="bl919-k">' + icon('ok915', 10) + '</i>') + '</td>' +
+          '<td class="m bl919-cn' + (!x.cd || !x.onBl ? ' is-bad' : '') + '">' + esc(x.cn) + (!x.onBl ? '<em>NOT ON BL</em>' : '') + '</td>' +
+          sc(es, false, 'SEAL · EIR') + sc(bs, !!(bs && truth && bs !== truth), 'SEAL · BL DRAFT') + sc(rs, !!(rs && es && rs !== es), 'SEAL · ' + (C.useSi ? 'SI' : C.refS)) +
+          '<td data-l="GROSS · BL" class="m">' + (x.bl && x.bl.gross !== null ? esc(blKgS919(x.bl.gross)) : '<span class="bl919-na">—</span>') + '</td><td data-l="NET · BL" class="m">' + (x.bl && x.bl.net !== null ? esc(blKgS919(x.bl.net)) : '<span class="bl919-na">—</span>') + '</td></tr>';
+      }).join('') + '</tbody></table></div></section>' : '';
+    return '<div class="bl919">' + srcs + pasteBox + msg + tbl + '</div>';
+  }
   function renderReader915(first) {
     if (RD.user !== state.user && !RD.busy) rd915Clear();
     const M = rdMerge915(); RD.M = M;
+    if (!RD.tabSet && RD.tab === 'si' && !RD.busy) { const ks = rdDone915().map(blKind919); if (ks.includes('bill of lading') && !ks.some((k) => k === 'invoice' || k === 'packing list')) RD.tab = 'bl'; }   // v2.9.19: a BL set opens on BL CHECK
     const anim = first ? ' reveal' : '';
     const tab = (id, label) => '<button type="button" role="tab" class="rd915-tab' + (RD.tab === id ? ' is-on' : '') + '" aria-selected="' + (RD.tab === id) + '" data-rd915="tab" data-t="' + id + '">' + label + '</button>';
-    const allLabel = RD.tab === 'boe' ? 'Copy all boxes' : RD.tab === 'text' ? 'Copy all text' : 'Copy all for the SI';
-    const can = RD.tab === 'boe' ? M.any : RD.tab === 'text' ? M.text.length > 0 : RD_SI915.some((k) => M.F[k].v);
+    const allLabel = RD.tab === 'bl' ? 'Copy message' : RD.tab === 'boe' ? 'Copy all boxes' : RD.tab === 'text' ? 'Copy all text' : 'Copy all for the SI';
+    const can = RD.tab === 'bl' ? rdDone915().some((p) => blKind919(p) === 'bill of lading') : RD.tab === 'boe' ? M.any : RD.tab === 'text' ? M.text.length > 0 : RD_SI915.some((k) => M.F[k].v);
     $('#view').innerHTML = '<div class="rd915-pg">' +
-      '<header class="rd915-head' + anim + '"><div class="rd915-kick">TOOLS · SI AND BOE HELPER</div><h1>Document reader</h1>' +
-        '<p class="rd915-sub">Drop the invoice and packing list — even scanned. EWS reads them and lays the details out ready to copy.</p></header>' +
+      '<header class="rd915-head' + anim + '"><div class="rd915-kick">TOOLS · SI, BOE AND BL CHECK</div><h1>Document reader</h1>' +
+        '<p class="rd915-sub">Drop the invoice and packing list — even scanned — and EWS lays the details out ready to copy. Add the BL draft, EIRs and SI to check the BL.</p></header>' +
       '<div class="rd915-g' + anim + '">' + rdLeftCard915() +
-        '<div class="rd915-r"><div class="rd915-tabs"><div class="rd915-tl" role="tablist" aria-label="Document reader">' + tab('si', 'FOR THE SI') + tab('boe', 'FOR DUBAI TRADE') + tab('text', 'ALL TEXT') + '</div>' +
+        '<div class="rd915-r"><div class="rd915-tabs"><div class="rd915-tl" role="tablist" aria-label="Document reader">' + tab('si', 'FOR THE SI') + tab('boe', 'FOR DUBAI TRADE') + tab('bl', 'BL CHECK') + tab('text', 'ALL TEXT') + '</div>' +
           '<button type="button" class="rd915-all" data-rd915="all"' + (can ? '' : ' disabled') + '>' + icon('copy', 16) + '<span>' + allLabel + '</span></button></div>' +
-          '<div class="rd915-body' + (RD.busy && !M.any ? ' is-wait' : '') + '" role="tabpanel">' + (RD.tab === 'boe' ? rdDtHtml917(M) : RD.tab === 'text' ? rdTextHtml915(M) : rdSiHtml915(M)) + '</div></div>' +
+          '<div class="rd915-body' + (RD.busy && !M.any ? ' is-wait' : '') + '" role="tabpanel">' + (RD.tab === 'bl' ? rdBlHtml919(M) : RD.tab === 'boe' ? rdDtHtml917(M) : RD.tab === 'text' ? rdTextHtml915(M) : rdSiHtml915(M)) + '</div></div>' +
       '</div></div>';
   }
 
@@ -9421,7 +9820,7 @@
   }
 
   // ---------- v2.9.16: the page picker ----------
-  const RD_KD916 = { 'invoice': 'INVOICE', 'packing list': 'PACKING LIST', 'bill of lading': 'BL', 'certificate of origin': 'COO', 'other': 'OTHER' };
+  const RD_KD916 = { 'eir': 'EIR', 'si': 'SI', 'invoice': 'INVOICE', 'packing list': 'PACKING LIST', 'bill of lading': 'BL', 'certificate of origin': 'COO', 'other': 'OTHER' };
   const rdKd916 = (k) => RD_KD916[k] || '';
   function rdStrip916(f) {   // a file's pages: small thumbnails, each with a tick; the kind under it once it is known
     if (f.st !== 'ready' || f.pages.length < 2) return '';
@@ -9483,6 +9882,7 @@
       if (!RD.files.includes(p.f) || p.st !== 'new') return;
       const t = p.text || p.ocr; if (typeof t !== 'string') return;
       const r = rdRules916(t, !!p.text); r.text = p.text ? '' : p.ocr;
+      if (p.force) r.kind = p.force;
       p.res = r; p.kind = r.kind; p.by = p.text ? 'ews' : 'google'; p.gap = false; p.keep = null; p.st = 'done'; read++;
     });
     rdFile916();
@@ -9520,7 +9920,7 @@
       }
     });
     all.forEach((p) => { if (!p.text && !p.ocrOk && !p.blank && p.res.kind === 'other') out.add(p); });   // Google could not read it: the picture goes
-    if (!all.some((p) => p.res.kind === 'invoice' || p.res.kind === 'packing list')) all.filter((p) => (p.text || p.ocr || '').length > 200).slice(0, 3).forEach((p) => out.add(p));
+    if (!all.some((p) => p.res.kind === 'invoice' || p.res.kind === 'packing list') && !all.some((p) => p.force || ['bill of lading', 'eir', 'si'].includes(p.res.kind))) all.filter((p) => (p.text || p.ocr || '').length > 200).slice(0, 3).forEach((p) => out.add(p));
     return [...out];
   }
 
@@ -9529,7 +9929,7 @@
 
   function initV2915() {
     const inp = document.createElement('input');
-    inp.type = 'file'; inp.multiple = true; inp.accept = 'application/pdf,.pdf,image/*'; inp.id = 'rd915In'; inp.hidden = true; inp.setAttribute('aria-hidden', 'true');
+    inp.type = 'file'; inp.multiple = true; inp.accept = 'application/pdf,.pdf,image/*,.xls,.xlsx,.xlsm,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv'; inp.id = 'rd915In'; inp.hidden = true; inp.setAttribute('aria-hidden', 'true');
     inp.addEventListener('change', () => { rdAdd915(inp.files); inp.value = ''; });
     document.body.appendChild(inp);
     const onPage = () => state.signedIn && state.route && state.route.name === 'reader';
@@ -9541,7 +9941,7 @@
       else if (a === 'smart') rdRead915('smart');
       else if (a === 'gaps') rdRead915('gaps');
       else if (a === 'pg') rdTick916(b.dataset.p);
-      else if (a === 'tab') { RD.tab = b.dataset.t; rerender(); const t = $('.rd915-tab.is-on'); if (t) t.focus({ preventScroll: true }); }
+      else if (a === 'tab') { RD.tab = b.dataset.t; RD.tabSet = true; rerender(); const t = $('.rd915-tab.is-on'); if (t) t.focus({ preventScroll: true }); }
       else if (a === 'rm') { RD.files = RD.files.filter((f) => String(f.id) !== b.dataset.f); RD.msg = null; rerender(); }
       else if (a === 'clear') { rd915Clear(); rerender(); }
       else if (a === 'cp') { const f = M.F[b.dataset.k] || M.cards.find((c) => c.k === b.dataset.k); if (f && f.v) rdCopy915(f.v, b); }
@@ -9550,15 +9950,18 @@
       else if (a === 'dt') { const v = dtFlat917(RD.D || dtBuild917(M), b.dataset.k); if (v) rdCopy915(v, b); }   // v2.9.17: FOR DUBAI TRADE
       else if (a === 'dtv') { if (b.dataset.v) rdCopy915(b.dataset.v, b); }
       else if (a === 'dtl') { const x = (RD.D || dtBuild917(M)).lines.flatMap((g) => g.items)[+b.dataset.i]; if (x) rdCopy915(dtLineText917(x), b); }
+      else if (a === 'blp') { RD.paste = true; rerender(); const t = $('#bl919Si'); if (t) t.focus(); }   // v2.9.19: BL CHECK
+      else if (a === 'blx') { RD.paste = false; rerender(); }
+      else if (a === 'blu') { const t = $('#bl919Si'); if (blPaste919(t && t.value)) { RD.paste = false; RD.tab = 'bl'; RD.tabSet = true; rerender(); toast('SI added — checking the BL against it.'); } else { toast('Paste the SI text first.'); if (t) t.focus(); } }
       else if (a === 'all') {
-        const t = RD.tab === 'boe' ? dtAllText917(RD.D || dtBuild917(M)) : RD.tab === 'text' ? M.text.map((x) => '— ' + x.kind.toUpperCase() + ' · ' + x.p.f.name + ' · p' + x.p.n + ' —\n' + x.text).join('\n\n') : rdSiText915(M);
+        const t = RD.tab === 'bl' ? (RD.BL || blBuild919(M)).text || '' : RD.tab === 'boe' ? dtAllText917(RD.D || dtBuild917(M)) : RD.tab === 'text' ? M.text.map((x) => '— ' + x.kind.toUpperCase() + ' · ' + x.p.f.name + ' · p' + x.p.n + ' —\n' + x.text).join('\n\n') : rdSiText915(M);
         if (t) rdCopy915(t, b);
       }
     });
     document.addEventListener('keydown', (e) => {   // the tabs: arrow keys move between them
       if (!onPage() || !e.target.classList || !e.target.classList.contains('rd915-tab') || (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft')) return;
-      const ids = ['si', 'boe', 'text'], i = ids.indexOf(RD.tab);
-      RD.tab = ids[(i + (e.key === 'ArrowRight' ? 1 : 2)) % 3]; rerender(); e.preventDefault();
+      const ids = ['si', 'boe', 'bl', 'text'], i = ids.indexOf(RD.tab);
+      RD.tab = ids[(i + (e.key === 'ArrowRight' ? 1 : 3)) % 4]; RD.tabSet = true; rerender(); e.preventDefault();
       const t = $('.rd915-tab.is-on'); if (t) t.focus({ preventScroll: true });
     });
     let over = 0;
